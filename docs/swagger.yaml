@@ -1,0 +1,2188 @@
+basePath: /
+definitions:
+  models.CatalogCategory:
+    properties:
+      description:
+        type: string
+      id:
+        type: string
+      name:
+        type: string
+      packages:
+        items:
+          $ref: '#/definitions/models.CatalogPackage'
+        type: array
+    type: object
+  models.CatalogPackage:
+    properties:
+      name:
+        type: string
+      tag:
+        type: string
+    type: object
+  models.Container:
+    properties:
+      image:
+        type: string
+      name:
+        type: string
+      ready:
+        type: boolean
+    type: object
+  models.ExecutorDefaults:
+    properties:
+      cores:
+        type: integer
+      instances:
+        type: integer
+      memory:
+        type: string
+    type: object
+  models.ExternalSecretDataEntry:
+    properties:
+      remoteRef:
+        $ref: '#/definitions/models.ExternalSecretRemote'
+      secretKey:
+        type: string
+    required:
+    - remoteRef
+    - secretKey
+    type: object
+  models.ExternalSecretRemote:
+    properties:
+      key:
+        type: string
+      property:
+        type: string
+    required:
+    - key
+    type: object
+  models.ExternalSecretRequest:
+    properties:
+      data:
+        items:
+          $ref: '#/definitions/models.ExternalSecretDataEntry'
+        type: array
+      name:
+        type: string
+      refreshInterval:
+        type: string
+      secretStoreRef:
+        type: string
+      target:
+        $ref: '#/definitions/models.ExternalSecretTarget'
+    required:
+    - data
+    - refreshInterval
+    - secretStoreRef
+    - target
+    type: object
+  models.ExternalSecretResponse:
+    properties:
+      createdAt:
+        type: string
+      data:
+        items:
+          $ref: '#/definitions/models.ExternalSecretDataEntry'
+        type: array
+      lastError:
+        type: string
+      lastSyncedAt:
+        type: string
+      name:
+        type: string
+      namespace:
+        type: string
+      refreshInterval:
+        type: string
+      secretStoreRef:
+        type: string
+      status:
+        type: string
+      target:
+        $ref: '#/definitions/models.ExternalSecretTargetResponse'
+    type: object
+  models.ExternalSecretStatusResponse:
+    properties:
+      conditions:
+        items:
+          $ref: '#/definitions/models.SecretStoreCondition'
+        type: array
+      lastError:
+        type: string
+      lastSyncedAt:
+        type: string
+      status:
+        type: string
+    type: object
+  models.ExternalSecretTarget:
+    properties:
+      name:
+        type: string
+    required:
+    - name
+    type: object
+  models.ExternalSecretTargetResponse:
+    properties:
+      creationPolicy:
+        type: string
+      name:
+        type: string
+    type: object
+  models.Group:
+    properties:
+      comment:
+        type: string
+      description:
+        description: Alias for Comment if needed
+        type: string
+      name:
+        type: string
+    type: object
+  models.MetricValue:
+    properties:
+      available:
+        type: boolean
+      limit:
+        type: string
+      limitRaw:
+        type: number
+      pct:
+        type: number
+      used:
+        type: string
+      usedRaw:
+        type: number
+    type: object
+  models.PlatformService:
+    properties:
+      category:
+        type: string
+      defaultVersion:
+        type: string
+      description:
+        type: string
+      icon:
+        type: string
+      name:
+        type: string
+      versions:
+        items:
+          type: string
+        type: array
+    type: object
+  models.Pod:
+    properties:
+      age:
+        type: string
+      containers:
+        items:
+          $ref: '#/definitions/models.Container'
+        type: array
+      name:
+        type: string
+      ready:
+        type: string
+      restarts:
+        type: integer
+      status:
+        type: string
+    type: object
+  models.ProfileImage:
+    properties:
+      image:
+        type: string
+      label:
+        type: string
+    type: object
+  models.Project:
+    properties:
+      description:
+        type: string
+      name:
+        type: string
+    type: object
+  models.ResourceDefaults:
+    properties:
+      cores:
+        type: integer
+      memory:
+        type: string
+    type: object
+  models.SecretAuthConfig:
+    properties:
+      mountPath:
+        type: string
+      role:
+        type: string
+      token:
+        type: string
+    type: object
+  models.SecretAuthConfigSafe:
+    properties:
+      mountPath:
+        type: string
+      role:
+        type: string
+    type: object
+  models.SecretStoreAuth:
+    properties:
+      config:
+        $ref: '#/definitions/models.SecretAuthConfig'
+      type:
+        type: string
+    required:
+    - config
+    - type
+    type: object
+  models.SecretStoreAuthResponse:
+    properties:
+      config:
+        $ref: '#/definitions/models.SecretAuthConfigSafe'
+      type:
+        type: string
+    type: object
+  models.SecretStoreCondition:
+    properties:
+      lastTransitionTime:
+        type: string
+      message:
+        type: string
+      reason:
+        type: string
+      status:
+        type: string
+      type:
+        type: string
+    type: object
+  models.SecretStoreRequest:
+    properties:
+      auth:
+        $ref: '#/definitions/models.SecretStoreAuth'
+      isDefault:
+        type: boolean
+      name:
+        type: string
+      provider:
+        type: string
+      vault:
+        $ref: '#/definitions/models.VaultConfig'
+    required:
+    - auth
+    - provider
+    - vault
+    type: object
+  models.SecretStoreResponse:
+    properties:
+      auth:
+        $ref: '#/definitions/models.SecretStoreAuthResponse'
+      createdAt:
+        type: string
+      isDefault:
+        type: boolean
+      lastCheckedAt:
+        type: string
+      lastError:
+        type: string
+      name:
+        type: string
+      namespace:
+        type: string
+      provider:
+        type: string
+      status:
+        type: string
+      vault:
+        $ref: '#/definitions/models.VaultConfig'
+    type: object
+  models.SecretStoreStatusResponse:
+    properties:
+      conditions:
+        items:
+          $ref: '#/definitions/models.SecretStoreCondition'
+        type: array
+      lastCheckedAt:
+        type: string
+      lastError:
+        type: string
+      status:
+        type: string
+    type: object
+  models.ServiceInstance:
+    properties:
+      createdAt:
+        type: string
+      name:
+        type: string
+      parameters:
+        additionalProperties: {}
+        type: object
+      releaseName:
+        type: string
+      service:
+        type: string
+      serviceTag:
+        type: string
+      status:
+        type: string
+      statusMessage:
+        type: string
+      targetNamespace:
+        type: string
+      url:
+        type: string
+    type: object
+  models.ServiceMetrics:
+    properties:
+      cpu:
+        $ref: '#/definitions/models.MetricValue'
+      memory:
+        $ref: '#/definitions/models.MetricValue'
+    type: object
+  models.ServiceRequest:
+    properties:
+      instanceName:
+        type: string
+      parameters:
+        additionalProperties: {}
+        type: object
+      service:
+        type: string
+      tag:
+        type: string
+    required:
+    - service
+    type: object
+  models.ServiceUpdateRequest:
+    properties:
+      parameters:
+        additionalProperties: {}
+        type: object
+      tag:
+        type: string
+    type: object
+  models.SparkAppInstance:
+    properties:
+      completedAt:
+        type: string
+      createdAt:
+        type: string
+      driverPodName:
+        type: string
+      errorMessage:
+        type: string
+      executors:
+        additionalProperties:
+          type: string
+        type: object
+      image:
+        type: string
+      mode:
+        type: string
+      name:
+        type: string
+      status:
+        type: string
+      type:
+        type: string
+    type: object
+  models.SparkAppRequest:
+    properties:
+      arguments:
+        items:
+          type: string
+        type: array
+      driverCores:
+        type: integer
+      driverMemory:
+        type: string
+      executorCores:
+        type: integer
+      executorInstances:
+        type: integer
+      executorMemory:
+        type: string
+      image:
+        type: string
+      mainApplicationFile:
+        type: string
+      mainClass:
+        type: string
+      mode:
+        type: string
+      name:
+        type: string
+      sparkConf:
+        additionalProperties:
+          type: string
+        type: object
+      sparkVersion:
+        type: string
+      type:
+        type: string
+    required:
+    - image
+    - name
+    - type
+    type: object
+  models.SparkAppUpdateRequest:
+    properties:
+      arguments:
+        items:
+          type: string
+        type: array
+      driverCores:
+        type: integer
+      driverMemory:
+        type: string
+      executorCores:
+        type: integer
+      executorInstances:
+        type: integer
+      executorMemory:
+        type: string
+      image:
+        type: string
+      mainApplicationFile:
+        type: string
+      mainClass:
+        type: string
+      sparkConf:
+        additionalProperties:
+          type: string
+        type: object
+    type: object
+  models.SparkAppYAMLRequest:
+    properties:
+      yaml:
+        type: string
+    required:
+    - yaml
+    type: object
+  models.SparkConfig:
+    properties:
+      image:
+        $ref: '#/definitions/models.SparkConfigImage'
+      spark:
+        $ref: '#/definitions/models.SparkConfigSpark'
+    type: object
+  models.SparkConfigImage:
+    properties:
+      registry:
+        type: string
+      repository:
+        type: string
+      tag:
+        type: string
+    type: object
+  models.SparkConfigSpark:
+    properties:
+      defaultVersion:
+        type: string
+      defaults:
+        $ref: '#/definitions/models.SparkDefaults'
+      images:
+        items:
+          $ref: '#/definitions/models.SparkImage'
+        type: array
+    type: object
+  models.SparkDefaults:
+    properties:
+      driver:
+        $ref: '#/definitions/models.ResourceDefaults'
+      executor:
+        $ref: '#/definitions/models.ExecutorDefaults'
+    type: object
+  models.SparkImage:
+    properties:
+      image:
+        type: string
+      label:
+        type: string
+    type: object
+  models.SparkUIInfo:
+    properties:
+      available:
+        type: boolean
+      historyServerUrl:
+        type: string
+      serviceName:
+        type: string
+      uiAddress:
+        type: string
+    type: object
+  models.TestConnectionResponse:
+    properties:
+      message:
+        type: string
+    type: object
+  models.User:
+    properties:
+      comment:
+        type: string
+      disabled:
+        type: boolean
+      email:
+        items:
+          type: string
+        type: array
+      groups:
+        description: Groups is a computed field, not directly in the User CRD but
+          useful for API
+        items:
+          type: string
+        type: array
+      name:
+        description: spec.name (Display Name / Full Name)
+        type: string
+      password:
+        description: Password is write-only, used for creation/update
+        type: string
+      uid:
+        type: integer
+      username:
+        description: metadata.name (ID / Login)
+        type: string
+    type: object
+  models.VaultConfig:
+    properties:
+      caBundle:
+        type: string
+      path:
+        type: string
+      server:
+        type: string
+      version:
+        type: string
+    required:
+    - path
+    - server
+    - version
+    type: object
+  service.ServiceVersionsResponse:
+    properties:
+      default:
+        type: string
+      versions:
+        items:
+          type: string
+        type: array
+    type: object
+host: localhost:8093
+info:
+  contact:
+    email: support@swagger.io
+    name: API Support
+    url: http://www.swagger.io/support
+  description: Minimal API server for OKDP UI New
+  license:
+    name: Apache 2.0
+    url: http://www.apache.org/licenses/LICENSE-2.0.html
+  termsOfService: http://swagger.io/terms/
+  title: OKDP Server New API
+  version: "1.0"
+paths:
+  /api/catalog:
+    get:
+      description: Get the list of additional packages that clients can deploy on
+        their own
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/models.CatalogCategory'
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get self-service catalog
+      tags:
+      - catalog
+  /api/platform-services:
+    get:
+      description: Get the list of managed OKDP services that can be deployed per
+        project
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/models.PlatformService'
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: List available platform services
+      tags:
+      - platform-services
+  /api/platform-services/{serviceName}/schema:
+    get:
+      description: Returns the JSON Schema (parameters with UI metadata) for a given
+        service version
+      parameters:
+      - description: Service name
+        in: path
+        name: serviceName
+        required: true
+        type: string
+      - description: Package version tag (defaults to Context CR tag)
+        in: query
+        name: tag
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get JSON Schema for a platform service
+      tags:
+      - platform-services
+  /api/platform-services/{serviceName}/versions:
+    get:
+      description: Returns the list of versions declared in the KuboCD Context CR
+      parameters:
+      - description: Service name
+        in: path
+        name: serviceName
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/service.ServiceVersionsResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: List available versions for a platform service
+      tags:
+      - platform-services
+  /api/profile-images:
+    get:
+      description: Returns the list of available container images per profile type
+        from the KuboCD Context
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              items:
+                $ref: '#/definitions/models.ProfileImage'
+              type: array
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get available profile images
+      tags:
+      - platform-services
+  /api/projects:
+    get:
+      consumes:
+      - application/json
+      description: Get a list of all projects (backed by Kubernetes Namespaces)
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/models.Project'
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: List all projects
+      tags:
+      - projects
+    post:
+      consumes:
+      - application/json
+      description: Create a new project (materialized as a Kubernetes Namespace)
+      parameters:
+      - description: Project Object
+        in: body
+        name: project
+        required: true
+        schema:
+          $ref: '#/definitions/models.Project'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/models.Project'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Create a project
+      tags:
+      - projects
+  /api/projects/{name}:
+    delete:
+      consumes:
+      - application/json
+      description: Delete a project by name
+      parameters:
+      - description: Project Name
+        in: path
+        name: name
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Delete a project
+      tags:
+      - projects
+    get:
+      consumes:
+      - application/json
+      description: Get a single project by name
+      parameters:
+      - description: Project Name
+        in: path
+        name: name
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.Project'
+        "404":
+          description: Project not found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal server error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get a project
+      tags:
+      - projects
+  /api/projects/{name}/services:
+    get:
+      description: Get all deployed service instances for a project
+      parameters:
+      - description: Project name
+        in: path
+        name: name
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/models.ServiceInstance'
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: List deployed services for a project
+      tags:
+      - services
+    post:
+      consumes:
+      - application/json
+      description: Deploy a managed platform service into a project
+      parameters:
+      - description: Project name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Service Deploy Request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.ServiceRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/models.ServiceInstance'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Deploy a platform service
+      tags:
+      - services
+  /api/projects/{name}/services/{serviceName}:
+    delete:
+      description: Remove a deployed service from a project
+      parameters:
+      - description: Project name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Service name
+        in: path
+        name: serviceName
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Delete a deployed service
+      tags:
+      - services
+    get:
+      description: Get a specific deployed service instance
+      parameters:
+      - description: Project name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Service name
+        in: path
+        name: serviceName
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.ServiceInstance'
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get a deployed service
+      tags:
+      - services
+  /api/projects/{name}/services/{serviceName}/metrics:
+    get:
+      description: Aggregate CPU/memory usage (from metrics-server) and limits for
+        every pod belonging to the instance.
+      parameters:
+      - description: Project name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Service instance name
+        in: path
+        name: serviceName
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.ServiceMetrics'
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get live resource usage for a service instance
+      tags:
+      - services
+  /api/projects/{name}/services/{serviceName}/parameters:
+    patch:
+      consumes:
+      - application/json
+      description: Merge new parameters and optionally update the package version
+        of a deployed service
+      parameters:
+      - description: Project name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Service instance name
+        in: path
+        name: serviceName
+        required: true
+        type: string
+      - description: Update request (tag and/or parameters)
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.ServiceUpdateRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.ServiceInstance'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Update service parameters and/or version
+      tags:
+      - services
+  /api/projects/{name}/services/{serviceName}/pods:
+    get:
+      description: Get all pods belonging to a deployed service instance
+      parameters:
+      - description: Project name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Service instance name
+        in: path
+        name: serviceName
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/models.Pod'
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: List pods for a service instance
+      tags:
+      - services
+  /api/projects/{name}/services/{serviceName}/pods/{podName}/logs:
+    get:
+      description: Retrieve logs for a specific pod. Use follow=true for streaming
+        via SSE.
+      parameters:
+      - description: Project name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Service instance name
+        in: path
+        name: serviceName
+        required: true
+        type: string
+      - description: Pod name
+        in: path
+        name: podName
+        required: true
+        type: string
+      - description: Container name (defaults to first app container)
+        in: query
+        name: container
+        type: string
+      - description: Number of lines from the end (default 100)
+        in: query
+        name: tailLines
+        type: integer
+      - description: Stream logs in real-time (default false)
+        in: query
+        name: follow
+        type: boolean
+      produces:
+      - text/plain
+      responses:
+        "200":
+          description: log output
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get pod logs
+      tags:
+      - services
+  /api/projects/{name}/services/stream:
+    get:
+      description: Stream service status updates using Server-Sent Events (SSE)
+      parameters:
+      - description: Project name
+        in: path
+        name: name
+        required: true
+        type: string
+      produces:
+      - text/event-stream
+      responses:
+        "200":
+          description: stream
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Stream service updates
+      tags:
+      - services
+  /api/projects/{name}/spark-apps:
+    get:
+      description: Get all SparkApplication instances for a project
+      parameters:
+      - description: Project name
+        in: path
+        name: name
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/models.SparkAppInstance'
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: List Spark applications for a project
+      tags:
+      - spark-apps
+    post:
+      consumes:
+      - application/json
+      description: Create and submit a SparkApplication to the Spark operator
+      parameters:
+      - description: Project name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Spark Application Request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.SparkAppRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/models.SparkAppInstance'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Submit a Spark application
+      tags:
+      - spark-apps
+  /api/projects/{name}/spark-apps/{appName}:
+    delete:
+      description: Delete a SparkApplication from a project
+      parameters:
+      - description: Project name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Spark application name
+        in: path
+        name: appName
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Delete a Spark application
+      tags:
+      - spark-apps
+    get:
+      description: Get a specific SparkApplication instance
+      parameters:
+      - description: Project name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Spark application name
+        in: path
+        name: appName
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.SparkAppInstance'
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get a Spark application
+      tags:
+      - spark-apps
+    put:
+      consumes:
+      - application/json
+      description: Update an existing SparkApplication spec fields
+      parameters:
+      - description: Project name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Spark application name
+        in: path
+        name: appName
+        required: true
+        type: string
+      - description: Spark Application Update
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.SparkAppUpdateRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.SparkAppInstance'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Update a Spark application
+      tags:
+      - spark-apps
+  /api/projects/{name}/spark-apps/{appName}/logs:
+    get:
+      description: Retrieve logs for a Spark application's driver pod. Use follow=true
+        for streaming via SSE.
+      parameters:
+      - description: Project name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Spark application name
+        in: path
+        name: appName
+        required: true
+        type: string
+      - description: Container name (defaults to spark-kubernetes-driver)
+        in: query
+        name: container
+        type: string
+      - description: Number of lines from the end (default 100)
+        in: query
+        name: tailLines
+        type: integer
+      - description: Stream logs in real-time (default false)
+        in: query
+        name: follow
+        type: boolean
+      produces:
+      - text/plain
+      responses:
+        "200":
+          description: log output
+          schema:
+            type: string
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get Spark application driver logs
+      tags:
+      - spark-apps
+  /api/projects/{name}/spark-apps/{appName}/ui:
+    get:
+      description: Returns the Spark driver Web UI service info for a running SparkApplication
+      parameters:
+      - description: Project name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Spark application name
+        in: path
+        name: appName
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.SparkUIInfo'
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get Spark application driver UI info
+      tags:
+      - spark-apps
+  /api/projects/{name}/spark-apps/stream:
+    get:
+      description: Stream SparkApplication status updates using Server-Sent Events
+        (SSE)
+      parameters:
+      - description: Project name
+        in: path
+        name: name
+        required: true
+        type: string
+      produces:
+      - text/event-stream
+      responses:
+        "200":
+          description: stream
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Stream Spark application updates
+      tags:
+      - spark-apps
+  /api/projects/{name}/spark-apps/yaml:
+    post:
+      consumes:
+      - application/json
+      description: Create and submit a SparkApplication from raw YAML manifest
+      parameters:
+      - description: Project name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Spark Application YAML
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.SparkAppYAMLRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/models.SparkAppInstance'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Submit a Spark application from YAML
+      tags:
+      - spark-apps
+  /api/projects/{projectId}/external-secrets:
+    get:
+      consumes:
+      - application/json
+      description: Get all external secrets configured in the project namespace
+      parameters:
+      - description: Project name (= Kubernetes namespace)
+        in: path
+        name: name
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/models.ExternalSecretResponse'
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: List external secrets for a project
+      tags:
+      - external-secrets
+    post:
+      consumes:
+      - application/json
+      description: Create a new ExternalSecret in the project namespace. Validates
+        that the referenced SecretStore exists.
+      parameters:
+      - description: Project name (= Kubernetes namespace)
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: External Secret Request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.ExternalSecretRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/models.ExternalSecretResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Create an external secret
+      tags:
+      - external-secrets
+  /api/projects/{projectId}/external-secrets/{esName}:
+    delete:
+      consumes:
+      - application/json
+      description: 'Delete an ExternalSecret. ESO will automatically remove the target
+        Secret (creationPolicy: Owner).'
+      parameters:
+      - description: Project name (= Kubernetes namespace)
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: External Secret name
+        in: path
+        name: esName
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Delete an external secret
+      tags:
+      - external-secrets
+    put:
+      consumes:
+      - application/json
+      description: Update an existing ExternalSecret (name comes from URL, ignored
+        in body)
+      parameters:
+      - description: Project name (= Kubernetes namespace)
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: External Secret name
+        in: path
+        name: esName
+        required: true
+        type: string
+      - description: External Secret Request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.ExternalSecretRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.ExternalSecretResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Update an external secret
+      tags:
+      - external-secrets
+  /api/projects/{projectId}/external-secrets/{esName}/status:
+    get:
+      consumes:
+      - application/json
+      description: Get the detailed status including ESO conditions and last sync
+        time
+      parameters:
+      - description: Project name (= Kubernetes namespace)
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: External Secret name
+        in: path
+        name: esName
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.ExternalSecretStatusResponse'
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get external secret status
+      tags:
+      - external-secrets
+  /api/projects/{projectId}/secret-stores:
+    get:
+      consumes:
+      - application/json
+      description: Get all secret stores configured in the project namespace
+      parameters:
+      - description: Project name (= Kubernetes namespace)
+        in: path
+        name: name
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/models.SecretStoreResponse'
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: List secret stores for a project
+      tags:
+      - secret-stores
+    post:
+      consumes:
+      - application/json
+      description: Create a new secret store in the project namespace (creates K8s
+        Secret + SecretStore CRD)
+      parameters:
+      - description: Project name (= Kubernetes namespace)
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Secret Store Request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.SecretStoreRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/models.SecretStoreResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Create a secret store
+      tags:
+      - secret-stores
+  /api/projects/{projectId}/secret-stores/{storeName}:
+    delete:
+      consumes:
+      - application/json
+      description: Delete a secret store and its associated credentials secret
+      parameters:
+      - description: Project name (= Kubernetes namespace)
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Secret Store name
+        in: path
+        name: storeName
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Delete a secret store
+      tags:
+      - secret-stores
+    put:
+      consumes:
+      - application/json
+      description: Update an existing secret store (token preserved if not re-sent)
+      parameters:
+      - description: Project name (= Kubernetes namespace)
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Secret Store name
+        in: path
+        name: storeName
+        required: true
+        type: string
+      - description: Secret Store Request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.SecretStoreRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.SecretStoreResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Update a secret store
+      tags:
+      - secret-stores
+  /api/projects/{projectId}/secret-stores/{storeName}/status:
+    get:
+      consumes:
+      - application/json
+      description: Get the detailed status including ESO conditions
+      parameters:
+      - description: Project name (= Kubernetes namespace)
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Secret Store name
+        in: path
+        name: storeName
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.SecretStoreStatusResponse'
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get secret store status
+      tags:
+      - secret-stores
+  /api/projects/{projectId}/secret-stores/test:
+    post:
+      consumes:
+      - application/json
+      description: Test connectivity to a Vault server without persisting anything
+      parameters:
+      - description: Project name (= Kubernetes namespace)
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Secret Store Request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.SecretStoreRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.TestConnectionResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Test secret store connection
+      tags:
+      - secret-stores
+  /api/projects/stream:
+    get:
+      description: Stream project updates using Server-Sent Events (SSE)
+      produces:
+      - text/event-stream
+      responses:
+        "200":
+          description: stream
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Stream project updates
+      tags:
+      - projects
+  /api/spark-app-schema:
+    get:
+      description: Returns the OpenAPI spec schema from the SparkApplication CRD installed
+        by the Spark Operator
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get SparkApplication CRD schema
+      tags:
+      - spark-apps
+  /api/spark-config:
+    get:
+      description: Returns Spark operator configuration from the KuboCD Context (images,
+        defaults, versions)
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.SparkConfig'
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get Spark operator configuration
+      tags:
+      - spark-apps
+  /api/v1/identity/groups:
+    get:
+      consumes:
+      - application/json
+      description: Get all groups from Kubauth
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/models.Group'
+            type: array
+      summary: List all groups
+      tags:
+      - identity
+    post:
+      consumes:
+      - application/json
+      description: Create a new group in Kubauth
+      parameters:
+      - description: Group
+        in: body
+        name: group
+        required: true
+        schema:
+          $ref: '#/definitions/models.Group'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/models.Group'
+      summary: Create a new group
+      tags:
+      - identity
+  /api/v1/identity/groups/{name}:
+    delete:
+      consumes:
+      - application/json
+      description: Delete a group from Kubauth
+      parameters:
+      - description: Group Name
+        in: path
+        name: name
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+      summary: Delete a group
+      tags:
+      - identity
+    put:
+      consumes:
+      - application/json
+      description: Update a group in Kubauth
+      parameters:
+      - description: Group Name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Group
+        in: body
+        name: group
+        required: true
+        schema:
+          $ref: '#/definitions/models.Group'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.Group'
+      summary: Update a group
+      tags:
+      - identity
+  /api/v1/identity/users:
+    get:
+      consumes:
+      - application/json
+      description: Get all users from Kubauth
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/models.User'
+            type: array
+      summary: List all users
+      tags:
+      - identity
+    post:
+      consumes:
+      - application/json
+      description: Create a new user in Kubauth
+      parameters:
+      - description: User
+        in: body
+        name: user
+        required: true
+        schema:
+          $ref: '#/definitions/models.User'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/models.User'
+      summary: Create a new user
+      tags:
+      - identity
+  /api/v1/identity/users/{name}:
+    delete:
+      consumes:
+      - application/json
+      description: Delete a user from Kubauth
+      parameters:
+      - description: User Name
+        in: path
+        name: name
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+      summary: Delete a user
+      tags:
+      - identity
+    get:
+      consumes:
+      - application/json
+      description: Get a user details
+      parameters:
+      - description: User Name
+        in: path
+        name: name
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.User'
+      summary: Get user by name
+      tags:
+      - identity
+    put:
+      consumes:
+      - application/json
+      description: Update a user in Kubauth
+      parameters:
+      - description: User Name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: User
+        in: body
+        name: user
+        required: true
+        schema:
+          $ref: '#/definitions/models.User'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.User'
+      summary: Update a user
+      tags:
+      - identity
+swagger: "2.0"
