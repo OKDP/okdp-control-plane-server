@@ -87,8 +87,13 @@ func (s *DefaultPackageSchemaService) GetServiceVersions(ctx context.Context, se
 
 // listOCITags fetches available tags from the OCI registry for a given package.
 func (s *DefaultPackageSchemaService) listOCITags(packageRepo, serviceName string) ([]string, error) {
-	// packageRepo is like "quay.io/kubotal/packages-dev"
-	registryURL := fmt.Sprintf("https://%s/v2/%s/tags/list",
+	// packageRepo is like "quay.io/kubotal/packages-dev" (or "localhost:5001/okdp" in dev).
+	scheme := "https"
+	if os.Getenv("KUBOCD_INSECURE") == "true" {
+		scheme = "http"
+	}
+	registryURL := fmt.Sprintf("%s://%s/v2/%s/tags/list",
+		scheme,
 		strings.SplitN(packageRepo, "/", 2)[0],
 		strings.SplitN(packageRepo, "/", 2)[1]+"/"+serviceName,
 	)
@@ -169,7 +174,13 @@ func (s *DefaultPackageSchemaService) fetchSchemaFromOCI(ociRef string) (map[str
 	}
 	defer os.RemoveAll(tmpDir)
 
-	cmd := exec.Command("kubocd", "dump", "package", ociRef, "--anonymous", "-o", tmpDir)
+	args := []string{"dump", "package", ociRef, "--anonymous", "-o", tmpDir}
+	// Allow plain-HTTP OCI registries (local dev sandbox with kind-registry,
+	// localhost:5001, etc.). Production uses HTTPS by default.
+	if os.Getenv("KUBOCD_INSECURE") == "true" {
+		args = append(args, "-i")
+	}
+	cmd := exec.Command("kubocd", args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		logrus.WithError(err).WithField("output", string(output)).Error("kubocd dump failed")
