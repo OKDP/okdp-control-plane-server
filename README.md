@@ -35,6 +35,17 @@ make dev
 
 `make help` lists `build`, `test`, `lint` and `swagger` (same in both modes).
 
+## Deploy with the Helm chart
+
+The server runs **in-cluster** from the image published by CI, deployed with the
+bundled chart (`chart/`):
+
+```bash
+helm install okdp-server ./chart -n okdp-system
+```
+
+For local development you can still run `go run cmd/server/main.go`.
+
 ## API Documentation
 
 Swagger UI is available at:
