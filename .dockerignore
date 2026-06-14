@@ -1,0 +1,10 @@
+.git
+.gitignore
+.vscode
+.idea
+chart/
+docs/
+scripts/
+docker-compose.yml
+README.md
+LICENSE

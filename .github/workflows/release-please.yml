@@ -1,0 +1,22 @@
+name: release-please
+
+# On every push to main, compute the next semantic version from the
+# conventional commits and open/refresh a release PR. Merging that PR
+# bumps .release-please-manifest.json and creates the tag + GitHub release.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v4
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
