@@ -17,6 +17,11 @@ RUN KUBECTL_VERSION=$(curl -sSL https://dl.k8s.io/release/stable.txt) && \
     "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" && \
     chmod +x /usr/local/bin/kubectl
 
+# kubocd CLI (must match controller version deployed in the sandbox cluster: v0.3.0)
+RUN curl -sSLo /usr/local/bin/kubocd \
+    "https://github.com/kubocd/kubocd/releases/download/v0.3.0/kubocd_Linux_x86_64" && \
+    chmod +x /usr/local/bin/kubocd
+
 WORKDIR /workspace
 
 EXPOSE 8093
