@@ -1,0 +1,22 @@
+FROM golang:1.25-bookworm
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Hot-reload
+RUN go install github.com/air-verse/air@latest
+
+# Swagger codegen
+RUN go install github.com/swaggo/swag/cmd/swag@latest
+
+# kubectl (same minor as k8s.io/client-go in go.mod: 0.35 → 1.35)
+RUN KUBECTL_VERSION=$(curl -sSL https://dl.k8s.io/release/stable.txt) && \
+    curl -sSLo /usr/local/bin/kubectl \
+    "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" && \
+    chmod +x /usr/local/bin/kubectl
+
+WORKDIR /workspace
+
+EXPOSE 8093
