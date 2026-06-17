@@ -1,14 +1,17 @@
 {
-  "name": "OKDP Server",
+  "name": "OKDP Control Plane Server",
   "build": {
-    "dockerfile": "../Dockerfile.dev",
-    "context": ".."
+    "dockerfile": "Dockerfile"
   },
   // --network=host gives the container direct access to the host network,
   // so the Kind cluster on 127.0.0.1 is reachable without any kubeconfig patching.
-  "runArgs": ["--network=host"],
+  "runArgs": ["--network=host", "--name=okdp-dev-server"],
   "mounts": [
-    "source=${localEnv:HOME}/.kube,target=/root/.kube,type=bind,consistency=cached"
+    // Kubeconfig written by okdp-dev-bootstrap — shared read-only in practice.
+    "source=${localEnv:HOME}/.kube,target=/root/.kube,type=bind,consistency=cached",
+    // Named volumes so Go module + build caches survive container rebuilds.
+    "source=okdp-server-gomodcache,target=/go/pkg/mod,type=volume",
+    "source=okdp-server-gobuildcache,target=/root/.cache/go-build,type=volume"
   ],
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
   "workspaceFolder": "/workspace",
@@ -18,11 +21,14 @@
     "vscode": {
       "extensions": [
         "golang.go",
-        "ms-azuretools.vscode-docker"
+        "ms-azuretools.vscode-docker",
+        "redhat.vscode-yaml"
       ],
       "settings": {
         "go.useLanguageServer": true,
         "go.toolsManagement.checkForUpdates": "local",
+        "go.lintTool": "golangci-lint",
+        "go.lintOnSave": "package",
         "[go]": {
           "editor.formatOnSave": true,
           "editor.defaultFormatter": "golang.go"

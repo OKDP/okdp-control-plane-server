@@ -1,4 +1,4 @@
-.PHONY: dev build test lint swagger up down logs
+.PHONY: dev build test lint swagger help
 
 # ── Development ──────────────────────────────────────────────────────────────
 
