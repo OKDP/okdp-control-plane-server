@@ -26,12 +26,13 @@ RUN arch="$(dpkg --print-architecture)"; \
     "https://github.com/kubocd/kubocd/releases/download/${KUBOCD_VERSION}/kubocd_Linux_$([ "$arch" = "arm64" ] && echo aarch64 || echo x86_64)" && \
     chmod +x /usr/local/bin/kubocd
 
-# Go dev tooling — all verified via Go module checksum database
+# Go dev tooling — compiled from source with the image's Go toolchain to ensure
+# version compatibility (pre-built golangci-lint binaries embed their build Go version
+# and refuse to lint projects targeting a newer Go release).
 RUN go install "github.com/swaggo/swag/cmd/swag@${SWAG_VERSION}" \
     && go install github.com/go-delve/delve/cmd/dlv@latest \
     && go install github.com/air-verse/air@latest \
-    && curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh \
-        | sh -s -- -b /go/bin "${GOLANGCI_LINT_VERSION}"
+    && go install "github.com/golangci/golangci-lint/cmd/golangci-lint@${GOLANGCI_LINT_VERSION}"
 
 WORKDIR /workspace
 
