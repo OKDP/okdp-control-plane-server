@@ -3,7 +3,6 @@
 ## Prerequisites
 
 * Docker installed and running
-* VS Code with the Dev Containers extension
 * A Kubernetes cluster configured in `~/.kube/config`
 
 No local Go installation is required.
