@@ -53,11 +53,12 @@ func (s *DefaultPackageSchemaService) GetServiceVersions(ctx context.Context, se
 		return nil, fmt.Errorf("failed to get platform services: %w", err)
 	}
 
-	var defaultVersion string
+	var defaultVersion, svcRepository string
 	found := false
 	for _, svc := range services {
 		if svc.Name == serviceName {
 			defaultVersion = svc.DefaultVersion
+			svcRepository = svc.Repository
 			found = true
 			break
 		}
@@ -69,6 +70,9 @@ func (s *DefaultPackageSchemaService) GetServiceVersions(ctx context.Context, se
 	packageRepo, err := s.contextRepo.GetPackageRepository(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get package repository: %w", err)
+	}
+	if svcRepository != "" {
+		packageRepo = svcRepository
 	}
 
 	versions, err := s.listOCITags(packageRepo, serviceName)
@@ -120,25 +124,31 @@ func (s *DefaultPackageSchemaService) listOCITags(packageRepo, serviceName strin
 }
 
 func (s *DefaultPackageSchemaService) GetParameterSchema(ctx context.Context, serviceName, tag string) (map[string]any, error) {
-	if tag == "" {
-		services, err := s.contextRepo.GetPlatformServices(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get platform services: %w", err)
-		}
-		for _, svc := range services {
-			if svc.Name == serviceName {
+	services, err := s.contextRepo.GetPlatformServices(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get platform services: %w", err)
+	}
+
+	var svcRepository string
+	for _, svc := range services {
+		if svc.Name == serviceName {
+			if tag == "" {
 				tag = svc.DefaultVersion
-				break
 			}
+			svcRepository = svc.Repository
+			break
 		}
-		if tag == "" {
-			return nil, fmt.Errorf("service %q not found in platform services", serviceName)
-		}
+	}
+	if tag == "" {
+		return nil, fmt.Errorf("service %q not found in platform services", serviceName)
 	}
 
 	packageRepo, err := s.contextRepo.GetPackageRepository(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get package repository: %w", err)
+	}
+	if svcRepository != "" {
+		packageRepo = svcRepository
 	}
 
 	cacheKey := fmt.Sprintf("%s:%s", serviceName, tag)

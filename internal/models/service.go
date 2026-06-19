@@ -10,6 +10,7 @@ type PlatformService struct {
 	Description    string   `json:"description"`
 	Icon           string   `json:"icon,omitempty"`
 	Category       string   `json:"category,omitempty"`
+	Repository     string   `json:"repository,omitempty"`
 }
 
 // ProfileImage represents an available container image for a JupyterHub profile type.
