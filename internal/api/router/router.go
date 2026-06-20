@@ -35,6 +35,7 @@ func SetupRouter(cfg *config.Config, projectHandler *handlers.ProjectHandler, id
 		api.GET("/projects/stream", projectHandler.StreamProjects)
 		api.POST("/projects", projectHandler.CreateProject)
 		api.GET("/projects/:name", projectHandler.GetProject)
+		api.PUT("/projects/:name", projectHandler.UpdateProject)
 		api.DELETE("/projects/:name", projectHandler.DeleteProject)
 
 		// Identity

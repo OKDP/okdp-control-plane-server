@@ -14,6 +14,7 @@ type ProjectService interface {
 	ListProjects(ctx context.Context) ([]models.Project, error)
 	GetProject(ctx context.Context, name string) (*models.Project, error)
 	CreateProject(ctx context.Context, project *models.Project) error
+	UpdateProject(ctx context.Context, project *models.Project) (*models.Project, error)
 	DeleteProject(ctx context.Context, name string) error
 	WatchProjects(ctx context.Context) (watch.Interface, error)
 }
@@ -56,6 +57,12 @@ func (s *DefaultProjectService) CreateProject(ctx context.Context, project *mode
 	}
 
 	return nil
+}
+
+// UpdateProject updates a project's mutable metadata (its description) on the
+// backing Namespace. The per-project Context CR is unaffected.
+func (s *DefaultProjectService) UpdateProject(ctx context.Context, project *models.Project) (*models.Project, error) {
+	return s.repo.Update(ctx, project)
 }
 
 // DeleteProject deletes a project (its Namespace) and its per-project Context CR.
