@@ -94,6 +94,42 @@ func (h *ProjectHandler) CreateProject(c *gin.Context) {
 	c.JSON(http.StatusCreated, project)
 }
 
+// UpdateProject godoc
+// @Summary      Update a project
+// @Description  Update a project's mutable metadata (currently its description)
+// @Tags         projects
+// @Accept       json
+// @Produce      json
+// @Param        name    path string         true "Project Name"
+// @Param        project body models.Project true "Project Object"
+// @Success      200  {object}  models.Project
+// @Failure      400  {object}  map[string]string
+// @Failure      404  {object}  map[string]string "Project not found"
+// @Failure      500  {object}  map[string]string
+// @Router       /api/projects/{name} [put]
+func (h *ProjectHandler) UpdateProject(c *gin.Context) {
+	var project models.Project
+	if err := c.ShouldBindJSON(&project); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	// The path name is authoritative; ignore any name in the body.
+	project.Name = c.Param("name")
+
+	updated, err := h.service.UpdateProject(c.Request.Context(), &project)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Project not found"})
+			return
+		}
+		logrus.WithError(err).Error("Failed to update project")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, updated)
+}
+
 // DeleteProject godoc
 // @Summary      Delete a project
 // @Description  Delete a project by name

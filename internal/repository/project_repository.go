@@ -24,6 +24,7 @@ type ProjectRepository interface {
 	Create(ctx context.Context, project *models.Project) error
 	Get(ctx context.Context, name string) (*models.Project, error)
 	List(ctx context.Context) ([]models.Project, error)
+	Update(ctx context.Context, project *models.Project) (*models.Project, error)
 	Delete(ctx context.Context, name string) error
 	Watch(ctx context.Context) (watch.Interface, error)
 }
@@ -82,6 +83,32 @@ func (r *k8sProjectRepository) List(ctx context.Context) ([]models.Project, erro
 		projects = append(projects, *namespaceToProject(&list.Items[i]))
 	}
 	return projects, nil
+}
+
+// Update mutates the project metadata (currently its description) on the
+// backing Namespace. Only Namespaces that are OKDP projects (carrying the
+// okdp.io/project label) are updatable; anything else is reported as not found.
+func (r *k8sProjectRepository) Update(ctx context.Context, project *models.Project) (*models.Project, error) {
+	ns, err := r.client.CoreV1().Namespaces().Get(ctx, project.Name, metav1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
+
+	if ns.Labels[ProjectLabel] == "" {
+		return nil, apierrors.NewNotFound(namespaceGR, project.Name)
+	}
+
+	if ns.Annotations == nil {
+		ns.Annotations = map[string]string{}
+	}
+	ns.Annotations[ProjectDescriptionAnnot] = project.Description
+
+	updated, err := r.client.CoreV1().Namespaces().Update(ctx, ns, metav1.UpdateOptions{})
+	if err != nil {
+		return nil, err
+	}
+
+	return namespaceToProject(updated), nil
 }
 
 func (r *k8sProjectRepository) Delete(ctx context.Context, name string) error {
