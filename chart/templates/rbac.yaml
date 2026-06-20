@@ -8,10 +8,11 @@ metadata:
   labels:
     {{- include "okdp-server.labels" . | nindent 4 }}
 rules:
-  # Projects are namespaces labelled okdp.io/project
+  # Projects are namespaces labelled okdp.io/project. update/patch are needed
+  # to edit a project's description (stored as the okdp.io/description annotation).
   - apiGroups: [""]
     resources: ["namespaces"]
-    verbs: ["get", "list", "watch", "create", "delete"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   # Secrets (SecretStore credentials), pods + logs (service inspection)
   - apiGroups: [""]
     resources: ["secrets"]
