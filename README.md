@@ -7,16 +7,33 @@ Minimal Go server for OKDP UI New, featuring a standard layered architecture and
 - **Go**: 1.24+
 - **Kubernetes Cluster**: Required for Project features (local or remote).
 
-## Setup
+## Development
 
-Projects are plain Kubernetes Namespaces labeled `okdp.io/project=<name>` —
-no custom CRD or operator is required.
+Projects are plain Kubernetes Namespaces labeled `okdp.io/project=<name>`, with no
+custom CRD or operator required.
 
-1. **Run Server**
-   ```bash
-   go run cmd/server/main.go
-   ```
-   The server starts on port `8093`.
+Two ways to develop, both against the **OKDP dev-sandbox** running on the host (it
+provides the cluster, kubauth, DNS and the CA certificate). Set it up via the
+`okdp-control-plane-dev-sandbox` README (cluster, DNS resolver, CA trust).
+
+**Option A: directly on your machine.** Install Go, kubectl, kubocd, air, swag,
+golangci-lint, delve.
+
+```bash
+export KUBECONFIG=~/.kube/okdp-dev-config
+make dev                 # hot-reload on :8093
+# or, without air: go run ./cmd/server
+```
+
+**Option B: devcontainer (only Docker needed).** Open the repo and "Reopen in
+Container", or run `devcontainer up`. The image ships every tool, derives a
+container-reachable kubeconfig on start, and publishes port 8093.
+
+```bash
+make dev
+```
+
+`make help` lists `build`, `test`, `lint` and `swagger` (same in both modes).
 
 ## API Documentation
 

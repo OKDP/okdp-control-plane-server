@@ -5,7 +5,7 @@ tmp_dir = "tmp"
   cmd = "go build -o ./tmp/server ./cmd/server"
   bin = "./tmp/server"
   include_ext = ["go"]
-  exclude_dir = ["tmp", "vendor", "docs", "scripts"]
+  exclude_dir = ["tmp", "vendor", "docs", ".dev"]
   delay = 500
 
 [log]
