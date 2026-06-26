@@ -1,0 +1,62 @@
+# The server reaches the cluster through its ServiceAccount (in-cluster
+# config). A ClusterRole is required because project namespaces are created
+# dynamically and are not known ahead of time.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "okdp-server.fullname" . }}
+  labels:
+    {{- include "okdp-server.labels" . | nindent 4 }}
+rules:
+  # Projects are namespaces labelled okdp.io/project
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  # Secrets (SecretStore credentials), pods + logs (service inspection)
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "create", "update", "delete"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list"]
+  # Resource usage panels — metrics-server
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  # Identity management (kubauth CRDs)
+  - apiGroups: ["kubauth.kubotal.io"]
+    resources: ["users", "groups", "groupbindings"]
+    verbs: ["get", "list", "watch", "create", "update", "delete"]
+  - apiGroups: ["kubauth.kubotal.io"]
+    resources: ["oidcclients"]
+    verbs: ["get", "list"]
+  # Secret management (External Secrets Operator)
+  - apiGroups: ["external-secrets.io"]
+    resources: ["secretstores", "externalsecrets"]
+    verbs: ["get", "list", "watch", "create", "update", "delete"]
+  # Services (kubocd Releases) + catalog (kubocd Context)
+  - apiGroups: ["kubocd.kubotal.io"]
+    resources: ["releases"]
+    verbs: ["get", "list", "watch", "create", "update", "delete"]
+  - apiGroups: ["kubocd.kubotal.io"]
+    resources: ["contexts"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Spark workloads
+  - apiGroups: ["sparkoperator.k8s.io"]
+    resources: ["sparkapplications"]
+    verbs: ["get", "list", "watch", "create", "update", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "okdp-server.fullname" . }}
+  labels:
+    {{- include "okdp-server.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "okdp-server.fullname" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: ClusterRole
+  name: {{ include "okdp-server.fullname" . }}
+  apiGroup: rbac.authorization.k8s.io

@@ -1,0 +1,25 @@
+replicaCount: 1
+
+image:
+  repository: quay.io/okdp/images/okdp-server
+  # Defaults to the chart appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# Rendered as environment variables (see internal/config/config.go).
+configuration:
+  platformNamespace: okdp-system
+  kubocdNamespace: kubocd-system
+  contextName: default
+  contextNamespace: kubocd-system
+  # Single origin, set verbatim in the Access-Control-Allow-Origin header.
+  allowedOrigins: https://console.okdp.dev-sandbox
+  logLevel: info
+  releaseInterval: 30m
+  releaseTimeout: 10m
+
+service:
+  type: ClusterIP
+  port: 8093
+
+resources: {}
