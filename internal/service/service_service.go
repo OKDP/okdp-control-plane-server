@@ -120,6 +120,9 @@ func (s *DefaultServiceService) DeployService(ctx context.Context, project strin
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve package repository: %w", err)
 	}
+	if svc.Repository != "" {
+		packageRepo = svc.Repository
+	}
 
 	ingressSuffix, err := s.contextRepo.GetIngressSuffix(ctx)
 	if err != nil {

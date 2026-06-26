@@ -88,6 +88,7 @@ func (r *k8sContextRepository) GetPlatformServices(ctx context.Context) ([]model
 			Description:    getString(m, "description"),
 			Icon:           getString(m, "icon"),
 			Category:       getString(m, "category"),
+			Repository:     getString(m, "repository"),
 		}
 		if rawVersions, ok := m["versions"].([]interface{}); ok {
 			for _, v := range rawVersions {
