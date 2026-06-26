@@ -1,11 +1,11 @@
-.PHONY: dev build test lint swagger help
+.PHONY: dev build test test-verbose lint swagger help
 
 # ── Development ──────────────────────────────────────────────────────────────
 
-dev: ## Start server with hot-reload (requires air)
+dev: ## Start the server with hot-reload (KUBECONFIG from your env or the devcontainer)
 	air -c .air.toml
 
-build: ## Compile binary to bin/server
+build: ## Compile the binary to bin/server
 	go build -o bin/server ./cmd/server
 
 test: ## Run all tests

@@ -3,25 +3,32 @@
   "build": {
     "dockerfile": "Dockerfile"
   },
-  // --network=host gives the container direct access to the host network,
-  // so the Kind cluster on 127.0.0.1 is reachable without any kubeconfig patching.
-  "runArgs": ["--network=host", "--name=okdp-dev-server"],
+  // reach the dev-sandbox API on the host via host.docker.internal (--add-host is for Linux)
+  "runArgs": ["--add-host=host.docker.internal:host-gateway"],
+  // publish 8093 to the host so the front reaches the API (gin binds 0.0.0.0:8093)
+  "appPort": ["8093:8093"],
+  "portsAttributes": {
+    "8093": { "label": "OKDP server" }
+  },
   "mounts": [
-    // Kubeconfig written by okdp-dev-bootstrap — shared read-only in practice.
-    "source=${localEnv:HOME}/.kube,target=/root/.kube,type=bind,consistency=cached",
-    // Named volumes so Go module + build caches survive container rebuilds.
+    // host kubeconfig. The postStart hook derives a container-reachable copy in .dev/
+    "source=${localEnv:HOME}/.kube,target=/home/vscode/.kube,type=bind,consistency=cached",
     "source=okdp-server-gomodcache,target=/go/pkg/mod,type=volume",
-    "source=okdp-server-gobuildcache,target=/root/.cache/go-build,type=volume"
+    "source=okdp-server-gobuildcache,target=/home/vscode/.cache/go-build,type=volume"
   ],
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
   "workspaceFolder": "/workspace",
-  "postCreateCommand": "go mod download",
-  "remoteUser": "root",
+  // cache volumes mount root-owned, so chown them to vscode before downloading
+  "postCreateCommand": "sudo chown -R vscode:vscode /go/pkg/mod /home/vscode/.cache && go mod download",
+  // Re-derive the container-reachable kubeconfig on every start (covers cluster recreation).
+  "postStartCommand": "bash .devcontainer/sync-kubeconfig.sh",
+  // KUBECONFIG points at the synced file, so kubectl, go run, dlv and air all reach the cluster.
+  "remoteEnv": { "KUBECONFIG": "${containerWorkspaceFolder}/.dev/kubeconfig" },
+  "remoteUser": "vscode",
   "customizations": {
     "vscode": {
       "extensions": [
         "golang.go",
-        "ms-azuretools.vscode-docker",
         "redhat.vscode-yaml"
       ],
       "settings": {

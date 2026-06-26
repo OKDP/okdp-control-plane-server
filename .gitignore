@@ -17,6 +17,9 @@ okdp-server-new
 # air hot-reload
 tmp/
 
+# generated container kubeconfig (holds credentials)
+.dev/
+
 # Go workspace file
 go.work
 go.work.sum
