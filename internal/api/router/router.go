@@ -77,6 +77,9 @@ func SetupRouter(cfg *config.Config, projectHandler *handlers.ProjectHandler, id
 
 		// Platform services (managed OKDP services)
 		api.GET("/platform-services", serviceHandler.GetPlatformServices)
+		api.POST("/platform-services", serviceHandler.CreatePlatformService)
+		api.PUT("/platform-services/:serviceName", serviceHandler.UpdatePlatformService)
+		api.DELETE("/platform-services/:serviceName", serviceHandler.DeletePlatformService)
 		api.GET("/platform-services/:serviceName/versions", serviceHandler.GetServiceVersions)
 		api.GET("/platform-services/:serviceName/schema", serviceHandler.GetServiceSchema)
 		api.GET("/profile-images", serviceHandler.GetProfileImages)

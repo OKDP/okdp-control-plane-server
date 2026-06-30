@@ -27,6 +27,10 @@ type ServiceVersionsResponse struct {
 type PackageSchemaService interface {
 	GetParameterSchema(ctx context.Context, serviceName, tag string) (map[string]any, error)
 	GetServiceVersions(ctx context.Context, serviceName string) (*ServiceVersionsResponse, error)
+	// ListPackageTags returns the tags published in the OCI registry for a service's
+	// package, even if the service is not (yet) in the catalog. repositoryOverride
+	// takes precedence over the Context's global package repository when non-empty.
+	ListPackageTags(ctx context.Context, serviceName, repositoryOverride string) ([]string, error)
 }
 
 type DefaultPackageSchemaService struct {
@@ -87,6 +91,20 @@ func (s *DefaultPackageSchemaService) GetServiceVersions(ctx context.Context, se
 		Versions: versions,
 		Default:  defaultVersion,
 	}, nil
+}
+
+// ListPackageTags resolves the package repository from the Context (or the
+// per-service override when set) and lists the OCI tags published for the given
+// service's package.
+func (s *DefaultPackageSchemaService) ListPackageTags(ctx context.Context, serviceName, repositoryOverride string) ([]string, error) {
+	packageRepo, err := s.contextRepo.GetPackageRepository(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get package repository: %w", err)
+	}
+	if repositoryOverride != "" {
+		packageRepo = repositoryOverride
+	}
+	return s.listOCITags(packageRepo, serviceName)
 }
 
 // listOCITags fetches available tags from the OCI registry for a given package.
