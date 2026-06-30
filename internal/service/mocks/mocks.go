@@ -63,6 +63,21 @@ func (m *ContextWriterRepository) Delete(ctx context.Context, projectName string
 	return args.Error(0)
 }
 
+func (m *ContextWriterRepository) AddPlatformService(ctx context.Context, svc models.PlatformService) error {
+	args := m.Called(ctx, svc)
+	return args.Error(0)
+}
+
+func (m *ContextWriterRepository) UpdatePlatformService(ctx context.Context, name string, svc models.PlatformService) error {
+	args := m.Called(ctx, name, svc)
+	return args.Error(0)
+}
+
+func (m *ContextWriterRepository) RemovePlatformService(ctx context.Context, name string) error {
+	args := m.Called(ctx, name)
+	return args.Error(0)
+}
+
 // SecretStoreRepository Mock
 type SecretStoreRepository struct {
 	mock.Mock
@@ -241,6 +256,27 @@ type ServiceService struct {
 func (m *ServiceService) GetPlatformServices(ctx context.Context) ([]models.PlatformService, error) {
 	args := m.Called(ctx)
 	return args.Get(0).([]models.PlatformService), args.Error(1)
+}
+
+func (m *ServiceService) AddPlatformService(ctx context.Context, svc models.PlatformService) (*models.PlatformService, error) {
+	args := m.Called(ctx, svc)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*models.PlatformService), args.Error(1)
+}
+
+func (m *ServiceService) UpdatePlatformService(ctx context.Context, name string, svc models.PlatformService) (*models.PlatformService, error) {
+	args := m.Called(ctx, name, svc)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*models.PlatformService), args.Error(1)
+}
+
+func (m *ServiceService) RemovePlatformService(ctx context.Context, name string) error {
+	args := m.Called(ctx, name)
+	return args.Error(0)
 }
 
 func (m *ServiceService) DeployService(ctx context.Context, project string, req models.ServiceRequest) (*models.ServiceInstance, error) {

@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
 	"time"
 
@@ -24,9 +26,25 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
+// Catalog management errors. Handlers map these to HTTP 400/404/409.
+var (
+	ErrCatalogValidation      = errors.New("invalid catalog service")
+	ErrCatalogServiceExists   = errors.New("service already exists in the catalog")
+	ErrCatalogServiceNotFound = errors.New("service not found in the catalog")
+)
+
+// serviceNameRe matches a DNS-style identifier (lowercase alphanumerics and dashes).
+var serviceNameRe = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
+
 // ServiceService manages platform services (deploy, monitor, delete) and exposes the catalog.
 type ServiceService interface {
 	GetPlatformServices(ctx context.Context) ([]models.PlatformService, error)
+	// AddPlatformService exposes a new service in the catalog (default Context).
+	AddPlatformService(ctx context.Context, svc models.PlatformService) (*models.PlatformService, error)
+	// UpdatePlatformService updates an existing catalog service (name from the path).
+	UpdatePlatformService(ctx context.Context, name string, svc models.PlatformService) (*models.PlatformService, error)
+	// RemovePlatformService removes a service from the catalog.
+	RemovePlatformService(ctx context.Context, name string) error
 	DeployService(ctx context.Context, project string, req models.ServiceRequest) (*models.ServiceInstance, error)
 	ListServices(ctx context.Context, project string) ([]models.ServiceInstance, error)
 	GetService(ctx context.Context, project, name string) (*models.ServiceInstance, error)
@@ -95,6 +113,143 @@ func (s *DefaultServiceService) GetPlatformServices(ctx context.Context) ([]mode
 	}
 
 	return services, nil
+}
+
+// AddPlatformService validates and appends a new service to the catalog (default Context).
+func (s *DefaultServiceService) AddPlatformService(ctx context.Context, svc models.PlatformService) (*models.PlatformService, error) {
+	if s.contextWriteRepo == nil {
+		return nil, fmt.Errorf("catalog management is not available")
+	}
+	if err := normalizeAndValidateCatalogService(&svc); err != nil {
+		return nil, err
+	}
+
+	existing, err := s.contextRepo.GetPlatformServices(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read catalog: %w", err)
+	}
+	for _, e := range existing {
+		if e.Name == svc.Name {
+			return nil, fmt.Errorf("%w: %q", ErrCatalogServiceExists, svc.Name)
+		}
+	}
+
+	if err := s.validateVersionsInRegistry(ctx, svc); err != nil {
+		return nil, err
+	}
+
+	if err := s.contextWriteRepo.AddPlatformService(ctx, svc); err != nil {
+		return nil, err
+	}
+	return &svc, nil
+}
+
+// UpdatePlatformService validates and replaces an existing catalog service.
+func (s *DefaultServiceService) UpdatePlatformService(ctx context.Context, name string, svc models.PlatformService) (*models.PlatformService, error) {
+	if s.contextWriteRepo == nil {
+		return nil, fmt.Errorf("catalog management is not available")
+	}
+	svc.Name = name // the path is the source of truth for identity
+	if err := normalizeAndValidateCatalogService(&svc); err != nil {
+		return nil, err
+	}
+
+	if _, err := s.findCatalogService(ctx, name); err != nil {
+		return nil, err
+	}
+
+	if err := s.validateVersionsInRegistry(ctx, svc); err != nil {
+		return nil, err
+	}
+
+	if err := s.contextWriteRepo.UpdatePlatformService(ctx, name, svc); err != nil {
+		return nil, err
+	}
+	return &svc, nil
+}
+
+// RemovePlatformService removes a service from the catalog.
+func (s *DefaultServiceService) RemovePlatformService(ctx context.Context, name string) error {
+	if s.contextWriteRepo == nil {
+		return fmt.Errorf("catalog management is not available")
+	}
+	if _, err := s.findCatalogService(ctx, name); err != nil {
+		return err
+	}
+	return s.contextWriteRepo.RemovePlatformService(ctx, name)
+}
+
+// findCatalogService returns the catalog service by name or ErrCatalogServiceNotFound.
+func (s *DefaultServiceService) findCatalogService(ctx context.Context, name string) (*models.PlatformService, error) {
+	existing, err := s.contextRepo.GetPlatformServices(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read catalog: %w", err)
+	}
+	for i := range existing {
+		if existing[i].Name == name {
+			return &existing[i], nil
+		}
+	}
+	return nil, fmt.Errorf("%w: %q", ErrCatalogServiceNotFound, name)
+}
+
+// validateVersionsInRegistry rejects versions that don't exist in the OCI registry
+// for the service's package. Strict: if the registry can't be queried (package not
+// published / unreachable), the service is rejected. Reuses the existing OCI tag
+// listing used by the read path.
+func (s *DefaultServiceService) validateVersionsInRegistry(ctx context.Context, svc models.PlatformService) error {
+	if s.schemaService == nil {
+		return nil
+	}
+	tags, err := s.schemaService.ListPackageTags(ctx, svc.Name, svc.Repository)
+	if err != nil {
+		return fmt.Errorf("%w: could not verify package %q in the registry (%v)", ErrCatalogValidation, svc.Name, err)
+	}
+	available := make(map[string]bool, len(tags))
+	for _, t := range tags {
+		available[t] = true
+	}
+	var missing []string
+	for _, v := range svc.Versions {
+		if !available[v] {
+			missing = append(missing, v)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("%w: version(s) %v not found in the registry for %q (available: %v)", ErrCatalogValidation, missing, svc.Name, tags)
+	}
+	return nil
+}
+
+// normalizeAndValidateCatalogService enforces the catalog rules and fills the
+// default version when omitted. Returns an error wrapping ErrCatalogValidation.
+func normalizeAndValidateCatalogService(svc *models.PlatformService) error {
+	svc.Name = strings.TrimSpace(svc.Name)
+	if svc.Name == "" {
+		return fmt.Errorf("%w: name is required", ErrCatalogValidation)
+	}
+	if !serviceNameRe.MatchString(svc.Name) {
+		return fmt.Errorf("%w: name %q must be a lowercase DNS-style identifier", ErrCatalogValidation, svc.Name)
+	}
+	if len(svc.Versions) == 0 {
+		return fmt.Errorf("%w: at least one version is required", ErrCatalogValidation)
+	}
+	seen := make(map[string]bool, len(svc.Versions))
+	for _, v := range svc.Versions {
+		if strings.TrimSpace(v) == "" {
+			return fmt.Errorf("%w: version cannot be empty", ErrCatalogValidation)
+		}
+		if seen[v] {
+			return fmt.Errorf("%w: duplicate version %q", ErrCatalogValidation, v)
+		}
+		seen[v] = true
+	}
+	if svc.DefaultVersion == "" {
+		svc.DefaultVersion = svc.Versions[0]
+	} else if !seen[svc.DefaultVersion] {
+		return fmt.Errorf("%w: default version %q must be one of the listed versions", ErrCatalogValidation, svc.DefaultVersion)
+	}
+	return nil
 }
 
 func (s *DefaultServiceService) DeployService(ctx context.Context, project string, req models.ServiceRequest) (*models.ServiceInstance, error) {

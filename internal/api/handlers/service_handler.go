@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -43,6 +44,94 @@ func (h *ServiceHandler) GetPlatformServices(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, services)
+}
+
+// CreatePlatformService godoc
+// @Summary      Add a service to the catalog
+// @Description  Expose a new managed service in the catalog (writes the default KuboCD Context)
+// @Tags         platform-services
+// @Accept       json
+// @Produce      json
+// @Param        request body models.PlatformService true "Catalog service"
+// @Success      201  {object}  models.PlatformService
+// @Failure      400  {object}  map[string]string
+// @Failure      409  {object}  map[string]string
+// @Failure      500  {object}  map[string]string
+// @Router       /api/platform-services [post]
+func (h *ServiceHandler) CreatePlatformService(c *gin.Context) {
+	var req models.PlatformService
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	svc, err := h.service.AddPlatformService(c.Request.Context(), req)
+	if err != nil {
+		h.writeCatalogError(c, err)
+		return
+	}
+	c.JSON(http.StatusCreated, svc)
+}
+
+// UpdatePlatformService godoc
+// @Summary      Update a catalog service
+// @Description  Update an exposed service (versions, default, description, icon, category)
+// @Tags         platform-services
+// @Accept       json
+// @Produce      json
+// @Param        serviceName path string true "Service name"
+// @Param        request body models.PlatformService true "Catalog service"
+// @Success      200  {object}  models.PlatformService
+// @Failure      400  {object}  map[string]string
+// @Failure      404  {object}  map[string]string
+// @Failure      500  {object}  map[string]string
+// @Router       /api/platform-services/{serviceName} [put]
+func (h *ServiceHandler) UpdatePlatformService(c *gin.Context) {
+	serviceName := c.Param("serviceName")
+	var req models.PlatformService
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	svc, err := h.service.UpdatePlatformService(c.Request.Context(), serviceName, req)
+	if err != nil {
+		h.writeCatalogError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, svc)
+}
+
+// DeletePlatformService godoc
+// @Summary      Remove a catalog service
+// @Description  Remove an exposed service from the catalog (writes the default KuboCD Context)
+// @Tags         platform-services
+// @Produce      json
+// @Param        serviceName path string true "Service name"
+// @Success      204
+// @Failure      404  {object}  map[string]string
+// @Failure      500  {object}  map[string]string
+// @Router       /api/platform-services/{serviceName} [delete]
+func (h *ServiceHandler) DeletePlatformService(c *gin.Context) {
+	serviceName := c.Param("serviceName")
+	if err := h.service.RemovePlatformService(c.Request.Context(), serviceName); err != nil {
+		h.writeCatalogError(c, err)
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+// writeCatalogError maps catalog management errors to HTTP status codes.
+func (h *ServiceHandler) writeCatalogError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, service.ErrCatalogValidation):
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	case errors.Is(err, service.ErrCatalogServiceExists):
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+	case errors.Is(err, service.ErrCatalogServiceNotFound):
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+	default:
+		logrus.WithError(err).Error("Catalog operation failed")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	}
 }
 
 // ListServices godoc
