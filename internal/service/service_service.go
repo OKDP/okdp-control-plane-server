@@ -358,9 +358,7 @@ func (s *DefaultServiceService) GetService(ctx context.Context, project, name st
 		return nil, err
 	}
 	instance := releaseToInstance(release)
-	if suffix, err := s.contextRepo.GetIngressSuffix(ctx); err == nil {
-		instance.URL = fmt.Sprintf("https://%s.%s", instance.ReleaseName, suffix)
-	}
+	s.setURLIfExposed(ctx, instance)
 	instances := []models.ServiceInstance{*instance}
 	s.enrichWithPodHealth(ctx, instances)
 	instance.Status = instances[0].Status
@@ -550,9 +548,7 @@ func (s *DefaultServiceService) UpdateServiceParameters(ctx context.Context, pro
 	}
 
 	instance := releaseToInstance(release)
-	if suffix, err := s.contextRepo.GetIngressSuffix(ctx); err == nil {
-		instance.URL = fmt.Sprintf("https://%s.%s", instance.ReleaseName, suffix)
-	}
+	s.setURLIfExposed(ctx, instance)
 	return instance, nil
 }
 
@@ -563,9 +559,70 @@ func (s *DefaultServiceService) enrichWithURL(ctx context.Context, instances []m
 	if err != nil {
 		return
 	}
+	// Only expose a URL when an Ingress actually routes to the service. A
+	// service with no web UI (e.g. an operator or a storage backend) gets no
+	// URL, so the UI shows no dead "Open" link. Ingresses are listed once per
+	// namespace and reused across that namespace's instances.
+	hostsByNS := map[string]map[string]bool{}
 	for i := range instances {
-		instances[i].URL = fmt.Sprintf("https://%s.%s", instances[i].ReleaseName, suffix)
+		ns := instances[i].TargetNamespace
+		if ns == "" {
+			continue
+		}
+		hosts, ok := hostsByNS[ns]
+		if !ok {
+			hosts = s.namespaceIngressHosts(ctx, ns)
+			hostsByNS[ns] = hosts
+		}
+		host := fmt.Sprintf("%s.%s", instances[i].ReleaseName, suffix)
+		if hosts[host] {
+			instances[i].URL = "https://" + host
+		}
 	}
+}
+
+// setURLIfExposed sets instance.URL only when an Ingress in the instance's
+// namespace routes to https://<release>.<suffix> — the single-instance
+// counterpart of enrichWithURL (see it for the rationale).
+func (s *DefaultServiceService) setURLIfExposed(ctx context.Context, instance *models.ServiceInstance) {
+	suffix, err := s.contextRepo.GetIngressSuffix(ctx)
+	if err != nil || instance == nil || instance.TargetNamespace == "" {
+		return
+	}
+	host := fmt.Sprintf("%s.%s", instance.ReleaseName, suffix)
+	if s.namespaceIngressHosts(ctx, instance.TargetNamespace)[host] {
+		instance.URL = "https://" + host
+	}
+}
+
+// namespaceIngressHosts returns the set of hosts served by Ingresses in a
+// namespace (empty on error, so a lookup failure never fabricates a URL).
+func (s *DefaultServiceService) namespaceIngressHosts(ctx context.Context, namespace string) map[string]bool {
+	ingressGVR := schema.GroupVersionResource{Group: "networking.k8s.io", Version: "v1", Resource: "ingresses"}
+	list, err := s.k8sClient.Resource(ingressGVR).Namespace(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return map[string]bool{}
+	}
+	return ingressHostsFromItems(list.Items)
+}
+
+// ingressHostsFromItems extracts the set of spec.rules[].host values from a
+// list of Ingress objects.
+func ingressHostsFromItems(items []unstructured.Unstructured) map[string]bool {
+	hosts := map[string]bool{}
+	for i := range items {
+		rules, _, _ := unstructured.NestedSlice(items[i].Object, "spec", "rules")
+		for _, r := range rules {
+			rm, ok := r.(map[string]any)
+			if !ok {
+				continue
+			}
+			if host, ok := rm["host"].(string); ok && host != "" {
+				hosts[host] = true
+			}
+		}
+	}
+	return hosts
 }
 
 // enrichWithPodHealth overrides a "Ready" Release status when pods are actually unhealthy.
