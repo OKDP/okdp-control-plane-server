@@ -40,13 +40,13 @@ type IdentityRepository interface {
 
 type k8sIdentityRepository struct {
 	client    dynamic.Interface
-	namespace string
+	namespace func(ctx context.Context) string
 	userGVR   schema.GroupVersionResource
 	groupGVR  schema.GroupVersionResource
 	gbGVR     schema.GroupVersionResource
 }
 
-func NewIdentityRepository(client dynamic.Interface, namespace string) IdentityRepository {
+func NewIdentityRepository(client dynamic.Interface, namespace func(ctx context.Context) string) IdentityRepository {
 	groupName := "kubauth.kubotal.io"
 	version := "v1alpha1"
 
@@ -74,7 +74,7 @@ func NewIdentityRepository(client dynamic.Interface, namespace string) IdentityR
 // --- Users ---
 
 func (r *k8sIdentityRepository) ListUsers(ctx context.Context) ([]models.User, error) {
-	list, err := r.client.Resource(r.userGVR).Namespace(r.namespace).List(ctx, metav1.ListOptions{})
+	list, err := r.client.Resource(r.userGVR).Namespace(r.namespace(ctx)).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -110,7 +110,7 @@ func (r *k8sIdentityRepository) ListUsers(ctx context.Context) ([]models.User, e
 }
 
 func (r *k8sIdentityRepository) GetUser(ctx context.Context, name string) (*models.User, error) {
-	u, err := r.client.Resource(r.userGVR).Namespace(r.namespace).Get(ctx, name, metav1.GetOptions{})
+	u, err := r.client.Resource(r.userGVR).Namespace(r.namespace(ctx)).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -156,7 +156,7 @@ func (r *k8sIdentityRepository) CreateUser(ctx context.Context, user *crd.User) 
 		return fmt.Errorf("failed to convert to unstructured: %w", err)
 	}
 
-	_, err = r.client.Resource(r.userGVR).Namespace(r.namespace).Create(ctx, &unstructured.Unstructured{Object: unstructuredMap}, metav1.CreateOptions{})
+	_, err = r.client.Resource(r.userGVR).Namespace(r.namespace(ctx)).Create(ctx, &unstructured.Unstructured{Object: unstructuredMap}, metav1.CreateOptions{})
 	return err
 }
 
@@ -167,7 +167,7 @@ func (r *k8sIdentityRepository) UpdateUser(ctx context.Context, user *crd.User) 
 	// But usually Update requires ResourceVersion.
 	// If the passed user object doesn't have ResourceVersion, we should probably GET it first.
 
-	current, err := r.client.Resource(r.userGVR).Namespace(r.namespace).Get(ctx, user.Name, metav1.GetOptions{})
+	current, err := r.client.Resource(r.userGVR).Namespace(r.namespace(ctx)).Get(ctx, user.Name, metav1.GetOptions{})
 	if err != nil {
 		return err
 	}
@@ -183,18 +183,18 @@ func (r *k8sIdentityRepository) UpdateUser(ctx context.Context, user *crd.User) 
 		return fmt.Errorf("failed to convert to unstructured: %w", err)
 	}
 
-	_, err = r.client.Resource(r.userGVR).Namespace(r.namespace).Update(ctx, &unstructured.Unstructured{Object: unstructuredMap}, metav1.UpdateOptions{})
+	_, err = r.client.Resource(r.userGVR).Namespace(r.namespace(ctx)).Update(ctx, &unstructured.Unstructured{Object: unstructuredMap}, metav1.UpdateOptions{})
 	return err
 }
 
 func (r *k8sIdentityRepository) DeleteUser(ctx context.Context, name string) error {
-	return r.client.Resource(r.userGVR).Namespace(r.namespace).Delete(ctx, name, metav1.DeleteOptions{})
+	return r.client.Resource(r.userGVR).Namespace(r.namespace(ctx)).Delete(ctx, name, metav1.DeleteOptions{})
 }
 
 // --- Groups ---
 
 func (r *k8sIdentityRepository) ListGroups(ctx context.Context) ([]models.Group, error) {
-	list, err := r.client.Resource(r.groupGVR).Namespace(r.namespace).List(ctx, metav1.ListOptions{})
+	list, err := r.client.Resource(r.groupGVR).Namespace(r.namespace(ctx)).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -215,7 +215,7 @@ func (r *k8sIdentityRepository) ListGroups(ctx context.Context) ([]models.Group,
 }
 
 func (r *k8sIdentityRepository) GetGroup(ctx context.Context, name string) (*models.Group, error) {
-	u, err := r.client.Resource(r.groupGVR).Namespace(r.namespace).Get(ctx, name, metav1.GetOptions{})
+	u, err := r.client.Resource(r.groupGVR).Namespace(r.namespace(ctx)).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -243,12 +243,12 @@ func (r *k8sIdentityRepository) CreateGroup(ctx context.Context, group *crd.Grou
 		return fmt.Errorf("failed to convert to unstructured: %w", err)
 	}
 
-	_, err = r.client.Resource(r.groupGVR).Namespace(r.namespace).Create(ctx, &unstructured.Unstructured{Object: unstructuredMap}, metav1.CreateOptions{})
+	_, err = r.client.Resource(r.groupGVR).Namespace(r.namespace(ctx)).Create(ctx, &unstructured.Unstructured{Object: unstructuredMap}, metav1.CreateOptions{})
 	return err
 }
 
 func (r *k8sIdentityRepository) UpdateGroup(ctx context.Context, group *crd.Group) error {
-	current, err := r.client.Resource(r.groupGVR).Namespace(r.namespace).Get(ctx, group.Name, metav1.GetOptions{})
+	current, err := r.client.Resource(r.groupGVR).Namespace(r.namespace(ctx)).Get(ctx, group.Name, metav1.GetOptions{})
 	if err != nil {
 		return err
 	}
@@ -264,12 +264,12 @@ func (r *k8sIdentityRepository) UpdateGroup(ctx context.Context, group *crd.Grou
 		return fmt.Errorf("failed to convert to unstructured: %w", err)
 	}
 
-	_, err = r.client.Resource(r.groupGVR).Namespace(r.namespace).Update(ctx, &unstructured.Unstructured{Object: unstructuredMap}, metav1.UpdateOptions{})
+	_, err = r.client.Resource(r.groupGVR).Namespace(r.namespace(ctx)).Update(ctx, &unstructured.Unstructured{Object: unstructuredMap}, metav1.UpdateOptions{})
 	return err
 }
 
 func (r *k8sIdentityRepository) DeleteGroup(ctx context.Context, name string) error {
-	return r.client.Resource(r.groupGVR).Namespace(r.namespace).Delete(ctx, name, metav1.DeleteOptions{})
+	return r.client.Resource(r.groupGVR).Namespace(r.namespace(ctx)).Delete(ctx, name, metav1.DeleteOptions{})
 }
 
 // --- GroupBindings ---
@@ -279,7 +279,7 @@ func (r *k8sIdentityRepository) ListGroupBindings(ctx context.Context, userFilte
 	// checking spec.user. But simple CRDs usually don't support arbitrary field selectors without indexing.
 	// So we'll list all and filter in memory.
 
-	list, err := r.client.Resource(r.gbGVR).Namespace(r.namespace).List(ctx, metav1.ListOptions{})
+	list, err := r.client.Resource(r.gbGVR).Namespace(r.namespace(ctx)).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -319,17 +319,17 @@ func (r *k8sIdentityRepository) CreateGroupBinding(ctx context.Context, binding 
 		return fmt.Errorf("failed to convert to unstructured: %w", err)
 	}
 
-	_, err = r.client.Resource(r.gbGVR).Namespace(r.namespace).Create(ctx, &unstructured.Unstructured{Object: unstructuredMap}, metav1.CreateOptions{})
+	_, err = r.client.Resource(r.gbGVR).Namespace(r.namespace(ctx)).Create(ctx, &unstructured.Unstructured{Object: unstructuredMap}, metav1.CreateOptions{})
 	return err
 }
 
 func (r *k8sIdentityRepository) DeleteGroupBinding(ctx context.Context, name string) error {
-	return r.client.Resource(r.gbGVR).Namespace(r.namespace).Delete(ctx, name, metav1.DeleteOptions{})
+	return r.client.Resource(r.gbGVR).Namespace(r.namespace(ctx)).Delete(ctx, name, metav1.DeleteOptions{})
 }
 
 func (r *k8sIdentityRepository) DeleteGroupBindingByRef(ctx context.Context, user, group string) error {
 	// Need to find the binding first
-	list, err := r.client.Resource(r.gbGVR).Namespace(r.namespace).List(ctx, metav1.ListOptions{})
+	list, err := r.client.Resource(r.gbGVR).Namespace(r.namespace(ctx)).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return err
 	}

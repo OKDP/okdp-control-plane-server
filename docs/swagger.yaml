@@ -1,5 +1,12 @@
 basePath: /
 definitions:
+  models.Capabilities:
+    properties:
+      identity:
+        $ref: '#/definitions/models.IdentityCapability'
+      oidcProvisioning:
+        $ref: '#/definitions/models.OidcProvisioningCapability'
+    type: object
   models.CatalogCategory:
     properties:
       description:
@@ -139,16 +146,18 @@ definitions:
       name:
         type: string
     type: object
-  models.MenuCategory:
+  models.IdentityCapability:
     properties:
-      icon:
+      provider:
+        description: |-
+          Provider is the configured identity provider: "external" (BYO OIDC,
+          default) or "kubauth".
         type: string
-      key:
-        type: string
-      label:
-        type: string
-      order:
-        type: integer
+      userManagement:
+        description: |-
+          UserManagement is true when the kubauth-specific user/group management
+          API (/api/v1/identity) is available.
+        type: boolean
     type: object
   models.MetricValue:
     properties:
@@ -165,6 +174,14 @@ definitions:
       usedRaw:
         type: number
     type: object
+  models.OidcProvisioningCapability:
+    properties:
+      provider:
+        description: |-
+          Provider is the configured provisioning backend: "none" (default),
+          "kubauth" or "keycloak".
+        type: string
+    type: object
   models.PlatformService:
     properties:
       category:
@@ -173,19 +190,7 @@ definitions:
         type: string
       description:
         type: string
-      exposesUI:
-        description: |-
-          ExposesUI is false for infrastructure-only packages (operators, storage
-          backends) that have no console page, and nil when the catalog does not set
-          it, which the console treats as exposing a UI. It lets the catalog-driven
-          menu leave purely infrastructural packages out of the navigation.
-        type: boolean
       icon:
-        type: string
-      label:
-        description: |-
-          Label is the display name shown in the console menu; the service `name`
-          (its identity and route) is used when empty.
         type: string
       name:
         type: string
@@ -344,10 +349,6 @@ definitions:
         type: object
       releaseName:
         type: string
-      roles:
-        items:
-          type: string
-        type: array
       service:
         type: string
       serviceTag:
@@ -611,6 +612,20 @@ info:
   title: OKDP Server New API
   version: "1.0"
 paths:
+  /api/capabilities:
+    get:
+      description: Capabilities the platform is configured with (identity provider,
+        user management, OIDC client provisioning), so the UI can adapt
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.Capabilities'
+      summary: Get platform capabilities
+      tags:
+      - capabilities
   /api/catalog:
     get:
       description: Get the list of additional packages that clients can deploy on
@@ -633,28 +648,6 @@ paths:
       summary: Get self-service catalog
       tags:
       - catalog
-  /api/platform-categories:
-    get:
-      description: Get the ordered menu sections (key, label, icon, order) the console
-        groups services under
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            items:
-              $ref: '#/definitions/models.MenuCategory'
-            type: array
-        "500":
-          description: Internal Server Error
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-      summary: List console navigation categories
-      tags:
-      - platform-services
   /api/platform-services:
     get:
       description: Get the list of managed OKDP services that can be deployed per
@@ -675,121 +668,6 @@ paths:
               type: string
             type: object
       summary: List available platform services
-      tags:
-      - platform-services
-    post:
-      consumes:
-      - application/json
-      description: Expose a new managed service in the catalog (writes the default
-        KuboCD Context)
-      parameters:
-      - description: Catalog service
-        in: body
-        name: request
-        required: true
-        schema:
-          $ref: '#/definitions/models.PlatformService'
-      produces:
-      - application/json
-      responses:
-        "201":
-          description: Created
-          schema:
-            $ref: '#/definitions/models.PlatformService'
-        "400":
-          description: Bad Request
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "409":
-          description: Conflict
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "500":
-          description: Internal Server Error
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-      summary: Add a service to the catalog
-      tags:
-      - platform-services
-  /api/platform-services/{serviceName}:
-    delete:
-      description: Remove an exposed service from the catalog (writes the default
-        KuboCD Context)
-      parameters:
-      - description: Service name
-        in: path
-        name: serviceName
-        required: true
-        type: string
-      produces:
-      - application/json
-      responses:
-        "204":
-          description: No Content
-        "404":
-          description: Not Found
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "500":
-          description: Internal Server Error
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-      summary: Remove a catalog service
-      tags:
-      - platform-services
-    put:
-      consumes:
-      - application/json
-      description: Update an exposed service (versions, default, description, icon,
-        category)
-      parameters:
-      - description: Service name
-        in: path
-        name: serviceName
-        required: true
-        type: string
-      - description: Catalog service
-        in: body
-        name: request
-        required: true
-        schema:
-          $ref: '#/definitions/models.PlatformService'
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/models.PlatformService'
-        "400":
-          description: Bad Request
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "404":
-          description: Not Found
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "500":
-          description: Internal Server Error
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-      summary: Update a catalog service
       tags:
       - platform-services
   /api/platform-services/{serviceName}/schema:
@@ -989,50 +867,6 @@ paths:
               type: string
             type: object
       summary: Get a project
-      tags:
-      - projects
-    put:
-      consumes:
-      - application/json
-      description: Update a project's mutable metadata (currently its description)
-      parameters:
-      - description: Project Name
-        in: path
-        name: name
-        required: true
-        type: string
-      - description: Project Object
-        in: body
-        name: project
-        required: true
-        schema:
-          $ref: '#/definitions/models.Project'
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/models.Project'
-        "400":
-          description: Bad Request
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "404":
-          description: Project not found
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "500":
-          description: Internal Server Error
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-      summary: Update a project
       tags:
       - projects
   /api/projects/{name}/services:

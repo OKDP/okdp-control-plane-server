@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
+
 	"github.com/sirupsen/logrus"
 
 	"github.com/okdp/okdp-server-new/internal/api/handlers"
 	"github.com/okdp/okdp-server-new/internal/api/router"
 	"github.com/okdp/okdp-server-new/internal/config"
 	"github.com/okdp/okdp-server-new/internal/repository"
+	"github.com/okdp/okdp-server-new/internal/repository/provisioning"
 	"github.com/okdp/okdp-server-new/internal/service"
 )
 
@@ -59,8 +62,21 @@ func main() {
 	projectService := service.NewDefaultProjectService(projectRepo, contextWriterRepo)
 	projectHandler := handlers.NewProjectHandler(projectService)
 
-	// Initialize Identity stack
-	identityRepo := repository.NewIdentityRepository(k8sClient, cfg.PlatformNamespace)
+	// Context repository (shared by capabilities, catalog and Spark)
+	contextRepo := repository.NewContextRepository(k8sClient, cfg.ContextName, cfg.ContextNamespace)
+
+	// Initialize Capabilities stack (platform features derived from the Context)
+	capabilityService := service.NewDefaultCapabilityService(contextRepo)
+	capabilitiesHandler := handlers.NewCapabilitiesHandler(capabilityService)
+
+	// Initialize Identity stack (kubauth-specific; routes gated by identity.provider)
+	kubauthNamespace := func(ctx context.Context) string {
+		if ns, err := contextRepo.GetKubauthNamespace(ctx); err == nil {
+			return ns
+		}
+		return cfg.PlatformNamespace
+	}
+	identityRepo := repository.NewIdentityRepository(k8sClient, kubauthNamespace)
 	identityService := service.NewDefaultIdentityService(identityRepo)
 	identityHandler := handlers.NewIdentityHandler(identityService)
 
@@ -76,9 +92,10 @@ func main() {
 
 	// Initialize Service stack (KuboCD Releases + Context-driven catalog)
 	serviceRepo := repository.NewServiceRepository(k8sClient)
-	contextRepo := repository.NewContextRepository(k8sClient, cfg.ContextName, cfg.ContextNamespace)
 	schemaService := service.NewDefaultPackageSchemaService(contextRepo)
-	serviceService := service.NewDefaultServiceService(serviceRepo, contextRepo, contextWriterRepo, schemaService, k8sClient, k8sTypedClient, cfg.ContextNamespace, cfg.ReleaseInterval, cfg.ReleaseTimeout, cfg.ExcludedSidecarPrefixes)
+	// OIDC client provisioning (backend selected per call from the Context)
+	oidcProvisioner := provisioning.NewContextSelector(contextRepo, k8sClient)
+	serviceService := service.NewDefaultServiceService(serviceRepo, contextRepo, contextWriterRepo, schemaService, oidcProvisioner, k8sClient, k8sTypedClient, cfg.ContextNamespace, cfg.ReleaseInterval, cfg.ReleaseTimeout, cfg.ExcludedSidecarPrefixes)
 	serviceHandler := handlers.NewServiceHandler(serviceService, schemaService)
 
 	// Initialize Spark stack (SparkApplication CRUD)
@@ -87,7 +104,7 @@ func main() {
 	sparkHandler := handlers.NewSparkHandler(sparkService)
 
 	// Setup router
-	r := router.SetupRouter(cfg, projectHandler, identityHandler, secretStoreHandler, externalSecretHandler, serviceHandler, sparkHandler)
+	r := router.SetupRouter(cfg, capabilitiesHandler, projectHandler, identityHandler, secretStoreHandler, externalSecretHandler, serviceHandler, sparkHandler)
 
 	// Start Server
 	logrus.WithField("port", cfg.ServerPort).Info("Starting server")
