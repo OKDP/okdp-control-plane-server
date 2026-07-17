@@ -670,6 +670,121 @@ paths:
       summary: List available platform services
       tags:
       - platform-services
+    post:
+      consumes:
+      - application/json
+      description: Expose a new managed service in the catalog (writes the default
+        KuboCD Context)
+      parameters:
+      - description: Catalog service
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.PlatformService'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/models.PlatformService'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Add a service to the catalog
+      tags:
+      - platform-services
+  /api/platform-services/{serviceName}:
+    delete:
+      description: Remove an exposed service from the catalog (writes the default
+        KuboCD Context)
+      parameters:
+      - description: Service name
+        in: path
+        name: serviceName
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Remove a catalog service
+      tags:
+      - platform-services
+    put:
+      consumes:
+      - application/json
+      description: Update an exposed service (versions, default, description, icon,
+        category)
+      parameters:
+      - description: Service name
+        in: path
+        name: serviceName
+        required: true
+        type: string
+      - description: Catalog service
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.PlatformService'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.PlatformService'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Update a catalog service
+      tags:
+      - platform-services
   /api/platform-services/{serviceName}/schema:
     get:
       description: Returns the JSON Schema (parameters with UI metadata) for a given
@@ -867,6 +982,50 @@ paths:
               type: string
             type: object
       summary: Get a project
+      tags:
+      - projects
+    put:
+      consumes:
+      - application/json
+      description: Update a project's mutable metadata (currently its description)
+      parameters:
+      - description: Project Name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Project Object
+        in: body
+        name: project
+        required: true
+        schema:
+          $ref: '#/definitions/models.Project'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.Project'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Project not found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Update a project
       tags:
       - projects
   /api/projects/{name}/services:
