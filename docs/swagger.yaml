@@ -148,6 +148,13 @@ definitions:
     type: object
   models.IdentityCapability:
     properties:
+      oidc:
+        allOf:
+        - $ref: '#/definitions/models.IdentityOidcConfig'
+        description: |-
+          Oidc is the OIDC client the console UI should authenticate with,
+          resolved from the Context (identity.oidc). Absent when the platform
+          does not publish it: the UI falls back to its build-time configuration.
       provider:
         description: |-
           Provider is the configured identity provider: "external" (BYO OIDC,
@@ -158,6 +165,18 @@ definitions:
           UserManagement is true when the kubauth-specific user/group management
           API (/api/v1/identity) is available.
         type: boolean
+    type: object
+  models.IdentityOidcConfig:
+    properties:
+      authority:
+        description: Authority is the OIDC issuer the UI redirects to.
+        type: string
+      clientId:
+        description: ClientID is the public (PKCE) client registered for the console.
+        type: string
+      scope:
+        description: Scope overrides the UI default scopes when set.
+        type: string
     type: object
   models.MetricValue:
     properties:

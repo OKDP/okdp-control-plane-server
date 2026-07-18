@@ -42,6 +42,11 @@ func (s *DefaultCapabilityService) GetCapabilities(ctx context.Context) (*models
 		identityProvider = IdentityProviderExternal
 	}
 
+	oidc, err := s.contextRepo.GetIdentityOidcConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	provisioningProvider, err := s.contextRepo.GetIdentityProvisioningProvider(ctx)
 	if err != nil {
 		return nil, err
@@ -54,6 +59,7 @@ func (s *DefaultCapabilityService) GetCapabilities(ctx context.Context) (*models
 		Identity: models.IdentityCapability{
 			Provider:       identityProvider,
 			UserManagement: identityProvider == IdentityProviderKubauth,
+			Oidc:           oidc,
 		},
 		OidcProvisioning: models.OidcProvisioningCapability{
 			Provider: provisioningProvider,

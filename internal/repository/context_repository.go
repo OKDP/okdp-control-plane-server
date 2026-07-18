@@ -47,6 +47,11 @@ type ContextRepository interface {
 	// The kubauth-specific Identity API is only exposed when it is "kubauth".
 	GetIdentityProvider(ctx context.Context) (string, error)
 
+	// GetIdentityOidcConfig returns the OIDC client the console UI should
+	// authenticate with (from spec.context.identity.oidc; nil when the
+	// Context does not publish one).
+	GetIdentityOidcConfig(ctx context.Context) (*models.IdentityOidcConfig, error)
+
 	// GetIdentityProvisioningProvider returns the OIDC client provisioning backend
 	// (from spec.context.identity.provisioning.provider; "" when unset, meaning none).
 	GetIdentityProvisioningProvider(ctx context.Context) (string, error)
@@ -249,6 +254,24 @@ func (r *k8sContextRepository) GetIdentityProvider(ctx context.Context) (string,
 	}
 	provider, _, _ := unstructured.NestedString(u.Object, "spec", "context", "identity", "provider")
 	return provider, nil
+}
+
+func (r *k8sContextRepository) GetIdentityOidcConfig(ctx context.Context) (*models.IdentityOidcConfig, error) {
+	u, err := r.getContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	authority, _, _ := unstructured.NestedString(u.Object, "spec", "context", "identity", "oidc", "authority")
+	clientID, _, _ := unstructured.NestedString(u.Object, "spec", "context", "identity", "oidc", "clientId")
+	if authority == "" || clientID == "" {
+		return nil, nil
+	}
+	scope, _, _ := unstructured.NestedString(u.Object, "spec", "context", "identity", "oidc", "scope")
+	return &models.IdentityOidcConfig{
+		Authority: authority,
+		ClientID:  clientID,
+		Scope:     scope,
+	}, nil
 }
 
 func (r *k8sContextRepository) GetIdentityProvisioningProvider(ctx context.Context) (string, error) {
