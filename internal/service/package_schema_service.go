@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"sort"
@@ -115,7 +116,7 @@ func (s *DefaultPackageSchemaService) listOCITags(packageRepo, serviceName strin
 		strings.SplitN(packageRepo, "/", 2)[1]+"/"+serviceName,
 	)
 
-	resp, err := http.Get(registryURL)
+	resp, err := registryGet(registryURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch tags from %s: %w", registryURL, err)
 	}
@@ -139,6 +140,98 @@ func (s *DefaultPackageSchemaService) listOCITags(packageRepo, serviceName strin
 
 	sort.Sort(sort.Reverse(sort.StringSlice(tagsResp.Tags)))
 	return tagsResp.Tags, nil
+}
+
+// registryGet performs a Docker Registry v2 GET, honoring the anonymous
+// bearer-token challenge some registries issue even for public repositories
+// (ghcr.io always does; quay.io serves public reads without it): on 401,
+// fetch a pull token from the advertised realm and replay the request.
+func registryGet(url string) (*http.Response, error) {
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusUnauthorized {
+		return resp, nil
+	}
+
+	challenge := resp.Header.Get("WWW-Authenticate")
+	resp.Body.Close()
+
+	token, err := fetchAnonymousToken(challenge)
+	if err != nil {
+		return nil, fmt.Errorf("registry requires authentication and the anonymous token flow failed: %w", err)
+	}
+
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	return http.DefaultClient.Do(req)
+}
+
+// parseBearerChallenge extracts the realm and query parameters (service,
+// scope, ...) from a WWW-Authenticate header such as:
+//
+//	Bearer realm="https://ghcr.io/token",service="ghcr.io",scope="repository:org/repo:pull"
+func parseBearerChallenge(header string) (realm string, params url.Values, err error) {
+	scheme, rest, _ := strings.Cut(strings.TrimSpace(header), " ")
+	if !strings.EqualFold(scheme, "Bearer") {
+		return "", nil, fmt.Errorf("unsupported auth challenge %q", header)
+	}
+
+	params = url.Values{}
+	for _, part := range strings.Split(rest, ",") {
+		key, value, found := strings.Cut(strings.TrimSpace(part), "=")
+		if !found {
+			continue
+		}
+		value = strings.Trim(value, `"`)
+		if key == "realm" {
+			realm = value
+		} else {
+			params.Set(key, value)
+		}
+	}
+	if realm == "" {
+		return "", nil, fmt.Errorf("no realm in auth challenge %q", header)
+	}
+	return realm, params, nil
+}
+
+// fetchAnonymousToken resolves a bearer challenge by requesting a token from
+// its realm without credentials — registries grant pull tokens anonymously
+// for public repositories.
+func fetchAnonymousToken(challenge string) (string, error) {
+	realm, params, err := parseBearerChallenge(challenge)
+	if err != nil {
+		return "", err
+	}
+
+	resp, err := http.Get(realm + "?" + params.Encode())
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("token endpoint %s returned status %d", realm, resp.StatusCode)
+	}
+
+	var tokenResp struct {
+		Token       string `json:"token"`
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
+		return "", fmt.Errorf("failed to parse token response: %w", err)
+	}
+	if tokenResp.Token != "" {
+		return tokenResp.Token, nil
+	}
+	if tokenResp.AccessToken != "" {
+		return tokenResp.AccessToken, nil
+	}
+	return "", fmt.Errorf("token endpoint %s returned no token", realm)
 }
 
 func (s *DefaultPackageSchemaService) GetParameterSchema(ctx context.Context, serviceName, tag string) (map[string]any, error) {
