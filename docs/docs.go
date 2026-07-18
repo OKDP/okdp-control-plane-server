@@ -2896,6 +2896,14 @@ const docTemplate = `{
         "models.IdentityCapability": {
             "type": "object",
             "properties": {
+                "oidc": {
+                    "description": "Oidc is the OIDC client the console UI should authenticate with,\nresolved from the Context (identity.oidc). Absent when the platform\ndoes not publish it: the UI falls back to its build-time configuration.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.IdentityOidcConfig"
+                        }
+                    ]
+                },
                 "provider": {
                     "description": "Provider is the configured identity provider: \"external\" (BYO OIDC,\ndefault) or \"kubauth\".",
                     "type": "string"
@@ -2903,6 +2911,23 @@ const docTemplate = `{
                 "userManagement": {
                     "description": "UserManagement is true when the kubauth-specific user/group management\nAPI (/api/v1/identity) is available.",
                     "type": "boolean"
+                }
+            }
+        },
+        "models.IdentityOidcConfig": {
+            "type": "object",
+            "properties": {
+                "authority": {
+                    "description": "Authority is the OIDC issuer the UI redirects to.",
+                    "type": "string"
+                },
+                "clientId": {
+                    "description": "ClientID is the public (PKCE) client registered for the console.",
+                    "type": "string"
+                },
+                "scope": {
+                    "description": "Scope overrides the UI default scopes when set.",
+                    "type": "string"
                 }
             }
         },
