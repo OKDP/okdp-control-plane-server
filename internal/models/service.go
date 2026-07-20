@@ -46,6 +46,7 @@ type ServiceInstance struct {
 	StatusMessage   string         `json:"statusMessage,omitempty"`
 	TargetNamespace string         `json:"targetNamespace"`
 	URL             string         `json:"url,omitempty"`
+	Roles           []string       `json:"roles,omitempty"`
 	Parameters      map[string]any `json:"parameters,omitempty"`
 	CreatedAt       string         `json:"createdAt,omitempty"`
 }

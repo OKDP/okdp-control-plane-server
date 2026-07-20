@@ -560,9 +560,9 @@ func (s *DefaultServiceService) enrichWithURL(ctx context.Context, instances []m
 		return
 	}
 	// Only expose a URL when an Ingress actually routes to the service. A
-	// service with no web UI (e.g. an operator or a storage backend) gets no
-	// URL, so the UI shows no dead "Open" link. Ingresses are listed once per
-	// namespace and reused across that namespace's instances.
+	// service with no web UI (e.g. an operator) gets no URL, so the UI shows
+	// no dead "Open" link. Ingresses are listed once per namespace and reused
+	// across that namespace's instances.
 	hostsByNS := map[string]map[string]bool{}
 	for i := range instances {
 		ns := instances[i].TargetNamespace
@@ -574,25 +574,54 @@ func (s *DefaultServiceService) enrichWithURL(ctx context.Context, instances []m
 			hosts = s.namespaceIngressHosts(ctx, ns)
 			hostsByNS[ns] = hosts
 		}
-		host := fmt.Sprintf("%s.%s", instances[i].ReleaseName, suffix)
-		if hosts[host] {
-			instances[i].URL = "https://" + host
+		for _, host := range candidateHosts(&instances[i], suffix) {
+			if hosts[host] {
+				instances[i].URL = "https://" + host
+				break
+			}
 		}
 	}
 }
 
-// setURLIfExposed sets instance.URL only when an Ingress in the instance's
-// namespace routes to https://<release>.<suffix> — the single-instance
-// counterpart of enrichWithURL (see it for the rationale).
+// setURLIfExposed sets instance.URL to the first candidate host (see
+// candidateHosts) that an Ingress in the instance's namespace actually
+// routes to — the single-instance counterpart of enrichWithURL (see it for
+// the rationale).
 func (s *DefaultServiceService) setURLIfExposed(ctx context.Context, instance *models.ServiceInstance) {
 	suffix, err := s.contextRepo.GetIngressSuffix(ctx)
 	if err != nil || instance == nil || instance.TargetNamespace == "" {
 		return
 	}
-	host := fmt.Sprintf("%s.%s", instance.ReleaseName, suffix)
-	if s.namespaceIngressHosts(ctx, instance.TargetNamespace)[host] {
-		instance.URL = "https://" + host
+	hosts := s.namespaceIngressHosts(ctx, instance.TargetNamespace)
+	for _, host := range candidateHosts(instance, suffix) {
+		if hosts[host] {
+			instance.URL = "https://" + host
+			return
+		}
 	}
+}
+
+// roleHostConventions maps a role (models.ServiceInstance.Roles) to the
+// canonical Ingress host a service filling that role is expected to publish,
+// for roles whose URL is a project-wide convention rather than tied to
+// whatever name a given instance happens to have — e.g. a project has at
+// most one default storage service, so consumers and the console can assume
+// a single, stable host regardless of which backend/instance is deployed.
+var roleHostConventions = map[string]func(namespace string) string{
+	"storage": func(namespace string) string { return fmt.Sprintf("storage-%s", namespace) },
+}
+
+// candidateHosts lists the Ingress hosts, in priority order, that could
+// expose instance: its own release name first, then any role-specific
+// convention that applies to it.
+func candidateHosts(instance *models.ServiceInstance, suffix string) []string {
+	hosts := []string{fmt.Sprintf("%s.%s", instance.ReleaseName, suffix)}
+	for _, role := range instance.Roles {
+		if hostname, ok := roleHostConventions[role]; ok {
+			hosts = append(hosts, fmt.Sprintf("%s.%s", hostname(instance.TargetNamespace), suffix))
+		}
+	}
+	return hosts
 }
 
 // namespaceIngressHosts returns the set of hosts served by Ingresses in a
@@ -897,6 +926,7 @@ func releaseToInstance(r *crd.Release) *models.ServiceInstance {
 		ServiceTag:      r.Spec.Package.Tag,
 		Status:          status,
 		TargetNamespace: r.Spec.TargetNamespace,
+		Roles:           r.Status.Roles,
 		Parameters:      r.Spec.Parameters,
 		CreatedAt:       createdAt,
 	}

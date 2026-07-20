@@ -32,6 +32,7 @@ func FromUnstructuredToServiceInstance(u *unstructured.Unstructured) ServiceInst
 	tag, _, _ := unstructured.NestedString(u.Object, "spec", "package", "tag")
 	targetNS, _, _ := unstructured.NestedString(u.Object, "spec", "targetNamespace")
 	phase, _, _ := unstructured.NestedString(u.Object, "status", "phase")
+	roles, _, _ := unstructured.NestedStringSlice(u.Object, "status", "roles")
 
 	status := MapPhaseToStatus(phase)
 
@@ -53,6 +54,7 @@ func FromUnstructuredToServiceInstance(u *unstructured.Unstructured) ServiceInst
 		ServiceTag:      tag,
 		Status:          status,
 		TargetNamespace: targetNS,
+		Roles:           roles,
 		Parameters:      typedParams,
 		CreatedAt:       createdAt,
 	}
