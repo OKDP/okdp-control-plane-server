@@ -53,6 +53,7 @@ type ContextRef struct {
 
 type ReleaseStatus struct {
 	Phase      string             `json:"phase,omitempty"`
+	Roles      []string           `json:"roles,omitempty"`
 	Conditions []ReleaseCondition `json:"conditions,omitempty"`
 }
 
