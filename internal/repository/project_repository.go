@@ -111,7 +111,19 @@ func (r *k8sProjectRepository) Update(ctx context.Context, project *models.Proje
 	return namespaceToProject(updated), nil
 }
 
+// Delete removes the backing Namespace. Only Namespaces that are OKDP projects
+// (carrying the okdp.io/project label) are deletable; anything else is reported
+// as not found.
 func (r *k8sProjectRepository) Delete(ctx context.Context, name string) error {
+	ns, err := r.client.CoreV1().Namespaces().Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return err
+	}
+
+	if ns.Labels[ProjectLabel] == "" {
+		return apierrors.NewNotFound(namespaceGR, name)
+	}
+
 	return r.client.CoreV1().Namespaces().Delete(ctx, name, metav1.DeleteOptions{})
 }
 

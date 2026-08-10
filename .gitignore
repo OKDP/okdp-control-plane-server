@@ -34,4 +34,4 @@ vendor/
 CLAUDE.md
 .claude/
 .cursor/
-.agent/
+.agent/kubocd-local
