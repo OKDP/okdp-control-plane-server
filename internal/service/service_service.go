@@ -473,28 +473,79 @@ func (s *DefaultServiceService) cleanupOidcClient(ctx context.Context, releaseNa
 	}
 }
 
-func (s *DefaultServiceService) cleanupUserResources(ctx context.Context, namespace, releaseName string) {
+// ownsByName reports whether an object named by a release belongs to
+// releaseName rather than to one of the other releases still living in the
+// namespace. Names are the only link available here — the singleuser objects
+// JupyterHub creates carry no ownerReference back to the Release — and a bare
+// prefix test is not enough: `demo-jupyter-` also matches
+// `demo-jupyter-ds-claim-alice`, the home volume of a user of the *other*
+// instance. Whichever prefix is the longest match wins, so an object is only
+// ever claimed by the release whose name reaches furthest into it.
+func ownsByName(objectName, releaseName string, otherReleases []string) bool {
 	prefix := releaseName + "-"
+	if len(objectName) <= len(prefix) || objectName[:len(prefix)] != prefix {
+		return false
+	}
+	for _, other := range otherReleases {
+		if len(other) <= len(releaseName) {
+			continue
+		}
+		// The neighbour's own name is one of its objects too: a chart names its
+		// PVC after the release itself.
+		if objectName == other {
+			return false
+		}
+		otherPrefix := other + "-"
+		if len(objectName) > len(otherPrefix) && objectName[:len(otherPrefix)] == otherPrefix {
+			return false
+		}
+	}
+	return true
+}
 
-	podGVR := schema.GroupVersionResource{Version: "v1", Resource: "pods"}
-	pods, err := s.k8sClient.Resource(podGVR).Namespace(namespace).List(ctx, metav1.ListOptions{})
-	if err == nil {
-		for _, pod := range pods.Items {
-			if len(pod.GetName()) > len(prefix) && pod.GetName()[:len(prefix)] == prefix {
-				_ = s.k8sClient.Resource(podGVR).Namespace(namespace).Delete(ctx, pod.GetName(), metav1.DeleteOptions{})
-				logrus.WithField("pod", pod.GetName()).Info("Cleaned up user pod")
-			}
+// cleanupUserResources removes the pods and volumes a release created outside
+// its own manifests — JupyterHub's per-user servers and home volumes, which no
+// controller reclaims when the Release goes.
+//
+// Deleting a volume is irreversible, so this fails closed: if the surviving
+// releases cannot be listed, nothing is deleted rather than everything matching
+// a prefix.
+func (s *DefaultServiceService) cleanupUserResources(ctx context.Context, namespace, releaseName string) {
+	// Called after the Release has been deleted, so this lists the neighbours.
+	survivors, err := s.releaseRepo.List(ctx, namespace, namespace)
+	if err != nil {
+		logrus.WithError(err).WithField("release", releaseName).
+			Error("Skipping user resource cleanup: cannot tell this release's objects from its neighbours'")
+		return
+	}
+	others := make([]string, 0, len(survivors))
+	for i := range survivors {
+		if survivors[i].Name != releaseName {
+			others = append(others, survivors[i].Name)
 		}
 	}
 
-	pvcGVR := schema.GroupVersionResource{Version: "v1", Resource: "persistentvolumeclaims"}
-	pvcs, err := s.k8sClient.Resource(pvcGVR).Namespace(namespace).List(ctx, metav1.ListOptions{})
-	if err == nil {
-		for _, pvc := range pvcs.Items {
-			if len(pvc.GetName()) > len(prefix) && pvc.GetName()[:len(prefix)] == prefix {
-				_ = s.k8sClient.Resource(pvcGVR).Namespace(namespace).Delete(ctx, pvc.GetName(), metav1.DeleteOptions{})
-				logrus.WithField("pvc", pvc.GetName()).Info("Cleaned up user PVC")
+	for _, target := range []struct {
+		gvr  schema.GroupVersionResource
+		kind string
+	}{
+		{schema.GroupVersionResource{Version: "v1", Resource: "pods"}, "pod"},
+		{schema.GroupVersionResource{Version: "v1", Resource: "persistentvolumeclaims"}, "pvc"},
+	} {
+		objects, err := s.k8sClient.Resource(target.gvr).Namespace(namespace).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			logrus.WithError(err).WithField("kind", target.kind).Warn("Could not list user resources to clean up")
+			continue
+		}
+		for _, object := range objects.Items {
+			if !ownsByName(object.GetName(), releaseName, others) {
+				continue
 			}
+			if err := s.k8sClient.Resource(target.gvr).Namespace(namespace).Delete(ctx, object.GetName(), metav1.DeleteOptions{}); err != nil {
+				logrus.WithError(err).WithField(target.kind, object.GetName()).Warn("Could not clean up user resource")
+				continue
+			}
+			logrus.WithField(target.kind, object.GetName()).Info("Cleaned up user resource")
 		}
 	}
 }
