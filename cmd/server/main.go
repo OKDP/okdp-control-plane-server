@@ -1,6 +1,9 @@
 package main
 
 import (
+	"net/http"
+	"time"
+
 	"github.com/sirupsen/logrus"
 
 	"github.com/okdp/okdp-server-new/internal/api/handlers"
@@ -90,8 +93,23 @@ func main() {
 	r := router.SetupRouter(cfg, projectHandler, identityHandler, secretStoreHandler, externalSecretHandler, serviceHandler, sparkHandler)
 
 	// Start Server
+	//
+	// Not r.Run: it leaves every timeout at zero, so a client that opens a
+	// connection and sends its headers one byte at a time holds a goroutine
+	// indefinitely, and an idle keep-alive is never reclaimed.
+	//
+	// WriteTimeout stays unset on purpose. Three routes stream Server-Sent
+	// Events (projects, services, spark apps), and a write deadline would cut
+	// them mid-flight, which is exactly what they are for.
+	server := &http.Server{
+		Addr:              ":" + cfg.ServerPort,
+		Handler:           r,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+
 	logrus.WithField("port", cfg.ServerPort).Info("Starting server")
-	if err := r.Run(":" + cfg.ServerPort); err != nil {
+	if err := server.ListenAndServe(); err != nil {
 		logrus.Fatalf("Failed to start server: %v", err)
 	}
 }
