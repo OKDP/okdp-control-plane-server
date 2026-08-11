@@ -6,8 +6,8 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	"github.com/okdp/okdp-server-new/internal/models"
-	"github.com/okdp/okdp-server-new/internal/service"
+	"github.com/okdp/okdp-control-plane-server/internal/models"
+	"github.com/okdp/okdp-control-plane-server/internal/service"
 	"github.com/sirupsen/logrus"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )

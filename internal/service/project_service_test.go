@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/okdp/okdp-server-new/internal/models"
-	"github.com/okdp/okdp-server-new/internal/service/mocks"
+	"github.com/okdp/okdp-control-plane-server/internal/models"
+	"github.com/okdp/okdp-control-plane-server/internal/service/mocks"
 	"github.com/stretchr/testify/assert"
 )
 

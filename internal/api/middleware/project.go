@@ -4,7 +4,7 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
-	"github.com/okdp/okdp-server-new/internal/models"
+	"github.com/okdp/okdp-control-plane-server/internal/models"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 

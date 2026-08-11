@@ -4,8 +4,8 @@ import (
 	"context"
 	"io"
 
-	"github.com/okdp/okdp-server-new/internal/models"
-	"github.com/okdp/okdp-server-new/internal/repository/crd"
+	"github.com/okdp/okdp-control-plane-server/internal/models"
+	"github.com/okdp/okdp-control-plane-server/internal/repository/crd"
 	"github.com/stretchr/testify/mock"
 	"k8s.io/apimachinery/pkg/watch"
 )

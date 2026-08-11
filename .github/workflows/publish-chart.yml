@@ -16,7 +16,7 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    # packages: write is what ghcr needs; quay ignores it.
+    # packages: write is what ghcr needs. Quay ignores it.
     permissions: { contents: read, packages: write }
     steps:
       - uses: actions/checkout@v4
@@ -44,5 +44,9 @@ jobs:
             LOGIN_USER="$REGISTRY_USERNAME"; LOGIN_TOKEN="$REGISTRY_ROBOT_TOKEN"
           fi
           echo "$LOGIN_TOKEN" | helm registry login "$REGISTRY_HOST" -u "$LOGIN_USER" --password-stdin
+          # The chart name comes from Chart.yaml, never hardcoded: renaming the
+          # chart would otherwise leave this line pushing a file that no longer
+          # exists.
+          CHART_NAME=$(helm show chart chart | awk '/^name:/{print $2}')
           helm package chart --version "$VERSION" --app-version "$VERSION"
-          helm push "okdp-server-$VERSION.tgz" "oci://$CHART_REGISTRY"
+          helm push "${CHART_NAME}-${VERSION}.tgz" "oci://$CHART_REGISTRY"

@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/okdp/okdp-server-new/internal/models"
-	"github.com/okdp/okdp-server-new/internal/repository"
-	"github.com/okdp/okdp-server-new/internal/repository/crd"
+	"github.com/okdp/okdp-control-plane-server/internal/models"
+	"github.com/okdp/okdp-control-plane-server/internal/repository"
+	"github.com/okdp/okdp-control-plane-server/internal/repository/crd"
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"

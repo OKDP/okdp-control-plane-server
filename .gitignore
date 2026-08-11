@@ -1,7 +1,7 @@
 # Binaries
 bin/
 main
-okdp-server-new
+okdp-control-plane-server
 *.exe
 *.exe~
 *.dll

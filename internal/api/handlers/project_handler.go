@@ -4,8 +4,8 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
-	"github.com/okdp/okdp-server-new/internal/models"
-	"github.com/okdp/okdp-server-new/internal/service"
+	"github.com/okdp/okdp-control-plane-server/internal/models"
+	"github.com/okdp/okdp-control-plane-server/internal/service"
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"

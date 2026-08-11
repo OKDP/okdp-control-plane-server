@@ -102,17 +102,35 @@ kubectl get crd | grep kubocd
 # releases.kubocd.kubotal.io
 ```
 
+The `Release` objects the server creates carry no explicit `spec.contexts`: they
+take the platform configuration from the Contexts the KuboCD `Config` declares,
+through `defaultContexts` and `defaultNamespaceContexts`. A cluster whose Config
+declares neither renders its packages against an empty configuration, so the
+platform `Context` this server reads must also be listed there. For example:
+
+```yaml
+apiVersion: kubocd.kubotal.io/v1alpha1
+kind: Config
+spec:
+  defaultContexts:
+    - name: platform
+      namespace: okdp-system
+```
+
 Install the chart from the OKDP registry:
 
 ```sh
-helm install okdp-server oci://quay.io/okdp/charts/okdp-server --version 0.6.0 \
+helm install okdp-control-plane-server oci://quay.io/okdp/charts/okdp-control-plane-server --version 0.6.0 \
   -n okdp-system --create-namespace
 ```
+
+> This chart name is published on Quay once the rename lands upstream. Until
+> then, install from `chart/` in this checkout.
 
 Once the pod is `Running`, reach the API through a port-forward:
 
 ```sh
-kubectl port-forward -n okdp-system svc/okdp-server 8093:8093
+kubectl port-forward -n okdp-system svc/okdp-control-plane-server 8093:8093
 curl -s http://localhost:8093/health
 # {"status":"ok"}
 ```
@@ -126,7 +144,7 @@ The Swagger UI is then available at `http://localhost:8093/swagger/index.html`.
 Remove the Helm release, and the namespace if it was created only for this install:
 
 ```sh
-helm uninstall okdp-server -n okdp-system
+helm uninstall okdp-control-plane-server -n okdp-system
 kubectl delete namespace okdp-system
 ```
 
@@ -181,8 +199,8 @@ its `configuration:` values (see [`chart/values.yaml`](chart/values.yaml)).
 | `ALLOWED_ORIGINS` | Single CORS origin, set verbatim in `Access-Control-Allow-Origin` (the console URL) | `http://localhost:4200` | No |
 | `LOG_LEVEL` | Log verbosity (`debug`, `info`, `warn`, `error`) | `info` | No |
 | `KUBOCD_NAMESPACE` | Namespace where KuboCD runs | `kubocd-system` | No |
-| `CONTEXT_NAME` | Name of the KuboCD `Context` holding the service catalog | `default` | No |
-| `CONTEXT_NAMESPACE` | Namespace of that `Context` | `kubocd-system` | No |
+| `CONTEXT_NAME` | Name of the KuboCD `Context` holding the platform configuration | `platform` | No |
+| `CONTEXT_NAMESPACE` | Namespace of that `Context` | the server's own namespace | No |
 | `RELEASE_INTERVAL` | Reconcile interval set on created KuboCD `Release`s | `30m` | No |
 | `RELEASE_TIMEOUT` | Timeout set on created KuboCD `Release`s | `10m` | No |
 | `EXCLUDED_SIDECAR_PREFIXES` | Container name prefixes excluded from pod/metrics views (comma-separated) | `istio-proxy,istio-init,dynatrace-,linkerd-proxy,envoy,vault-agent` | No |
@@ -217,7 +235,7 @@ missing; for a local run it means `KUBECONFIG` is unset or invalid.
 point `KUBECONFIG` at a valid config. Then check the logs and permissions:
 
 ```sh
-kubectl logs -n okdp-system -l app.kubernetes.io/name=okdp-server
+kubectl logs -n okdp-system -l app.kubernetes.io/name=okdp-control-plane-server
 kubectl auth can-i list namespaces
 ```
 

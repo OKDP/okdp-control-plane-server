@@ -4,9 +4,9 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ include "okdp-server.fullname" . }}
+  name: {{ include "okdp-control-plane-server.fullname" . }}
   labels:
-    {{- include "okdp-server.labels" . | nindent 4 }}
+    {{- include "okdp-control-plane-server.labels" . | nindent 4 }}
 rules:
   # Projects are namespaces labelled okdp.io/project. update/patch are needed
   # to edit a project's description (stored as the okdp.io/description annotation).
@@ -50,14 +50,14 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ include "okdp-server.fullname" . }}
+  name: {{ include "okdp-control-plane-server.fullname" . }}
   labels:
-    {{- include "okdp-server.labels" . | nindent 4 }}
+    {{- include "okdp-control-plane-server.labels" . | nindent 4 }}
 subjects:
   - kind: ServiceAccount
-    name: {{ include "okdp-server.fullname" . }}
+    name: {{ include "okdp-control-plane-server.fullname" . }}
     namespace: {{ .Release.Namespace }}
 roleRef:
   kind: ClusterRole
-  name: {{ include "okdp-server.fullname" . }}
+  name: {{ include "okdp-control-plane-server.fullname" . }}
   apiGroup: rbac.authorization.k8s.io

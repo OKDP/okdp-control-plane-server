@@ -1,4 +1,4 @@
-module github.com/okdp/okdp-server-new
+module github.com/okdp/okdp-control-plane-server
 
 go 1.25.0
 

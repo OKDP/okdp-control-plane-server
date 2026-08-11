@@ -5,7 +5,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/okdp/okdp-server-new/internal/models"
+	"github.com/okdp/okdp-control-plane-server/internal/models"
 )
 
 func TestNormalizeAndValidateCatalogService(t *testing.T) {
@@ -82,7 +82,7 @@ func TestParseCPUQuantity(t *testing.T) {
 		{"invalid string is rejected", "abc", 0, true},
 		{"two decimal points is rejected", "1.5.2", 0, true},
 		// Note: K8s ParseQuantity accepts bare suffixes as zero ("m" = 0m = 0
-		// cores). Unusual, but documented — not our responsibility to reject.
+		// cores). Unusual, but documented, not our responsibility to reject.
 		{"bare suffix parses as zero", "m", 0, false},
 	}
 	for _, tc := range cases {
@@ -117,7 +117,7 @@ func TestParseMemoryQuantity(t *testing.T) {
 		{"gibibytes", "2Gi", 2 * 1024 * 1024 * 1024, false},
 		{"kibibytes", "1Ki", 1024, false},
 		{"decimal gibibytes", "1.5Gi", 1.5 * 1024 * 1024 * 1024, false},
-		// Decimal SI suffixes — K8s does differentiate Ki vs K.
+		// Decimal SI suffixes, K8s does differentiate Ki vs K.
 		{"kilobytes (decimal)", "1000k", 1000 * 1000, false},
 		{"megabytes (decimal)", "1M", 1000 * 1000, false},
 		// Catches the regression that motivated this refactor: "1" = 1 byte,
@@ -127,7 +127,7 @@ func TestParseMemoryQuantity(t *testing.T) {
 		// Edge cases that silently returned partial values in the old parser.
 		{"random garbage is rejected", "not-a-quantity", 0, true},
 		// Note: K8s ParseQuantity accepts bare suffixes as zero ("Gi" = 0 Gi
-		// = 0 bytes). Unusual, but documented — not our responsibility.
+		// = 0 bytes). Unusual, but documented, not our responsibility.
 		{"bare suffix parses as zero", "Gi", 0, false},
 	}
 	for _, tc := range cases {
@@ -142,7 +142,7 @@ func TestParseMemoryQuantity(t *testing.T) {
 			if err != nil {
 				t.Fatalf("parseMemoryQuantity(%q) unexpected error: %v", tc.input, err)
 			}
-			// Memory values are large — relative tolerance is safer than absolute.
+			// Memory values are large, relative tolerance is safer than absolute.
 			if tc.want != 0 {
 				rel := math.Abs(got-tc.want) / tc.want
 				if rel > 1e-6 {

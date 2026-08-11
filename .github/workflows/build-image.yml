@@ -36,8 +36,8 @@ jobs:
           push: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          tags: quay.io/okdp/images/okdp-server:${{ steps.vars.outputs.version }}
+          tags: quay.io/okdp/images/okdp-control-plane-server:${{ steps.vars.outputs.version }}
           labels: |
-            org.opencontainers.image.title=okdp-server
+            org.opencontainers.image.title=okdp-control-plane-server
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}

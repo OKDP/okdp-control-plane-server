@@ -6,7 +6,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	"github.com/okdp/okdp-server-new/internal/models"
+	"github.com/okdp/okdp-control-plane-server/internal/models"
 )
 
 // ingress builds a minimal unstructured Ingress with the given rule hosts.

@@ -3,15 +3,14 @@ package service
 import (
 	"testing"
 
+	"github.com/okdp/okdp-control-plane-server/internal/repository/crd"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-// Deleting a service used to delete every pod and volume whose name started
-// with the release name, which is also the start of the names of any release
-// whose name extends it. Deleting `jupyter` in a project that also runs
-// `jupyter-ds` therefore destroyed the home volumes of the other instance's
-// users, silently, and the confirmation dialog only mentioned the service being
-// deleted.
+// A release name is also the start of the name of any release extending it, so
+// deleting `jupyter` in a project that also runs `jupyter-ds` must leave the
+// home volumes of the other instance's users alone.
 func TestOwnsByNameSparesTheNeighboursObjects(t *testing.T) {
 	others := []string{"demo-jupyter-ds", "demo-trino"}
 
@@ -46,4 +45,34 @@ func TestOwnsByNameIgnoresWhatIsNotItsOwn(t *testing.T) {
 // longer prefix, so it must not block the cleanup.
 func TestOwnsByNameIgnoresShorterNeighbours(t *testing.T) {
 	assert.True(t, ownsByName("demo-jupyter-ds-claim-alice", "demo-jupyter-ds", []string{"demo-jupyter"}))
+}
+
+// A connectionRef with no kind resolves by looking on both sides, so the
+// controller records a Connection and a ClusterConnection candidate per name.
+// Listing them raw showed "demo-db (ClusterConnection) waiting" beside the
+// Connection that had resolved, for a ClusterConnection that never existed.
+func TestBoundConnectionsGroupsTheCandidatesOfOneName(t *testing.T) {
+	release := &crd.Release{
+		Status: crd.ReleaseStatus{
+			WatchedInputConnections: []crd.InputConnectionReference{
+				{Kind: "ClusterConnection", Name: "demo-db"},
+				{Kind: "Connection", Name: "demo-db", Namespace: "demo"},
+				{Kind: "ClusterConnection", Name: "shared-cache"},
+				{Kind: "Connection", Name: "shared-cache", Namespace: "demo"},
+			},
+			EffectiveInputConnections: []crd.InputConnectionReference{
+				{Kind: "Connection", Name: "demo-db", Namespace: "demo"},
+			},
+		},
+	}
+
+	connections := boundConnections(release)
+
+	require.Len(t, connections, 2, "one entry per name, not one per candidate")
+	assert.Equal(t, "demo-db", connections[0].Name)
+	assert.True(t, connections[0].Resolved)
+	assert.Equal(t, "Connection", connections[0].Kind, "the candidate that actually resolved")
+	// Nothing of that name resolved anywhere: the service is waiting for it.
+	assert.Equal(t, "shared-cache", connections[1].Name)
+	assert.False(t, connections[1].Resolved)
 }

@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/okdp/okdp-server-new/internal/repository"
+	"github.com/okdp/okdp-control-plane-server/internal/repository"
 	"github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v3"
 )

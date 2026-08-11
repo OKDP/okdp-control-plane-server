@@ -3,7 +3,7 @@ package repository
 import (
 	"context"
 
-	"github.com/okdp/okdp-server-new/internal/models"
+	"github.com/okdp/okdp-control-plane-server/internal/models"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -112,7 +112,7 @@ func (r *k8sProjectRepository) Update(ctx context.Context, project *models.Proje
 }
 
 // Delete removes the backing Namespace. Only Namespaces that are OKDP projects
-// (carrying the okdp.io/project label) are deletable; anything else is reported
+// (carrying the okdp.io/project label) are deletable. Anything else is reported
 // as not found.
 func (r *k8sProjectRepository) Delete(ctx context.Context, name string) error {
 	ns, err := r.client.CoreV1().Namespaces().Get(ctx, name, metav1.GetOptions{})

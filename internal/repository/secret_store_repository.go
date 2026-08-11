@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/okdp/okdp-server-new/internal/repository/crd"
+	"github.com/okdp/okdp-control-plane-server/internal/repository/crd"
 	"github.com/sirupsen/logrus"
 
 	corev1 "k8s.io/api/core/v1"
