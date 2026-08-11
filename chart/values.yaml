@@ -13,7 +13,7 @@ configuration:
   contextName: default
   contextNamespace: kubocd-system
   # Single origin, set verbatim in the Access-Control-Allow-Origin header.
-  allowedOrigins: https://console.okdp.dev-sandbox
+  allowedOrigins: https://okdp-ui.okdp.sandbox
   logLevel: info
   releaseInterval: 30m
   releaseTimeout: 10m
@@ -23,3 +23,11 @@ service:
   port: 8093
 
 resources: {}
+
+# Forward proxy the pod must go through to reach anything outside the cluster.
+# Empty means no proxy, which is the case on any sandbox. Rendered as the three
+# environment variables every HTTP client reads.
+proxy:
+  httpProxy: ""
+  httpsProxy: ""
+  noProxy: ""

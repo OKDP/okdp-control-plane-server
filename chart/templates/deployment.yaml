@@ -26,6 +26,23 @@ spec:
           envFrom:
             - configMapRef:
                 name: {{ include "okdp-control-plane-server.fullname" . }}
+          {{- with .Values.proxy }}
+          {{- if or .httpProxy .httpsProxy .noProxy }}
+          env:
+            {{- if .httpProxy }}
+            - { name: HTTP_PROXY,  value: {{ .httpProxy | quote }} }
+            - { name: http_proxy,  value: {{ .httpProxy | quote }} }
+            {{- end }}
+            {{- if .httpsProxy }}
+            - { name: HTTPS_PROXY, value: {{ .httpsProxy | quote }} }
+            - { name: https_proxy, value: {{ .httpsProxy | quote }} }
+            {{- end }}
+            {{- if .noProxy }}
+            - { name: NO_PROXY,    value: {{ .noProxy | quote }} }
+            - { name: no_proxy,    value: {{ .noProxy | quote }} }
+            {{- end }}
+          {{- end }}
+          {{- end }}
           ports:
             - name: http
               containerPort: {{ .Values.service.port }}
