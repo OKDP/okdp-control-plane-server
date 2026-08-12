@@ -525,20 +525,3 @@ func (h *ServiceHandler) GetPodLogs(c *gin.Context) {
 	}
 }
 
-// GetCatalog godoc
-// @Summary      Get self-service catalog
-// @Description  Get the list of additional packages that clients can deploy on their own
-// @Tags         catalog
-// @Produce      json
-// @Success      200  {array}   models.CatalogCategory
-// @Failure      500  {object}  map[string]string
-// @Router       /api/catalog [get]
-func (h *ServiceHandler) GetCatalog(c *gin.Context) {
-	catalog, err := h.service.GetCatalog(c.Request.Context())
-	if err != nil {
-		logrus.WithError(err).Error("Failed to get catalog")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, catalog)
-}

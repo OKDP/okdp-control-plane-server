@@ -24,8 +24,6 @@ type ContextRepository interface {
 	// GetPlatformServices returns the managed OKDP services (from spec.context.okdp.services).
 	GetPlatformServices(ctx context.Context) ([]models.PlatformService, error)
 
-	// GetCatalog returns the self-service catalog categories (from spec.context.okdp.catalogs).
-	GetCatalog(ctx context.Context) ([]models.CatalogCategory, error)
 
 	// GetPackageRepository returns the OCI package repository prefix (from spec.context.okdp.packageRepository).
 	GetPackageRepository(ctx context.Context) (string, error)
@@ -103,51 +101,6 @@ func (r *k8sContextRepository) GetPlatformServices(ctx context.Context) ([]model
 		services = append(services, svc)
 	}
 	return services, nil
-}
-
-func (r *k8sContextRepository) GetCatalog(ctx context.Context) ([]models.CatalogCategory, error) {
-	u, err := r.getContext(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	rawCatalogs, found, err := unstructured.NestedSlice(u.Object, "spec", "context", "okdp", "catalogs")
-	if err != nil {
-		return nil, fmt.Errorf("failed to read okdp.catalogs from Context: %w", err)
-	}
-	if !found {
-		return nil, nil
-	}
-
-	var categories []models.CatalogCategory
-	for _, raw := range rawCatalogs {
-		m, ok := raw.(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		cat := models.CatalogCategory{
-			ID:          getString(m, "id"),
-			Name:        getString(m, "name"),
-			Description: getString(m, "description"),
-		}
-
-		if pkgs, ok := m["packages"].([]interface{}); ok {
-			for _, p := range pkgs {
-				pm, ok := p.(map[string]interface{})
-				if !ok {
-					continue
-				}
-				cat.Packages = append(cat.Packages, models.CatalogPackage{
-					Name: getString(pm, "name"),
-					Tag:  getString(pm, "tag"),
-				})
-			}
-		}
-
-		categories = append(categories, cat)
-	}
-	return categories, nil
 }
 
 func (r *k8sContextRepository) GetPackageRepository(ctx context.Context) (string, error) {

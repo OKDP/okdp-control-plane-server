@@ -51,18 +51,3 @@ type ServiceInstance struct {
 	CreatedAt       string         `json:"createdAt,omitempty"`
 }
 
-// --- Catalog (client self-service, no OKDP management) ---
-
-// CatalogCategory groups packages that clients can deploy on their own.
-type CatalogCategory struct {
-	ID          string           `json:"id"`
-	Name        string           `json:"name"`
-	Description string           `json:"description"`
-	Packages    []CatalogPackage `json:"packages"`
-}
-
-// CatalogPackage is a deployable package in the self-service catalog.
-type CatalogPackage struct {
-	Name string `json:"name"`
-	Tag  string `json:"tag"`
-}
