@@ -58,7 +58,6 @@ func TestCreateProject(t *testing.T) {
 	mockRepo.On("Create", ctx, newProject).Return(nil)
 	// CreateProject also provisions a per-project KuboCD Context CR cloned
 	// from the default one; the write is best-effort so a nil error is fine.
-	mockCtxRepo.On("CreateFromDefault", ctx, newProject.Name).Return(nil)
 
 	err := service.CreateProject(ctx, newProject)
 
@@ -75,8 +74,7 @@ func TestDeleteProject(t *testing.T) {
 	ctx := context.Background()
 	projectToDelete := "proj1"
 
-	// DeleteProject removes the per-project KuboCD Context CR then the Namespace.
-	mockCtxRepo.On("Delete", ctx, projectToDelete).Return(nil)
+	// DeleteProject removes the Namespace. No per-project Context is managed.
 	mockRepo.On("Delete", ctx, projectToDelete).Return(nil)
 
 	err := service.DeleteProject(ctx, projectToDelete)
@@ -94,7 +92,6 @@ func TestDeleteProject_RepoError(t *testing.T) {
 	ctx := context.Background()
 	projectToDelete := "proj1"
 
-	mockCtxRepo.On("Delete", ctx, projectToDelete).Return(nil)
 	mockRepo.On("Delete", ctx, projectToDelete).Return(errors.New("ns delete error"))
 
 	err := service.DeleteProject(ctx, projectToDelete)

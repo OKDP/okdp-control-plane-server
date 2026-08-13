@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"time"
 
@@ -9,7 +10,9 @@ import (
 	"github.com/okdp/okdp-control-plane-server/internal/api/handlers"
 	"github.com/okdp/okdp-control-plane-server/internal/api/router"
 	"github.com/okdp/okdp-control-plane-server/internal/config"
+	"github.com/okdp/okdp-control-plane-server/internal/models"
 	"github.com/okdp/okdp-control-plane-server/internal/repository"
+	"github.com/okdp/okdp-control-plane-server/internal/repository/provisioning"
 	"github.com/okdp/okdp-control-plane-server/internal/service"
 )
 
@@ -55,33 +58,55 @@ func main() {
 		logrus.Fatalf("Failed to initialize typed Kubernetes client: %v", err)
 	}
 
+	k8sDiscoveryClient, err := repository.InitK8sDiscoveryClient()
+	if err != nil {
+		logrus.Fatalf("Failed to initialize Kubernetes discovery client: %v", err)
+	}
+
 	// Initialize Project stack (projects are Kubernetes Namespaces
 	// carrying the label okdp.io/project)
 	projectRepo := repository.NewProjectRepository(k8sTypedClient)
 	contextWriterRepo := repository.NewContextWriterRepository(k8sClient, cfg.ContextName, cfg.ContextNamespace)
-	projectService := service.NewDefaultProjectService(projectRepo, contextWriterRepo)
+	projectService := service.NewDefaultProjectService(projectRepo)
 	projectHandler := handlers.NewProjectHandler(projectService)
 
-	// Initialize Identity stack
-	identityRepo := repository.NewIdentityRepository(k8sClient, cfg.PlatformNamespace)
+	// Context repository (shared by capabilities, catalog and Spark)
+	contextRepo := repository.NewContextRepository(k8sClient, cfg.ContextName, cfg.ContextNamespace)
+
+	// Initialize Capabilities stack (platform features derived from the Context)
+	capabilityService := service.NewDefaultCapabilityService(contextRepo)
+	capabilitiesHandler := handlers.NewCapabilitiesHandler(capabilityService)
+
+	// Initialize Identity stack. The namespace is read per call from the Context,
+	// and the discovery client tells whether the kubauth CRDs are there at all.
+	kubauthNamespace := func(ctx context.Context) string {
+		if ns, err := contextRepo.GetKubauthNamespace(ctx); err == nil {
+			return ns
+		}
+		return cfg.PlatformNamespace
+	}
+	identityRepo := repository.NewIdentityRepository(k8sClient, k8sDiscoveryClient, kubauthNamespace)
 	identityService := service.NewDefaultIdentityService(identityRepo)
 	identityHandler := handlers.NewIdentityHandler(identityService)
 
 	// Initialize SecretStore stack (namespace is dynamic per project)
-	secretStoreRepo := repository.NewSecretStoreRepository(k8sClient)
+	secretStoreRepo := repository.NewSecretStoreRepository(k8sClient, k8sDiscoveryClient)
 	secretStoreService := service.NewDefaultSecretStoreService(secretStoreRepo)
 	secretStoreHandler := handlers.NewSecretStoreHandler(secretStoreService)
 
 	// Initialize ExternalSecret stack (namespace is dynamic per project)
-	externalSecretRepo := repository.NewExternalSecretRepository(k8sClient)
+	externalSecretRepo := repository.NewExternalSecretRepository(k8sClient, k8sDiscoveryClient)
 	externalSecretService := service.NewDefaultExternalSecretService(externalSecretRepo, secretStoreRepo)
 	externalSecretHandler := handlers.NewExternalSecretHandler(externalSecretService)
 
 	// Initialize Service stack (KuboCD Releases + Context-driven catalog)
 	serviceRepo := repository.NewServiceRepository(k8sClient)
-	contextRepo := repository.NewContextRepository(k8sClient, cfg.ContextName, cfg.ContextNamespace)
 	schemaService := service.NewDefaultPackageSchemaService(contextRepo)
-	serviceService := service.NewDefaultServiceService(serviceRepo, contextRepo, contextWriterRepo, schemaService, k8sClient, k8sTypedClient, cfg.ContextNamespace, cfg.ReleaseInterval, cfg.ReleaseTimeout, cfg.ExcludedSidecarPrefixes)
+	schemaService.SetInsecureRegistries(cfg.InsecureOCIRegistries)
+	// OIDC client provisioning (backend selected per call from the Context)
+	oidcProvisioner := provisioning.NewContextSelector(contextRepo, k8sClient)
+	serviceService := service.NewDefaultServiceService(serviceRepo, contextRepo, contextWriterRepo, schemaService, oidcProvisioner, k8sClient, k8sTypedClient, cfg.ContextNamespace, cfg.ReleaseInterval, cfg.ReleaseTimeout, cfg.ExcludedSidecarPrefixes)
+	serviceService.SetInsecureRegistries(cfg.InsecureOCIRegistries)
 	serviceHandler := handlers.NewServiceHandler(serviceService, schemaService)
 
 	// Initialize Spark stack (SparkApplication CRUD)
@@ -90,7 +115,24 @@ func main() {
 	sparkHandler := handlers.NewSparkHandler(sparkService)
 
 	// Setup router
-	r := router.SetupRouter(cfg, projectHandler, identityHandler, secretStoreHandler, externalSecretHandler, serviceHandler, sparkHandler)
+	// Initialize Connection stack (external connections declared by users +
+	// internal ones derived from the services deployed in a project)
+	contractCatalog, err := service.NewEmbeddedContractCatalog()
+	if err != nil {
+		logrus.Fatalf("Failed to load the contract catalog: %v", err)
+	}
+	connectionRepo := repository.NewConnectionRepository(k8sClient, k8sTypedClient, k8sDiscoveryClient)
+	connectionService := service.NewDefaultConnectionService(connectionRepo, serviceRepo, contractCatalog)
+	connectionHandler := handlers.NewConnectionHandler(connectionService)
+
+	// The identity block is checked once, at startup, against what the cluster
+	// actually serves. A platform told to provision clients through kubauth on a
+	// cluster without kubauth would deploy services whose OIDC client is never
+	// created, and fail much later at the point of authenticating a user, with
+	// nothing pointing back here.
+	checkIdentityConfiguration(context.Background(), contextRepo, identityRepo)
+
+	r := router.SetupRouter(cfg, capabilitiesHandler, projectHandler, identityHandler, secretStoreHandler, externalSecretHandler, serviceHandler, sparkHandler, connectionHandler)
 
 	// Start Server
 	//
@@ -112,4 +154,31 @@ func main() {
 	if err := server.ListenAndServe(); err != nil {
 		logrus.Fatalf("Failed to start server: %v", err)
 	}
+}
+
+// checkIdentityConfiguration fails fast on an identity block that cannot hold,
+// and stays quiet otherwise. A Context that cannot be read at all is not fatal:
+// the platform Context may simply not be there yet on a fresh cluster, and the
+// routes that need it already report their own absence.
+func checkIdentityConfiguration(ctx context.Context, contextRepo repository.ContextRepository, identityRepo repository.IdentityRepository) {
+	identity, err := contextRepo.GetIdentity(ctx)
+	if err != nil {
+		// A block that is present and wrong is a configuration error worth
+		// stopping for; the two are told apart by the error the repository
+		// returns, which only validates what it found.
+		if identity != nil {
+			logrus.Fatalf("Invalid oidc client-provisioning configuration: %v", err)
+		}
+		logrus.WithError(err).Warn("Could not read oidc.clientProvisioning, assuming clients are provisioned elsewhere")
+		return
+	}
+
+	if identity.ProvisionsWithKubauth() && !identityRepo.Available(ctx) {
+		logrus.Fatalf(
+			"oidc.clientProvisioning is %q but the kubauth CRDs are not installed on this cluster. "+
+				"Install kubauth, or set it to %q if another mechanism makes the OAuth client Secrets.",
+			models.ClientProvisioningKubauth, models.ClientProvisioningExisting)
+	}
+
+	logrus.WithField("clientProvisioning", identity.ClientProvisioning).Info("Identity configuration accepted")
 }

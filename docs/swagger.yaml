@@ -13,7 +13,7 @@ definitions:
         description: |-
           CRDAvailable reports whether the KuboCD connection CRDs are installed.
           While they are not, external connections cannot be persisted and the
-          console says so instead of failing on save; internal connections are
+          console says so instead of failing on save. Internal connections are
           derived from deployed services and stay available either way.
         type: boolean
       types:
@@ -216,9 +216,10 @@ definitions:
         type: array
       external:
         description: |-
-          External reports whether a user may declare a connection of this type by
-          hand. Types that only ever come from a service deployed on the platform
-          (Trino, ...) are listed for the internal view but offer no creation form.
+          External reports whether a user may declare a connection against this
+          contract by hand. A contract that is not external is listed for the
+          internal view, where the connections come from the deployed services,
+          but offers no creation form.
         type: boolean
       fields:
         items:
@@ -1329,6 +1330,12 @@ paths:
       responses:
         "204":
           description: No Content
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
         "500":
           description: Internal Server Error
           schema:
@@ -1417,7 +1424,7 @@ paths:
   /api/projects/{name}/connections:
     get:
       description: Connections declared in the project namespace. Connections owned
-        by a deployed release are excluded; they are returned by the internal endpoint.
+        by a deployed release are excluded. They are returned by the internal endpoint.
       parameters:
       - description: Project name (= Kubernetes namespace)
         in: path

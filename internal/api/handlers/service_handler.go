@@ -335,6 +335,32 @@ func (h *ServiceHandler) GetServiceVersions(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
+// GetServiceInputs godoc
+// @Summary      Connections a service's package declares it needs
+// @Tags         platform-services
+// @Produce      json
+// @Param        serviceName path string true "Service name"
+// @Param        tag query string false "Package version tag (defaults to Context CR tag)"
+// @Success      200  {array}  models.PackageInput
+// @Router       /api/platform-services/{serviceName}/inputs [get]
+func (h *ServiceHandler) GetServiceInputs(c *gin.Context) {
+	serviceName := c.Param("serviceName")
+	tag := c.Query("tag")
+
+	inputs, err := h.schemaService.GetPackageInputs(c.Request.Context(), serviceName, tag)
+	if err != nil {
+		logrus.WithError(err).WithField("service", serviceName).Error("Failed to get service inputs")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	// A package with no inputs is the normal case today; answer an empty list
+	// rather than null, so the console can iterate without a guard.
+	if inputs == nil {
+		inputs = []models.PackageInput{}
+	}
+	c.JSON(http.StatusOK, inputs)
+}
+
 // GetServiceSchema godoc
 // @Summary      Get JSON Schema for a platform service
 // @Description  Returns the JSON Schema (parameters with UI metadata) for a given service version
@@ -524,4 +550,3 @@ func (h *ServiceHandler) GetPodLogs(c *gin.Context) {
 		c.DataFromReader(http.StatusOK, -1, "text/plain; charset=utf-8", stream, nil)
 	}
 }
-

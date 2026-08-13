@@ -17,6 +17,10 @@ configuration:
   logLevel: info
   releaseInterval: 30m
   releaseTimeout: 10m
+  # Comma-separated registry hosts to reach over plain HTTP (dev sandboxes
+  # with a local registry). Leave empty in any real deployment.
+  insecureOciRegistries: ""
+
 
 service:
   type: ClusterIP

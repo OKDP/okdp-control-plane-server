@@ -3,6 +3,7 @@ package repository
 import (
 	"fmt"
 
+	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -35,6 +36,22 @@ func InitK8sClient() (dynamic.Interface, error) {
 	client, err := dynamic.NewForConfig(config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create dynamic client: %w", err)
+	}
+
+	return client, nil
+}
+
+// InitK8sDiscoveryClient initializes the discovery client, used to tell whether
+// an optional CRD is installed on the cluster before trying to use it.
+func InitK8sDiscoveryClient() (discovery.DiscoveryInterface, error) {
+	config, err := getK8sConfig()
+	if err != nil {
+		return nil, err
+	}
+
+	client, err := discovery.NewDiscoveryClientForConfig(config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create discovery client: %w", err)
 	}
 
 	return client, nil

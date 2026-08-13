@@ -1,0 +1,31 @@
+{
+  "name": "iceberg-catalog",
+  "displayName": "Iceberg REST catalog",
+  "description": "Iceberg REST catalog, Polaris or another implementation of the same API.",
+  "icon": "pi pi-database",
+  "category": "catalog",
+  "external": true,
+  "endpointFrom": ["internalUri", "uri"],
+  "fields": [
+    {
+      "name": "uri",
+      "label": "Catalog URI",
+      "type": "string",
+      "required": true,
+      "placeholder": "https://polaris.example.com/api/catalog"
+    },
+    {
+      "name": "internalUri",
+      "label": "In-cluster URI",
+      "type": "string",
+      "required": false,
+      "help": "Preferred by workloads running on this cluster. Leave empty for a catalog hosted elsewhere."
+    },
+    {
+      "name": "realm",
+      "label": "Realm",
+      "type": "string",
+      "required": false
+    }
+  ]
+}

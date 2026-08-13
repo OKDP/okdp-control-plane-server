@@ -13,13 +13,16 @@ import (
 	"k8s.io/client-go/util/retry"
 )
 
-// ContextWriterRepository creates, syncs, and deletes KuboCD Context CRs for per-project isolation,
-// and manages the platform service catalog on the default Context (spec.context.okdp.services).
+// ContextWriterRepository manages the platform service catalog on the default
+// Context (spec.context.okdp.services).
+//
+// It used to also clone the default Context into a per-project one and re-sync it
+// on every deployment. That was dropped: the sync overwrote spec.context whole, so
+// a project could never differ from the default, and touching the default
+// reconciled every Release referencing it. KuboCD already does this properly,
+// through Config.defaultNamespaceContexts, which resolves an optional Context by
+// name in the namespace of each Release.
 type ContextWriterRepository interface {
-	CreateFromDefault(ctx context.Context, projectName string) error
-	SyncFromDefault(ctx context.Context, projectName string) error
-	Delete(ctx context.Context, projectName string) error
-
 	// AddPlatformService appends a service to the default Context's okdp.services.
 	AddPlatformService(ctx context.Context, svc models.PlatformService) error
 	// UpdatePlatformService replaces the service matching name in okdp.services.
@@ -41,88 +44,6 @@ func NewContextWriterRepository(client dynamic.Interface, defaultName, defaultNa
 		defaultNamespace: defaultNamespace,
 	}
 }
-
-// CreateFromDefault copies the default Context CR into a project-scoped Context.
-func (r *k8sContextWriterRepository) CreateFromDefault(ctx context.Context, projectName string) error {
-	defaultCtx, err := r.client.Resource(contextGVR).Namespace(r.defaultNamespace).Get(ctx, r.defaultName, metav1.GetOptions{})
-	if err != nil {
-		return fmt.Errorf("failed to read default context %s/%s: %w", r.defaultNamespace, r.defaultName, err)
-	}
-
-	specContext, found, err := unstructured.NestedMap(defaultCtx.Object, "spec", "context")
-	if err != nil || !found {
-		return fmt.Errorf("default context has no spec.context")
-	}
-
-	projectCtx := &unstructured.Unstructured{
-		Object: map[string]interface{}{
-			"apiVersion": "kubocd.kubotal.io/v1alpha1",
-			"kind":       "Context",
-			"metadata": map[string]interface{}{
-				"name":      projectName,
-				"namespace": r.defaultNamespace,
-				"labels": map[string]interface{}{
-					"okdp.io/project": projectName,
-					"okdp.io/source":  "default",
-				},
-			},
-			"spec": map[string]interface{}{
-				"context": specContext,
-			},
-		},
-	}
-
-	_, err = r.client.Resource(contextGVR).Namespace(r.defaultNamespace).Create(ctx, projectCtx, metav1.CreateOptions{})
-	if err != nil {
-		return fmt.Errorf("failed to create project context %q: %w", projectName, err)
-	}
-
-	logrus.WithField("project", projectName).Info("Created per-project Context CR")
-	return nil
-}
-
-// SyncFromDefault creates the project Context if missing, or updates it from the default if it already exists.
-// This ensures project contexts always reflect the latest default context (e.g. new service blocks).
-func (r *k8sContextWriterRepository) SyncFromDefault(ctx context.Context, projectName string) error {
-	defaultCtx, err := r.client.Resource(contextGVR).Namespace(r.defaultNamespace).Get(ctx, r.defaultName, metav1.GetOptions{})
-	if err != nil {
-		return fmt.Errorf("failed to read default context %s/%s: %w", r.defaultNamespace, r.defaultName, err)
-	}
-
-	specContext, found, err := unstructured.NestedMap(defaultCtx.Object, "spec", "context")
-	if err != nil || !found {
-		return fmt.Errorf("default context has no spec.context")
-	}
-
-	existing, err := r.client.Resource(contextGVR).Namespace(r.defaultNamespace).Get(ctx, projectName, metav1.GetOptions{})
-	if err != nil {
-		logrus.WithField("project", projectName).Info("Project Context missing, creating from default")
-		return r.CreateFromDefault(ctx, projectName)
-	}
-
-	if err := unstructured.SetNestedMap(existing.Object, specContext, "spec", "context"); err != nil {
-		return fmt.Errorf("failed to set spec.context on project context %q: %w", projectName, err)
-	}
-
-	_, err = r.client.Resource(contextGVR).Namespace(r.defaultNamespace).Update(ctx, existing, metav1.UpdateOptions{})
-	if err != nil {
-		return fmt.Errorf("failed to update project context %q: %w", projectName, err)
-	}
-
-	logrus.WithField("project", projectName).Info("Synced project Context from default")
-	return nil
-}
-
-func (r *k8sContextWriterRepository) Delete(ctx context.Context, projectName string) error {
-	err := r.client.Resource(contextGVR).Namespace(r.defaultNamespace).Delete(ctx, projectName, metav1.DeleteOptions{})
-	if err != nil {
-		return fmt.Errorf("failed to delete project context %q: %w", projectName, err)
-	}
-	logrus.WithField("project", projectName).Info("Deleted per-project Context CR")
-	return nil
-}
-
-// --- Catalog management (spec.context.okdp.services on the default Context) ---
 
 // mutateServices performs a read-modify-write on the default Context's okdp.services
 // list, retrying on resource-version conflicts so concurrent edits don't clobber each other.

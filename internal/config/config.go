@@ -17,6 +17,9 @@ type Config struct {
 	ReleaseInterval        string
 	ReleaseTimeout         string
 	ExcludedSidecarPrefixes []string
+	// InsecureOCIRegistries lists registry hosts reached over plain HTTP —
+	// a development-sandbox affordance for local registries without TLS.
+	InsecureOCIRegistries []string
 }
 
 const defaultSidecarPrefixes = "istio-proxy,istio-init,dynatrace-,linkerd-proxy,envoy,vault-agent"
@@ -33,6 +36,12 @@ func Load() (*Config, error) {
 		ContextNamespace:  getEnv("CONTEXT_NAMESPACE", "kubocd-system"),
 		ReleaseInterval:   getEnv("RELEASE_INTERVAL", "30m"),
 		ReleaseTimeout:    getEnv("RELEASE_TIMEOUT", "10m"),
+	}
+
+	for _, h := range strings.Split(getEnv("INSECURE_OCI_REGISTRIES", ""), ",") {
+		if trimmed := strings.TrimSpace(h); trimmed != "" {
+			cfg.InsecureOCIRegistries = append(cfg.InsecureOCIRegistries, trimmed)
+		}
 	}
 
 	raw := getEnv("EXCLUDED_SIDECAR_PREFIXES", defaultSidecarPrefixes)

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -53,7 +54,6 @@ type ServiceService interface {
 	DeleteService(ctx context.Context, project, name string) error
 	WatchServices(ctx context.Context, project string) (watch.Interface, error)
 
-
 	GetIngressSuffix(ctx context.Context) (string, error)
 
 	GetProfileImages(ctx context.Context) (map[string][]models.ProfileImage, error)
@@ -76,6 +76,14 @@ type DefaultServiceService struct {
 	releaseInterval  string
 	releaseTimeout   string
 	sidecarPrefixes  []string
+	// insecureRegistries mirrors INSECURE_OCI_REGISTRIES so the Releases this
+	// service creates carry the insecure flag for those hosts.
+	insecureRegistries []string
+}
+
+// SetInsecureRegistries declares the plain-HTTP registry hosts.
+func (s *DefaultServiceService) SetInsecureRegistries(hosts []string) {
+	s.insecureRegistries = hosts
 }
 
 func NewDefaultServiceService(releaseRepo repository.ServiceRepository, contextRepo repository.ContextRepository, contextWriteRepo repository.ContextWriterRepository, schemaService PackageSchemaService, oidcProvisioner provisioning.OidcClientProvisioner, k8sClient dynamic.Interface, typedClient kubernetes.Interface, contextNamespace, releaseInterval, releaseTimeout string, sidecarPrefixes []string) *DefaultServiceService {
@@ -286,12 +294,6 @@ func (s *DefaultServiceService) DeployService(ctx context.Context, project strin
 		return nil, fmt.Errorf("failed to resolve ingress suffix: %w", err)
 	}
 
-	if s.contextWriteRepo != nil {
-		if err := s.contextWriteRepo.SyncFromDefault(ctx, project); err != nil {
-			logrus.WithError(err).WithField("project", project).Warn("Failed to sync project Context from default")
-		}
-	}
-
 	instanceName := req.InstanceName
 	if instanceName == "" {
 		instanceName = req.Service
@@ -319,11 +321,12 @@ func (s *DefaultServiceService) DeployService(ctx context.Context, project strin
 				Tag:        deployTag,
 				Interval:   s.releaseInterval,
 				Timeout:    s.releaseTimeout,
+				Insecure:   insecureOCIHost(packageRepo, s.insecureRegistries),
 			},
 			Parameters: req.Parameters,
-			Contexts: []crd.ContextRef{
-				{Name: project, Namespace: s.contextNamespace},
-			},
+			// No explicit Contexts. KuboCD merges Config.defaultContexts, then the
+			// optional Context named by Config.defaultNamespaceContexts looked up in
+			// this Release's namespace. A project overriding nothing needs no object.
 			TargetNamespace: project,
 			CreateNamespace: false,
 		},
@@ -547,7 +550,6 @@ func (s *DefaultServiceService) WatchServices(ctx context.Context, project strin
 }
 
 // --- Catalog (self-service) ---
-
 
 func (s *DefaultServiceService) GetIngressSuffix(ctx context.Context) (string, error) {
 	return s.contextRepo.GetIngressSuffix(ctx)
@@ -978,8 +980,56 @@ func releaseToInstance(r *crd.Release) *models.ServiceInstance {
 		TargetNamespace: r.Spec.TargetNamespace,
 		Roles:           r.Status.Roles,
 		Parameters:      r.Spec.Parameters,
+		Connections:     boundConnections(r),
 		CreatedAt:       createdAt,
 	}
+}
+
+// boundConnections describes what a release is wired to, from what the
+// controller published.
+//
+// The two lists do not mean what their names suggest. A connectionRef with no
+// kind resolves by looking on both sides, so watchedInputConnections holds
+// every *candidate*, a Connection and a ClusterConnection per name, not a set
+// of pending bindings. Listing them as they come showed "demo-db
+// (ClusterConnection) waiting" next to the Connection that had resolved, for a
+// ClusterConnection that never existed. Candidates are therefore grouped by
+// name: a name that resolved shows once, resolved; a name that resolved nowhere
+// shows once, waiting, which is the case a reader opens this page for.
+func boundConnections(r *crd.Release) []models.ServiceConnection {
+	byName := map[string]models.ServiceConnection{}
+	order := make([]string, 0, len(r.Status.WatchedInputConnections))
+
+	remember := func(ref crd.InputConnectionReference, resolved bool) {
+		current, seen := byName[ref.Name]
+		if !seen {
+			order = append(order, ref.Name)
+		}
+		// A resolved candidate always wins over a pending one.
+		if seen && current.Resolved {
+			return
+		}
+		byName[ref.Name] = models.ServiceConnection{
+			Name: ref.Name, Namespace: ref.Namespace, Kind: ref.Kind, Resolved: resolved,
+		}
+	}
+
+	for _, ref := range r.Status.EffectiveInputConnections {
+		remember(ref, true)
+	}
+	for _, ref := range r.Status.WatchedInputConnections {
+		remember(ref, false)
+	}
+
+	if len(order) == 0 {
+		return nil
+	}
+	sort.Strings(order)
+	out := make([]models.ServiceConnection, 0, len(order))
+	for _, name := range order {
+		out = append(out, byName[name])
+	}
+	return out
 }
 
 // GetServiceMetrics aggregates live CPU/memory usage from the metrics-server

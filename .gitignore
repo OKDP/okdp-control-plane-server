@@ -20,6 +20,16 @@ tmp/
 # generated container kubeconfig (holds credentials)
 .dev/
 
+# IDEs and editors
+.idea/
+.project
+.classpath
+.c9/
+*.launch
+.settings/
+*.sublime-workspace
+*.iml
+
 # Go workspace file
 go.work
 go.work.sum
@@ -34,4 +44,7 @@ vendor/
 CLAUDE.md
 .claude/
 .cursor/
-.agent/kubocd-local
+.agent/
+
+# Binaire kubocd construit localement pour les essais, jamais versionne.
+kubocd-local

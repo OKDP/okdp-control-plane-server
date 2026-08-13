@@ -1,0 +1,112 @@
+{
+  "name": "database-server",
+  "displayName": "SQL database",
+  "description": "SQL database server. The engine tells consuming packages how to address it.",
+  "icon": "pi pi-database",
+  "category": "database",
+  "external": true,
+  "fields": [
+    {
+      "name": "engine",
+      "label": "Engine",
+      "type": "enum",
+      "required": true,
+      "default": "postgresql",
+      "options": [
+        "postgresql",
+        "mysql"
+      ],
+      "help": "Read by consuming packages to build their JDBC URL."
+    },
+    {
+      "name": "driver",
+      "label": "JDBC driver",
+      "type": "string",
+      "required": true,
+      "derived": {
+        "from": "engine",
+        "map": {
+          "postgresql": "org.postgresql.Driver",
+          "mysql": "com.mysql.cj.jdbc.Driver"
+        }
+      },
+      "help": "Driver class name read by packages configuring a JDBC datasource. Follows from the engine."
+    },
+    {
+      "name": "host",
+      "label": "Host",
+      "type": "string",
+      "required": true,
+      "placeholder": "postgres.example.com"
+    },
+    {
+      "name": "port",
+      "label": "Port",
+      "type": "number",
+      "required": true,
+      "default": 5432,
+      "min": 1,
+      "max": 65535,
+      "help": "5432 for PostgreSQL, 3306 for MySQL and MariaDB."
+    },
+    {
+      "name": "dbName",
+      "label": "Database",
+      "type": "string",
+      "required": true,
+      "placeholder": "analytics"
+    },
+    {
+      "name": "username",
+      "label": "User",
+      "type": "string",
+      "required": true,
+      "secret": true,
+      "help": "Stored in the credentials Secret, under the username key, as the database-server contract expects."
+    },
+    {
+      "name": "password",
+      "label": "Password",
+      "type": "string",
+      "required": true,
+      "secret": true,
+      "masked": true
+    },
+    {
+      "name": "sslMode",
+      "label": "TLS mode",
+      "type": "enum",
+      "required": false,
+      "options": [
+        "prefer",
+        "require",
+        "verify-ca",
+        "verify-full",
+        "disable"
+      ],
+      "help": "'prefer' tries TLS and falls back to clear text if the server refuses, the safe default for a server you do not control. Use 'verify-full' when the server presents a certificate your cluster trusts.",
+      "default": "prefer",
+      "showWhen": {
+        "field": "engine",
+        "value": "postgresql"
+      }
+    },
+    {
+      "name": "tls",
+      "label": "TLS mode",
+      "type": "enum",
+      "required": false,
+      "options": [
+        "false",
+        "preferred",
+        "true",
+        "skip-verify"
+      ],
+      "help": "MySQL accepts a different set of values from PostgreSQL. 'preferred' tries TLS and falls back to clear text.",
+      "showWhen": {
+        "field": "engine",
+        "value": "mysql"
+      }
+    }
+  ]
+}

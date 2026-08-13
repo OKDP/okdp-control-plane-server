@@ -1,0 +1,35 @@
+{
+  "name": "trino",
+  "displayName": "Trino",
+  "description": "Trino distributed SQL query engine. Fields follow the trino ClusterContract, which publishes URIs rather than a host and a port.",
+  "icon": "pi pi-server",
+  "category": "query-engine",
+  "external": true,
+  "endpointFrom": ["internalUri", "uri", "url"],
+  "fields": [
+    {
+      "name": "url",
+      "label": "URL",
+      "type": "string",
+      "required": true,
+      "placeholder": "https://trino.example.com",
+      "help": "Address a human opens in a browser or a BI tool."
+    },
+    {
+      "name": "uri",
+      "label": "JDBC URI",
+      "type": "string",
+      "required": true,
+      "placeholder": "jdbc:trino://trino.example.com:443",
+      "help": "Read by packages configuring a JDBC datasource."
+    },
+    {
+      "name": "internalUri",
+      "label": "In-cluster URI",
+      "type": "string",
+      "required": false,
+      "placeholder": "jdbc:trino://trino.analytics.svc.cluster.local:8080",
+      "help": "Preferred by workloads running on this cluster. Leave empty for a Trino hosted elsewhere."
+    }
+  ]
+}

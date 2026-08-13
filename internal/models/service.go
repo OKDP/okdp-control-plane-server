@@ -48,6 +48,20 @@ type ServiceInstance struct {
 	URL             string         `json:"url,omitempty"`
 	Roles           []string       `json:"roles,omitempty"`
 	Parameters      map[string]any `json:"parameters,omitempty"`
-	CreatedAt       string         `json:"createdAt,omitempty"`
+	// Connections is what the release actually resolved, published by the
+	// controller. Without it the console can only show what a service asked
+	// for, never what it runs against.
+	Connections []ServiceConnection `json:"connections,omitempty"`
+	CreatedAt   string              `json:"createdAt,omitempty"`
 }
 
+// ServiceConnection is one connection a deployed service is bound to.
+type ServiceConnection struct {
+	Name      string `json:"name"`
+	Namespace string `json:"namespace,omitempty"`
+	// Kind separates a Connection from a ClusterConnection, which may share a
+	// name, and tells the console which page to link to.
+	Kind string `json:"kind"`
+	// Resolved is false while the release is still waiting for it.
+	Resolved bool `json:"resolved"`
+}

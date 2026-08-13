@@ -14,3 +14,7 @@ data:
   LOG_LEVEL: {{ .Values.configuration.logLevel | quote }}
   RELEASE_INTERVAL: {{ .Values.configuration.releaseInterval | quote }}
   RELEASE_TIMEOUT: {{ .Values.configuration.releaseTimeout | quote }}
+  {{- if .Values.configuration.insecureOciRegistries }}
+  # Development sandboxes only: registry hosts reached over plain HTTP.
+  INSECURE_OCI_REGISTRIES: {{ .Values.configuration.insecureOciRegistries | quote }}
+  {{- end }}

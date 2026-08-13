@@ -683,6 +683,15 @@ const docTemplate = `{
                     "204": {
                         "description": "No Content"
                     },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
@@ -697,7 +706,7 @@ const docTemplate = `{
         },
         "/api/projects/{name}/connections": {
             "get": {
-                "description": "Connections declared in the project namespace. Connections owned by a deployed release are excluded; they are returned by the internal endpoint.",
+                "description": "Connections declared in the project namespace. Connections owned by a deployed release are excluded. They are returned by the internal endpoint.",
                 "produces": [
                     "application/json"
                 ],
@@ -3106,7 +3115,7 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "crdAvailable": {
-                    "description": "CRDAvailable reports whether the KuboCD connection CRDs are installed.\nWhile they are not, external connections cannot be persisted and the\nconsole says so instead of failing on save; internal connections are\nderived from deployed services and stay available either way.",
+                    "description": "CRDAvailable reports whether the KuboCD connection CRDs are installed.\nWhile they are not, external connections cannot be persisted and the\nconsole says so instead of failing on save. Internal connections are\nderived from deployed services and stay available either way.",
                     "type": "boolean"
                 },
                 "types": {
@@ -3368,7 +3377,7 @@ const docTemplate = `{
                     }
                 },
                 "external": {
-                    "description": "External reports whether a user may declare a connection of this type by\nhand. Types that only ever come from a service deployed on the platform\n(Trino, ...) are listed for the internal view but offer no creation form.",
+                    "description": "External reports whether a user may declare a connection against this\ncontract by hand. A contract that is not external is listed for the\ninternal view, where the connections come from the deployed services,\nbut offers no creation form.",
                     "type": "boolean"
                 },
                 "fields": {

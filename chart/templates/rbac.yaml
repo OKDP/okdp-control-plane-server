@@ -20,6 +20,11 @@ rules:
   - apiGroups: [""]
     resources: ["pods", "pods/log"]
     verbs: ["get", "list"]
+  # Services carry the in-cluster endpoint of the internal connections a
+  # project's deployed services expose.
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list"]
   # Resource usage panels — metrics-server
   - apiGroups: ["metrics.k8s.io"]
     resources: ["pods"]
@@ -42,6 +47,16 @@ rules:
   - apiGroups: ["kubocd.kubotal.io"]
     resources: ["contexts"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Connections (kubocd). These CRDs ship with a KuboCD version the platform
+  # does not run yet: the rules are inert until they are installed, and the
+  # server probes for them before use. Contracts are read-only, they describe
+  # the schema a connection must satisfy and are owned by the packages.
+  - apiGroups: ["kubocd.kubotal.io"]
+    resources: ["connections", "clusterconnections"]
+    verbs: ["get", "list", "watch", "create", "update", "delete"]
+  - apiGroups: ["kubocd.kubotal.io"]
+    resources: ["contracts", "clustercontracts"]
+    verbs: ["get", "list", "watch"]
   # Spark workloads
   - apiGroups: ["sparkoperator.k8s.io"]
     resources: ["sparkapplications"]

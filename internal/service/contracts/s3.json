@@ -1,0 +1,73 @@
+{
+  "name": "s3",
+  "displayName": "S3 object storage",
+  "description": "S3-compatible object storage (AWS S3, MinIO, SeaweedFS, ...).",
+  "icon": "pi pi-box",
+  "category": "storage",
+  "external": true,
+  "fields": [
+    {
+      "name": "apiUrl",
+      "label": "API endpoint",
+      "type": "string",
+      "required": true,
+      "placeholder": "https://s3.example.com",
+      "help": "Leave the AWS regional endpoint out for AWS S3 itself; set it for MinIO, SeaweedFS and other S3-compatible servers."
+    },
+    {
+      "name": "internalUrl",
+      "label": "Internal URL",
+      "type": "string",
+      "required": false,
+      "placeholder": "http://storage-s3.default.svc.cluster.local:8333",
+      "help": "In-cluster address, used by workloads instead of going out through the ingress."
+    },
+    {
+      "name": "consoleUrl",
+      "label": "Console URL",
+      "type": "string",
+      "required": false
+    },
+    {
+      "name": "bucket",
+      "label": "Bucket",
+      "type": "string",
+      "required": true
+    },
+    {
+      "name": "region",
+      "label": "Region",
+      "type": "string",
+      "required": false,
+      "default": "us-east-1"
+    },
+    {
+      "name": "accessKey",
+      "label": "Access key ID",
+      "type": "string",
+      "required": true,
+      "secret": true,
+      "help": "Stored in the credentials Secret alongside the secret key, as the s3 contract expects. An access key identifies a caller, it does not belong in a readable object."
+    },
+    {
+      "name": "secretKey",
+      "label": "Secret access key",
+      "type": "string",
+      "required": true,
+      "secret": true,
+      "masked": true
+    },
+    {
+      "name": "pathStyle",
+      "label": "Path-style addressing",
+      "type": "boolean",
+      "required": false,
+      "default": true,
+      "help": "Required by most self-hosted S3 servers. AWS S3 uses virtual-host style."
+    }
+  ],
+  "endpointFrom": [
+    "internalUrl",
+    "apiUrl"
+  ]
+}
