@@ -14,6 +14,7 @@ import (
 	"github.com/okdp/okdp-control-plane-server/internal/models"
 	"github.com/okdp/okdp-control-plane-server/internal/repository"
 	"github.com/okdp/okdp-control-plane-server/internal/repository/crd"
+	"github.com/okdp/okdp-control-plane-server/internal/repository/provisioning"
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
@@ -68,6 +69,7 @@ type DefaultServiceService struct {
 	contextRepo      repository.ContextRepository
 	contextWriteRepo repository.ContextWriterRepository
 	schemaService    PackageSchemaService
+	oidcProvisioner  provisioning.OidcClientProvisioner
 	k8sClient        dynamic.Interface
 	typedClient      kubernetes.Interface
 	contextNamespace string
@@ -76,12 +78,13 @@ type DefaultServiceService struct {
 	sidecarPrefixes  []string
 }
 
-func NewDefaultServiceService(releaseRepo repository.ServiceRepository, contextRepo repository.ContextRepository, contextWriteRepo repository.ContextWriterRepository, schemaService PackageSchemaService, k8sClient dynamic.Interface, typedClient kubernetes.Interface, contextNamespace, releaseInterval, releaseTimeout string, sidecarPrefixes []string) *DefaultServiceService {
+func NewDefaultServiceService(releaseRepo repository.ServiceRepository, contextRepo repository.ContextRepository, contextWriteRepo repository.ContextWriterRepository, schemaService PackageSchemaService, oidcProvisioner provisioning.OidcClientProvisioner, k8sClient dynamic.Interface, typedClient kubernetes.Interface, contextNamespace, releaseInterval, releaseTimeout string, sidecarPrefixes []string) *DefaultServiceService {
 	return &DefaultServiceService{
 		releaseRepo:      releaseRepo,
 		contextRepo:      contextRepo,
 		contextWriteRepo: contextWriteRepo,
 		schemaService:    schemaService,
+		oidcProvisioner:  oidcProvisioner,
 		k8sClient:        k8sClient,
 		typedClient:      typedClient,
 		contextNamespace: contextNamespace,
@@ -451,21 +454,11 @@ func (s *DefaultServiceService) DeleteService(ctx context.Context, project, name
 	return nil
 }
 
-var oidcClientGVR = schema.GroupVersionResource{
-	Group:    "kubauth.kubotal.io",
-	Version:  "v1alpha1",
-	Resource: "oidcclients",
-}
-
+// cleanupOidcClient best-effort unregisters the OIDC client of a deleted
+// service through the configured provisioning backend (no-op when
+// identity.provisioning.provider is unset/none).
 func (s *DefaultServiceService) cleanupOidcClient(ctx context.Context, releaseName string) {
-	kubauthNS, err := s.contextRepo.GetKubauthNamespace(ctx)
-	if err != nil {
-		logrus.WithError(err).Debug("Could not resolve kubauth namespace for OidcClient cleanup")
-		return
-	}
-
-	err = s.k8sClient.Resource(oidcClientGVR).Namespace(kubauthNS).Delete(ctx, releaseName, metav1.DeleteOptions{})
-	if err != nil {
+	if err := s.oidcProvisioner.DeleteClient(ctx, releaseName); err != nil {
 		logrus.WithError(err).WithField("oidcClient", releaseName).Debug("OidcClient cleanup skipped")
 	} else {
 		logrus.WithField("oidcClient", releaseName).Info("Cleaned up OidcClient")

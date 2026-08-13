@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/okdp/okdp-control-plane-server/internal/models"
+	"github.com/okdp/okdp-control-plane-server/internal/repository/provisioning"
 	"github.com/sirupsen/logrus"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -24,15 +25,37 @@ type ContextRepository interface {
 	// GetPlatformServices returns the managed OKDP services (from spec.context.okdp.services).
 	GetPlatformServices(ctx context.Context) ([]models.PlatformService, error)
 
-
 	// GetPackageRepository returns the OCI package repository prefix (from spec.context.okdp.packageRepository).
 	GetPackageRepository(ctx context.Context) (string, error)
 
 	// GetIngressSuffix returns the ingress domain suffix (from spec.context.ingress.suffix).
 	GetIngressSuffix(ctx context.Context) (string, error)
 
-	// GetKubauthNamespace returns the namespace where kubauth resources live (from spec.context.kubauth.namespace).
+	// GetIdentity returns how OAuth clients are provisioned on this platform
+	// (from spec.context.platform.identity).
+	GetIdentity(ctx context.Context) (*models.PlatformIdentity, error)
+
+	// GetKubauthNamespace returns the namespace kubauth resources live in. It is
+	// only meaningful when clients are provisioned by kubauth.
 	GetKubauthNamespace(ctx context.Context) (string, error)
+
+	// GetIdentityProvider returns the identity provider the platform is wired to
+	// (from spec.context.identity.provider; "" when unset, meaning external).
+	// The kubauth-specific Identity API is only exposed when it is "kubauth".
+	GetIdentityProvider(ctx context.Context) (string, error)
+
+	// GetIdentityOidcConfig returns the OIDC client the console UI should
+	// authenticate with (from spec.context.identity.oidc; nil when the
+	// Context does not publish one).
+	GetIdentityOidcConfig(ctx context.Context) (*models.IdentityOidcConfig, error)
+
+	// GetIdentityProvisioningProvider returns the OIDC client provisioning backend
+	// (from spec.context.identity.provisioning.provider; "" when unset, meaning none).
+	GetIdentityProvisioningProvider(ctx context.Context) (string, error)
+
+	// GetKeycloakProvisioningConfig returns the Keycloak adapter configuration
+	// (from spec.context.identity.provisioning.keycloak).
+	GetKeycloakProvisioningConfig(ctx context.Context) (*provisioning.KeycloakConfig, error)
 
 	// GetProfileImages returns available images per profile type from spec.context.jupyter.profiles.
 	GetProfileImages(ctx context.Context) (map[string][]models.ProfileImage, error)
@@ -41,6 +64,18 @@ type ContextRepository interface {
 	GetSparkConfig(ctx context.Context) (*models.SparkConfig, error)
 }
 
+// k8sContextRepository reads two Contexts, because they hold two different
+// kinds of configuration.
+//
+// The Control Plane Context holds what only the console reads: the service
+// catalog, the categories of the portal, the package repository. No Release
+// references it, so editing the catalog reconciles nothing.
+//
+// The platform Context holds what a package template reads: the ingress suffix,
+// the storage classes, the certificate issuers. Every Release merges it, so it
+// changes rarely and a change is expensive.
+//
+// The server reads from both. It consumes platform data, it does not own it.
 type k8sContextRepository struct {
 	client    dynamic.Interface
 	name      string
@@ -61,7 +96,7 @@ func (r *k8sContextRepository) GetPlatformServices(ctx context.Context) ([]model
 		return nil, err
 	}
 
-	rawServices, found, err := unstructured.NestedSlice(u.Object, "spec", "context", "okdp", "services")
+	rawServices, found, err := unstructured.NestedSlice(u.Object, "spec", "context", "serviceCatalog", "services")
 	if err != nil {
 		return nil, fmt.Errorf("failed to read okdp.services from Context: %w", err)
 	}
@@ -109,7 +144,7 @@ func (r *k8sContextRepository) GetPackageRepository(ctx context.Context) (string
 		return "", err
 	}
 
-	repo, _, _ := unstructured.NestedString(u.Object, "spec", "context", "okdp", "packageRepository")
+	repo, _, _ := unstructured.NestedString(u.Object, "spec", "context", "serviceCatalog", "defaultRepository")
 	if repo == "" {
 		return "", fmt.Errorf("okdp.packageRepository not found in Context %s/%s", r.namespace, r.name)
 	}
@@ -128,16 +163,119 @@ func (r *k8sContextRepository) GetIngressSuffix(ctx context.Context) (string, er
 	return suffix, nil
 }
 
+// GetIdentity reads platform.identity. An absent block means the platform was
+// never told, and the safe reading is that somebody else makes the client
+// Secrets: provisioning them ourselves would post CRs on a cluster that never
+// asked for them.
+func (r *k8sContextRepository) GetIdentity(ctx context.Context) (*models.PlatformIdentity, error) {
+	u, err := r.getContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	provisioning, _, _ := unstructured.NestedString(u.Object, "spec", "context", "oidc", "clientProvisioning")
+	if provisioning == "" {
+		// Legacy path, kept while Contexts migrate to the single oidc block.
+		provisioning, _, _ = unstructured.NestedString(u.Object, "spec", "context", "identity", "clientProvisioning")
+	}
+	namespace, _, _ := unstructured.NestedString(u.Object, "spec", "context", "oidc", "kubauth", "namespace")
+	if namespace == "" {
+		namespace, _, _ = unstructured.NestedString(u.Object, "spec", "context", "identity", "kubauthNamespace")
+	}
+
+	identity := &models.PlatformIdentity{
+		ClientProvisioning: provisioning,
+		KubauthNamespace:   namespace,
+	}
+	if identity.ClientProvisioning == "" {
+		identity.ClientProvisioning = models.ClientProvisioningExisting
+	}
+	return identity, identity.Validate()
+}
+
 func (r *k8sContextRepository) GetKubauthNamespace(ctx context.Context) (string, error) {
+	identity, err := r.GetIdentity(ctx)
+	if err != nil {
+		return "", err
+	}
+	if identity.ClientProvisioning != models.ClientProvisioningKubauth {
+		return "", fmt.Errorf("clients are provisioned by %q on this platform, not by kubauth", identity.ClientProvisioning)
+	}
+	return identity.KubauthNamespace, nil
+}
+
+func (r *k8sContextRepository) GetIdentityProvider(ctx context.Context) (string, error) {
 	u, err := r.getContext(ctx)
 	if err != nil {
 		return "", err
 	}
-	ns, _, _ := unstructured.NestedString(u.Object, "spec", "context", "kubauth", "namespace")
-	if ns == "" {
-		return "", fmt.Errorf("kubauth.namespace not found in Context %s/%s", r.namespace, r.name)
+	provider, _, _ := unstructured.NestedString(u.Object, "spec", "context", "identity", "provider")
+	return provider, nil
+}
+
+func (r *k8sContextRepository) GetIdentityOidcConfig(ctx context.Context) (*models.IdentityOidcConfig, error) {
+	u, err := r.getContext(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return ns, nil
+	authority, _, _ := unstructured.NestedString(u.Object, "spec", "context", "identity", "oidc", "authority")
+	clientID, _, _ := unstructured.NestedString(u.Object, "spec", "context", "identity", "oidc", "clientId")
+	if authority == "" || clientID == "" {
+		return nil, nil
+	}
+	scope, _, _ := unstructured.NestedString(u.Object, "spec", "context", "identity", "oidc", "scope")
+	return &models.IdentityOidcConfig{
+		Authority: authority,
+		ClientID:  clientID,
+		Scope:     scope,
+	}, nil
+}
+
+func (r *k8sContextRepository) GetIdentityProvisioningProvider(ctx context.Context) (string, error) {
+	u, err := r.getContext(ctx)
+	if err != nil {
+		return "", err
+	}
+	provider, _, _ := unstructured.NestedString(u.Object, "spec", "context", "identity", "provisioning", "provider")
+	return provider, nil
+}
+
+func (r *k8sContextRepository) GetKeycloakProvisioningConfig(ctx context.Context) (*provisioning.KeycloakConfig, error) {
+	u, err := r.getContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	issuer, _, _ := unstructured.NestedString(u.Object, "spec", "context", "identity", "provisioning", "keycloak", "issuerUri")
+	if issuer == "" {
+		return nil, fmt.Errorf("identity.provisioning.keycloak.issuerUri not found in Context %s/%s", r.namespace, r.name)
+	}
+
+	secretPath := []string{"spec", "context", "identity", "provisioning", "keycloak", "credentialsSecret"}
+	secretName, _, _ := unstructured.NestedString(u.Object, append(secretPath, "name")...)
+	if secretName == "" {
+		return nil, fmt.Errorf("identity.provisioning.keycloak.credentialsSecret.name not found in Context %s/%s", r.namespace, r.name)
+	}
+	secretNamespace, _, _ := unstructured.NestedString(u.Object, append(secretPath, "namespace")...)
+	clientIDKey, _, _ := unstructured.NestedString(u.Object, append(secretPath, "clientIdKey")...)
+	if clientIDKey == "" {
+		clientIDKey = "client_id"
+	}
+	clientSecretKey, _, _ := unstructured.NestedString(u.Object, append(secretPath, "clientSecretKey")...)
+	if clientSecretKey == "" {
+		clientSecretKey = "client_secret"
+	}
+	insecure, _, _ := unstructured.NestedBool(u.Object, "spec", "context", "identity", "provisioning", "keycloak", "insecureSkipTLSVerify")
+
+	return &provisioning.KeycloakConfig{
+		IssuerURI: issuer,
+		CredentialsSecret: provisioning.KeycloakSecretRef{
+			Namespace:       secretNamespace,
+			Name:            secretName,
+			ClientIDKey:     clientIDKey,
+			ClientSecretKey: clientSecretKey,
+		},
+		InsecureSkipTLSVerify: insecure,
+	}, nil
 }
 
 func (r *k8sContextRepository) GetProfileImages(ctx context.Context) (map[string][]models.ProfileImage, error) {
@@ -235,9 +373,11 @@ func (r *k8sContextRepository) GetSparkConfig(ctx context.Context) (*models.Spar
 	return cfg, nil
 }
 
+// getContext reads the Control Plane's own Context.
 func (r *k8sContextRepository) getContext(ctx context.Context) (*unstructured.Unstructured, error) {
 	return r.client.Resource(contextGVR).Namespace(r.namespace).Get(ctx, r.name, metav1.GetOptions{})
 }
+
 
 func getString(m map[string]interface{}, key string) string {
 	if v, ok := m[key]; ok {

@@ -1,24 +1,193 @@
 basePath: /
 definitions:
-  models.CatalogCategory:
+  models.Capabilities:
+    properties:
+      identity:
+        $ref: '#/definitions/models.IdentityCapability'
+      oidcProvisioning:
+        $ref: '#/definitions/models.OidcProvisioningCapability'
+    type: object
+  models.ConnectionCatalogResponse:
+    properties:
+      crdAvailable:
+        description: |-
+          CRDAvailable reports whether the KuboCD connection CRDs are installed.
+          While they are not, external connections cannot be persisted and the
+          console says so instead of failing on save; internal connections are
+          derived from deployed services and stay available either way.
+        type: boolean
+      types:
+        items:
+          $ref: '#/definitions/models.ContractDescriptor'
+        type: array
+    type: object
+  models.ConnectionConsumer:
+    properties:
+      effective:
+        description: |-
+          Effective reports that the release actually resolved this connection, as
+          opposed to merely waiting for it.
+        type: boolean
+      releaseName:
+        type: string
+      service:
+        description: |-
+          Service is the instance name as the console displays it, ReleaseName the
+          underlying KuboCD Release.
+        type: string
+      status:
+        type: string
+    type: object
+  models.ConnectionField:
+    properties:
+      default: {}
+      derived:
+        allOf:
+        - $ref: '#/definitions/models.FieldDerivation'
+        description: |-
+          Derived computes the value from another field instead of asking for it.
+          The JDBC driver follows from the engine, and a form that lets the two
+          disagree only produces connections nothing can open.
+      help:
+        type: string
+      label:
+        type: string
+      masked:
+        description: |-
+          Masked hides the value as it is typed. A database user name lives in the
+          Secret because the contract puts it there, but hiding it behind dots only
+          stops the user from checking what they typed.
+        type: boolean
+      max:
+        type: number
+      min:
+        type: number
+      name:
+        type: string
+      options:
+        items:
+          type: string
+        type: array
+      placeholder:
+        type: string
+      required:
+        type: boolean
+      secret:
+        description: |-
+          Secret says where the value is stored: in the credentials Secret rather
+          than in the Connection spec. It says nothing about how it is typed in.
+        type: boolean
+      showWhen:
+        allOf:
+        - $ref: '#/definitions/models.FieldCondition'
+        description: |-
+          ShowWhen limits the field to one value of another field. A PostgreSQL TLS
+          mode and a MySQL one are not the same list, and offering both at once is
+          how a connection ends up carrying the wrong one.
+      type:
+        type: string
+    type: object
+  models.ConnectionRequest:
     properties:
       description:
         type: string
-      id:
+      existingSecret:
+        description: |-
+          ExistingSecret names a Secret already present in the namespace, holding
+          the credentials of this connection. When it is set the server stores no
+          credential of its own: the Secret may come from anywhere, typically
+          projected from a vault by External Secrets, and the connection only
+          points at it. The credential fields of the payload are then ignored.
         type: string
       name:
         type: string
-      packages:
-        items:
-          $ref: '#/definitions/models.CatalogPackage'
-        type: array
+      type:
+        type: string
+      values:
+        additionalProperties: {}
+        type: object
+    required:
+    - name
+    - type
+    - values
     type: object
-  models.CatalogPackage:
+  models.ConnectionResponse:
     properties:
+      createdAt:
+        type: string
+      credentialsSecret:
+        allOf:
+        - $ref: '#/definitions/models.CredentialsSecretRef'
+        description: |-
+          CredentialsSecret is the Secret holding the secret fields, so a consumer
+          can reference it from a Deployment without the console ever reading it.
+      description:
+        type: string
+      message:
+        type: string
       name:
         type: string
-      tag:
+      namespace:
         type: string
+      scope:
+        type: string
+      secretFields:
+        items:
+          type: string
+        type: array
+      status:
+        type: string
+      type:
+        type: string
+      values:
+        additionalProperties: {}
+        type: object
+    type: object
+  models.ConnectionTestCheck:
+    properties:
+      decisive:
+        description: |-
+          Decisive marks the path a workload will actually take, the one Success
+          reflects. The others are shown for diagnosis.
+        type: boolean
+      label:
+        description: Label names the path for a reader ("In-cluster URL", "Public
+          URL").
+        type: string
+      message:
+        type: string
+      reason:
+        type: string
+      success:
+        type: boolean
+      target:
+        type: string
+    type: object
+  models.ConnectionTestRequest:
+    properties:
+      type:
+        type: string
+      values:
+        additionalProperties: {}
+        type: object
+    required:
+    - type
+    - values
+    type: object
+  models.ConnectionTestResult:
+    properties:
+      checks:
+        items:
+          $ref: '#/definitions/models.ConnectionTestCheck'
+        type: array
+      durationMs:
+        type: integer
+      message:
+        type: string
+      reason:
+        type: string
+      success:
+        type: boolean
     type: object
   models.Container:
     properties:
@@ -27,6 +196,59 @@ definitions:
       name:
         type: string
       ready:
+        type: boolean
+    type: object
+  models.ContractDescriptor:
+    properties:
+      category:
+        type: string
+      description:
+        type: string
+      displayName:
+        type: string
+      endpointFrom:
+        description: |-
+          EndpointFrom names the value fields carrying the address a consumer would
+          reach, most specific first. A contract publishing a plain host and port
+          needs none: that convention is the fallback.
+        items:
+          type: string
+        type: array
+      external:
+        description: |-
+          External reports whether a user may declare a connection of this type by
+          hand. Types that only ever come from a service deployed on the platform
+          (Trino, ...) are listed for the internal view but offer no creation form.
+        type: boolean
+      fields:
+        items:
+          $ref: '#/definitions/models.ConnectionField'
+        type: array
+      icon:
+        type: string
+      name:
+        description: |-
+          Name IS the KuboCD Contract this descriptor produces. One descriptor, one
+          contract, deliberately: an entry form that produced a differently named
+          contract would mean nothing a package asks for could be found by its own
+          name.
+        type: string
+    type: object
+  models.CredentialsSecretRef:
+    properties:
+      keys:
+        items:
+          type: string
+        type: array
+      name:
+        type: string
+      namespace:
+        type: string
+      owned:
+        description: |-
+          Owned reports that the console wrote this Secret, as opposed to pointing
+          at one that was already there, typically projected from a vault. The two
+          behave differently on edit and on delete, so the panel says which it is.
         type: boolean
     type: object
   models.ExecutorDefaults:
@@ -129,6 +351,22 @@ definitions:
       name:
         type: string
     type: object
+  models.FieldCondition:
+    properties:
+      field:
+        type: string
+      value:
+        type: string
+    type: object
+  models.FieldDerivation:
+    properties:
+      from:
+        type: string
+      map:
+        additionalProperties:
+          type: string
+        type: object
+    type: object
   models.Group:
     properties:
       comment:
@@ -138,6 +376,79 @@ definitions:
         type: string
       name:
         type: string
+    type: object
+  models.IdentityCapability:
+    properties:
+      oidc:
+        allOf:
+        - $ref: '#/definitions/models.IdentityOidcConfig'
+        description: |-
+          Oidc is the OIDC client the console UI should authenticate with,
+          resolved from the Context (identity.oidc). Absent when the platform
+          does not publish it: the UI falls back to its build-time configuration.
+      provider:
+        description: |-
+          Provider is the configured identity provider: "external" (BYO OIDC,
+          default) or "kubauth".
+        type: string
+      userManagement:
+        description: |-
+          UserManagement is true when the kubauth-specific user/group management
+          API (/api/v1/identity) is available.
+        type: boolean
+    type: object
+  models.IdentityOidcConfig:
+    properties:
+      authority:
+        description: Authority is the OIDC issuer the UI redirects to.
+        type: string
+      clientId:
+        description: ClientID is the public (PKCE) client registered for the console.
+        type: string
+      scope:
+        description: Scope overrides the UI default scopes when set.
+        type: string
+    type: object
+  models.InternalConnection:
+    properties:
+      category:
+        type: string
+      createdAt:
+        type: string
+      endpoint:
+        description: Endpoint is the in-cluster address another service uses to reach
+          it.
+        type: string
+      host:
+        type: string
+      icon:
+        type: string
+      managed:
+        description: |-
+          Managed reports that the entry comes from a Connection the KuboCD release
+          controller owns, rather than being derived from the deployed service.
+        type: boolean
+      name:
+        type: string
+      namespace:
+        type: string
+      port:
+        type: integer
+      releaseName:
+        type: string
+      service:
+        description: Service and ReleaseName identify the deployed instance providing
+          it.
+        type: string
+      status:
+        type: string
+      type:
+        type: string
+      typeDisplay:
+        type: string
+      values:
+        additionalProperties: {}
+        type: object
     type: object
   models.MetricValue:
     properties:
@@ -154,6 +465,48 @@ definitions:
       usedRaw:
         type: number
     type: object
+  models.OidcProvisioningCapability:
+    properties:
+      provider:
+        description: |-
+          Provider is the configured provisioning backend: "none" (default),
+          "kubauth" or "keycloak".
+        type: string
+    type: object
+  models.PackageInput:
+    properties:
+      alias:
+        description: |-
+          Alias names the input in the package's templates, and is the key the
+          console sends back when the user picks a connection.
+        type: string
+      contract:
+        description: |-
+          Contract names the contract the chosen connection must satisfy. It is what
+          makes the choice safe: only connections of that contract are offered.
+        type: string
+      default:
+        description: |-
+          Default is the template the package falls back to when the deployer picks
+          nothing. KuboCD forbids a literal here, so it is always rendered against
+          the Context: this is how an Environment says "here, the database is that
+          one" without the deployer naming it. The console must therefore leave the
+          parameter out rather than send an empty string, which would win over it.
+        type: string
+      description:
+        description: Description is shown next to the field.
+        type: string
+      optional:
+        description: Optional reports that the package tolerates no connection at
+          all.
+        type: boolean
+      parameter:
+        description: |-
+          Parameter is the package parameter carrying the chosen connection name,
+          derived from the input's namedConnection template. Empty when the input
+          binds some other way, in which case the console offers no choice.
+        type: string
+    type: object
   models.PlatformService:
     properties:
       category:
@@ -165,6 +518,8 @@ definitions:
       icon:
         type: string
       name:
+        type: string
+      repository:
         type: string
       versions:
         items:
@@ -308,8 +663,49 @@ definitions:
       status:
         type: string
     type: object
+  models.SelectableConnection:
+    properties:
+      description:
+        type: string
+      managed:
+        type: boolean
+      name:
+        type: string
+      providedBy:
+        description: ProvidedBy names the release publishing a managed connection.
+        type: string
+      scope:
+        type: string
+      status:
+        type: string
+      type:
+        type: string
+    type: object
+  models.ServiceConnection:
+    properties:
+      kind:
+        description: |-
+          Kind separates a Connection from a ClusterConnection, which may share a
+          name, and tells the console which page to link to.
+        type: string
+      name:
+        type: string
+      namespace:
+        type: string
+      resolved:
+        description: Resolved is false while the release is still waiting for it.
+        type: boolean
+    type: object
   models.ServiceInstance:
     properties:
+      connections:
+        description: |-
+          Connections is what the release actually resolved, published by the
+          controller. Without it the console can only show what a service asked
+          for, never what it runs against.
+        items:
+          $ref: '#/definitions/models.ServiceConnection'
+        type: array
       createdAt:
         type: string
       name:
@@ -319,6 +715,10 @@ definitions:
         type: object
       releaseName:
         type: string
+      roles:
+        items:
+          type: string
+        type: array
       service:
         type: string
       serviceTag:
@@ -582,28 +982,34 @@ info:
   title: OKDP Server New API
   version: "1.0"
 paths:
-  /api/catalog:
+  /api/capabilities:
     get:
-      description: Get the list of additional packages that clients can deploy on
-        their own
+      description: Capabilities the platform is configured with (identity provider,
+        user management, OIDC client provisioning), so the UI can adapt
       produces:
       - application/json
       responses:
         "200":
           description: OK
           schema:
-            items:
-              $ref: '#/definitions/models.CatalogCategory'
-            type: array
-        "500":
-          description: Internal Server Error
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-      summary: Get self-service catalog
+            $ref: '#/definitions/models.Capabilities'
+      summary: Get platform capabilities
       tags:
-      - catalog
+      - capabilities
+  /api/contracts:
+    get:
+      description: Descriptors of every contract, used to build the creation form,
+        plus whether connections can currently be persisted
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.ConnectionCatalogResponse'
+      summary: List the available contracts
+      tags:
+      - connections
   /api/platform-services:
     get:
       description: Get the list of managed OKDP services that can be deployed per
@@ -624,6 +1030,145 @@ paths:
               type: string
             type: object
       summary: List available platform services
+      tags:
+      - platform-services
+    post:
+      consumes:
+      - application/json
+      description: Expose a new managed service in the catalog (writes the default
+        KuboCD Context)
+      parameters:
+      - description: Catalog service
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.PlatformService'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/models.PlatformService'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Add a service to the catalog
+      tags:
+      - platform-services
+  /api/platform-services/{serviceName}:
+    delete:
+      description: Remove an exposed service from the catalog (writes the default
+        KuboCD Context)
+      parameters:
+      - description: Service name
+        in: path
+        name: serviceName
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Remove a catalog service
+      tags:
+      - platform-services
+    put:
+      consumes:
+      - application/json
+      description: Update an exposed service (versions, default, description, icon,
+        category)
+      parameters:
+      - description: Service name
+        in: path
+        name: serviceName
+        required: true
+        type: string
+      - description: Catalog service
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.PlatformService'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.PlatformService'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Update a catalog service
+      tags:
+      - platform-services
+  /api/platform-services/{serviceName}/inputs:
+    get:
+      parameters:
+      - description: Service name
+        in: path
+        name: serviceName
+        required: true
+        type: string
+      - description: Package version tag (defaults to Context CR tag)
+        in: query
+        name: tag
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/models.PackageInput'
+            type: array
+      summary: Connections a service's package declares it needs
       tags:
       - platform-services
   /api/platform-services/{serviceName}/schema:
@@ -825,6 +1370,317 @@ paths:
       summary: Get a project
       tags:
       - projects
+    put:
+      consumes:
+      - application/json
+      description: Update a project's mutable metadata (currently its description)
+      parameters:
+      - description: Project Name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Project Object
+        in: body
+        name: project
+        required: true
+        schema:
+          $ref: '#/definitions/models.Project'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.Project'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Project not found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Update a project
+      tags:
+      - projects
+  /api/projects/{name}/connections:
+    get:
+      description: Connections declared in the project namespace. Connections owned
+        by a deployed release are excluded; they are returned by the internal endpoint.
+      parameters:
+      - description: Project name (= Kubernetes namespace)
+        in: path
+        name: name
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/models.ConnectionResponse'
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: List the external connections of a project
+      tags:
+      - connections
+    post:
+      consumes:
+      - application/json
+      description: Stores the credential fields in a Kubernetes Secret and creates
+        the Connection CRD referencing it
+      parameters:
+      - description: Project name (= Kubernetes namespace)
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Connection
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.ConnectionRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/models.ConnectionResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "501":
+          description: Not Implemented
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Create an external connection in a project
+      tags:
+      - connections
+  /api/projects/{name}/connections/{connName}:
+    delete:
+      description: Removes the Connection CRD and the Secret holding its credentials
+      parameters:
+      - description: Project name (= Kubernetes namespace)
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Connection name
+        in: path
+        name: connName
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "501":
+          description: Not Implemented
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Delete an external connection of a project
+      tags:
+      - connections
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: Project name (= Kubernetes namespace)
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Connection name
+        in: path
+        name: connName
+        required: true
+        type: string
+      - description: Connection
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.ConnectionRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.ConnectionResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "501":
+          description: Not Implemented
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Update an external connection of a project
+      tags:
+      - connections
+  /api/projects/{name}/connections/{connName}/consumers:
+    get:
+      parameters:
+      - description: Project name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Connection name
+        in: path
+        name: connName
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/models.ConnectionConsumer'
+            type: array
+      summary: Services of the project bound to a connection
+      tags:
+      - connections
+  /api/projects/{name}/connections/internal:
+    get:
+      description: Connections provided by the services already deployed in the project,
+        that the project's other services can consume
+      parameters:
+      - description: Project name (= Kubernetes namespace)
+        in: path
+        name: name
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/models.InternalConnection'
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: List the internal connections of a project
+      tags:
+      - connections
+  /api/projects/{name}/connections/selectable:
+    get:
+      parameters:
+      - description: Project name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Contract the connections must satisfy
+        in: query
+        name: contract
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/models.SelectableConnection'
+            type: array
+      summary: Connections offered for a package input of a given contract
+      tags:
+      - connections
+  /api/projects/{name}/connections/test:
+    post:
+      consumes:
+      - application/json
+      description: 'Opens a real connection to the endpoint and checks the credentials.
+        Nothing is written to the cluster, so a connection can be validated before
+        being created. Always answers 200: the outcome is in the body.'
+      parameters:
+      - description: Project name (= Kubernetes namespace)
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Connection settings to probe
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.ConnectionTestRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.ConnectionTestResult'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Test a connection from the platform
+      tags:
+      - connections
   /api/projects/{name}/services:
     get:
       description: Get all deployed service instances for a project
