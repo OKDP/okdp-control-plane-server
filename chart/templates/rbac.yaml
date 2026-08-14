@@ -18,7 +18,25 @@ rules:
     resources: ["secrets"]
     verbs: ["get", "list", "create", "update", "delete"]
   - apiGroups: [""]
-    resources: ["pods", "pods/log"]
+    resources: ["pods"]
+    verbs: ["get", "list", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get", "list"]
+  # Read by the code but granted nowhere until now. Their failures are logged at
+  # Debug, so in a cluster the feature simply vanished: no reason shown for a
+  # stuck Release, no service URL, no volume reclaimed on deletion.
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list"]
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
     verbs: ["get", "list"]
   # Services carry the in-cluster endpoint of the internal connections a
   # project's deployed services expose.
@@ -35,7 +53,9 @@ rules:
     verbs: ["get", "list", "watch", "create", "update", "delete"]
   - apiGroups: ["kubauth.kubotal.io"]
     resources: ["oidcclients"]
-    verbs: ["get", "list"]
+    # delete: a service being removed takes its OIDC client with it
+    # (service_service.go, DeleteService)
+    verbs: ["get", "list", "delete"]
   # Secret management (External Secrets Operator)
   - apiGroups: ["external-secrets.io"]
     resources: ["secretstores", "externalsecrets"]
