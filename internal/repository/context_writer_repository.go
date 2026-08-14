@@ -13,21 +13,18 @@ import (
 	"k8s.io/client-go/util/retry"
 )
 
-// ContextWriterRepository manages the platform service catalog on the default
-// Context (spec.context.okdp.services).
+// ContextWriterRepository manages the platform service catalog on the platform
+// Context (spec.context.serviceCatalog.services).
 //
-// It used to also clone the default Context into a per-project one and re-sync it
-// on every deployment. That was dropped: the sync overwrote spec.context whole, so
-// a project could never differ from the default, and touching the default
-// reconciled every Release referencing it. KuboCD already does this properly,
-// through Config.defaultNamespaceContexts, which resolves an optional Context by
-// name in the namespace of each Release.
+// Per-project configuration is not its business: KuboCD resolves an optional
+// Context by name in the namespace of each Release, through
+// Config.defaultNamespaceContexts.
 type ContextWriterRepository interface {
-	// AddPlatformService appends a service to the default Context's okdp.services.
+	// AddPlatformService appends a service to the default Context's serviceCatalog.services.
 	AddPlatformService(ctx context.Context, svc models.PlatformService) error
-	// UpdatePlatformService replaces the service matching name in okdp.services.
+	// UpdatePlatformService replaces the service matching name in serviceCatalog.services.
 	UpdatePlatformService(ctx context.Context, name string, svc models.PlatformService) error
-	// RemovePlatformService drops the service matching name from okdp.services.
+	// RemovePlatformService drops the service matching name from serviceCatalog.services.
 	RemovePlatformService(ctx context.Context, name string) error
 }
 
@@ -45,7 +42,7 @@ func NewContextWriterRepository(client dynamic.Interface, defaultName, defaultNa
 	}
 }
 
-// mutateServices performs a read-modify-write on the default Context's okdp.services
+// mutateServices performs a read-modify-write on the default Context's serviceCatalog.services
 // list, retrying on resource-version conflicts so concurrent edits don't clobber each other.
 func (r *k8sContextWriterRepository) mutateServices(ctx context.Context, fn func(services []interface{}) ([]interface{}, error)) error {
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
@@ -54,9 +51,9 @@ func (r *k8sContextWriterRepository) mutateServices(ctx context.Context, fn func
 			return fmt.Errorf("failed to read default context %s/%s: %w", r.defaultNamespace, r.defaultName, err)
 		}
 
-		services, _, err := unstructured.NestedSlice(cur.Object, "spec", "context", "okdp", "services")
+		services, _, err := unstructured.NestedSlice(cur.Object, "spec", "context", "serviceCatalog", "services")
 		if err != nil {
-			return fmt.Errorf("failed to read okdp.services: %w", err)
+			return fmt.Errorf("failed to read serviceCatalog.services: %w", err)
 		}
 
 		updated, err := fn(services)
@@ -64,8 +61,8 @@ func (r *k8sContextWriterRepository) mutateServices(ctx context.Context, fn func
 			return err
 		}
 
-		if err := unstructured.SetNestedSlice(cur.Object, updated, "spec", "context", "okdp", "services"); err != nil {
-			return fmt.Errorf("failed to set okdp.services: %w", err)
+		if err := unstructured.SetNestedSlice(cur.Object, updated, "spec", "context", "serviceCatalog", "services"); err != nil {
+			return fmt.Errorf("failed to set serviceCatalog.services: %w", err)
 		}
 
 		_, err = r.client.Resource(contextGVR).Namespace(r.defaultNamespace).Update(ctx, cur, metav1.UpdateOptions{})
@@ -117,7 +114,7 @@ func (r *k8sContextWriterRepository) RemovePlatformService(ctx context.Context, 
 }
 
 // platformServiceToMap converts a PlatformService into the unstructured shape stored
-// under spec.context.okdp.services (versions as []interface{} of strings).
+// under spec.context.serviceCatalog.services (versions as []interface{} of strings).
 func platformServiceToMap(svc models.PlatformService) map[string]interface{} {
 	versions := make([]interface{}, 0, len(svc.Versions))
 	for _, v := range svc.Versions {

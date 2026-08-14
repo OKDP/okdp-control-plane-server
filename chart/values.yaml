@@ -10,8 +10,10 @@ image:
 configuration:
   platformNamespace: okdp-system
   kubocdNamespace: kubocd-system
-  contextName: default
-  contextNamespace: kubocd-system
+  # The platform Context, read by the server and written for its service
+  # catalog. Empty namespace: the namespace the server runs in.
+  contextName: platform
+  contextNamespace: ""
   # Single origin, set verbatim in the Access-Control-Allow-Origin header.
   allowedOrigins: https://okdp-ui.okdp.sandbox
   logLevel: info

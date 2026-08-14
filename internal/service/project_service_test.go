@@ -12,8 +12,7 @@ import (
 
 func TestListProjects(t *testing.T) {
 	mockRepo := new(mocks.ProjectRepository)
-	mockCtxRepo := new(mocks.ContextWriterRepository)
-	service := NewDefaultProjectService(mockRepo, mockCtxRepo)
+	service := NewDefaultProjectService(mockRepo)
 
 	ctx := context.Background()
 	expectedProjects := []models.Project{
@@ -32,8 +31,7 @@ func TestListProjects(t *testing.T) {
 
 func TestGetProject(t *testing.T) {
 	mockRepo := new(mocks.ProjectRepository)
-	mockCtxRepo := new(mocks.ContextWriterRepository)
-	service := NewDefaultProjectService(mockRepo, mockCtxRepo)
+	service := NewDefaultProjectService(mockRepo)
 
 	ctx := context.Background()
 	expectedProject := &models.Project{Name: "proj1", Description: "desc1"}
@@ -49,27 +47,22 @@ func TestGetProject(t *testing.T) {
 
 func TestCreateProject(t *testing.T) {
 	mockRepo := new(mocks.ProjectRepository)
-	mockCtxRepo := new(mocks.ContextWriterRepository)
-	service := NewDefaultProjectService(mockRepo, mockCtxRepo)
+	service := NewDefaultProjectService(mockRepo)
 
 	ctx := context.Background()
 	newProject := &models.Project{Name: "proj1", Description: "desc1"}
 
 	mockRepo.On("Create", ctx, newProject).Return(nil)
-	// CreateProject also provisions a per-project KuboCD Context CR cloned
-	// from the default one; the write is best-effort so a nil error is fine.
 
 	err := service.CreateProject(ctx, newProject)
 
 	assert.NoError(t, err)
 	mockRepo.AssertExpectations(t)
-	mockCtxRepo.AssertExpectations(t)
 }
 
 func TestDeleteProject(t *testing.T) {
 	mockRepo := new(mocks.ProjectRepository)
-	mockCtxRepo := new(mocks.ContextWriterRepository)
-	service := NewDefaultProjectService(mockRepo, mockCtxRepo)
+	service := NewDefaultProjectService(mockRepo)
 
 	ctx := context.Background()
 	projectToDelete := "proj1"
@@ -81,13 +74,11 @@ func TestDeleteProject(t *testing.T) {
 
 	assert.NoError(t, err)
 	mockRepo.AssertExpectations(t)
-	mockCtxRepo.AssertExpectations(t)
 }
 
 func TestDeleteProject_RepoError(t *testing.T) {
 	mockRepo := new(mocks.ProjectRepository)
-	mockCtxRepo := new(mocks.ContextWriterRepository)
-	service := NewDefaultProjectService(mockRepo, mockCtxRepo)
+	service := NewDefaultProjectService(mockRepo)
 
 	ctx := context.Background()
 	projectToDelete := "proj1"

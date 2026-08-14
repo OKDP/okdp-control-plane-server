@@ -2,7 +2,7 @@ package models
 
 // --- Platform Services (core OKDP, full lifecycle management) ---
 
-// PlatformService is a managed service available in the OKDP data platform (from Context okdp.services).
+// PlatformService is a managed service available in the OKDP data platform (from Context serviceCatalog.services).
 type PlatformService struct {
 	Name           string   `json:"name"`
 	Versions       []string `json:"versions"`

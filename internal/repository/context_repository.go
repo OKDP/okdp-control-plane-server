@@ -22,10 +22,10 @@ var contextGVR = schema.GroupVersionResource{
 
 // ContextRepository reads KuboCD Context CRs to extract platform configuration.
 type ContextRepository interface {
-	// GetPlatformServices returns the managed OKDP services (from spec.context.okdp.services).
+	// GetPlatformServices returns the managed OKDP services (from spec.context.serviceCatalog.services).
 	GetPlatformServices(ctx context.Context) ([]models.PlatformService, error)
 
-	// GetPackageRepository returns the OCI package repository prefix (from spec.context.okdp.packageRepository).
+	// GetPackageRepository returns the OCI package repository prefix (from spec.context.serviceCatalog.defaultRepository).
 	GetPackageRepository(ctx context.Context) (string, error)
 
 	// GetIngressSuffix returns the ingress domain suffix (from spec.context.ingress.suffix).
@@ -98,10 +98,10 @@ func (r *k8sContextRepository) GetPlatformServices(ctx context.Context) ([]model
 
 	rawServices, found, err := unstructured.NestedSlice(u.Object, "spec", "context", "serviceCatalog", "services")
 	if err != nil {
-		return nil, fmt.Errorf("failed to read okdp.services from Context: %w", err)
+		return nil, fmt.Errorf("failed to read serviceCatalog.services from Context: %w", err)
 	}
 	if !found {
-		logrus.Warn("No okdp.services found in Context CR")
+		logrus.Warn("No serviceCatalog.services found in Context CR")
 		return nil, nil
 	}
 
@@ -146,7 +146,7 @@ func (r *k8sContextRepository) GetPackageRepository(ctx context.Context) (string
 
 	repo, _, _ := unstructured.NestedString(u.Object, "spec", "context", "serviceCatalog", "defaultRepository")
 	if repo == "" {
-		return "", fmt.Errorf("okdp.packageRepository not found in Context %s/%s", r.namespace, r.name)
+		return "", fmt.Errorf("serviceCatalog.defaultRepository not found in Context %s/%s", r.namespace, r.name)
 	}
 	return repo, nil
 }
