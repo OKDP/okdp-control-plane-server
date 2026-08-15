@@ -71,6 +71,15 @@ func TestCandidateHosts(t *testing.T) {
 		}
 	})
 
+	t.Run("release name first, then the spark role convention (web proxy host)", func(t *testing.T) {
+		instance := &models.ServiceInstance{ReleaseName: "demo-spark-history", TargetNamespace: "demo", Roles: []string{"spark"}, Service: "spark-history-server"}
+		got := candidateHosts(instance, "okdp.sandbox")
+		want := []string{"demo-spark-history.okdp.sandbox", "spark-web-proxy-demo.okdp.sandbox", "spark-history-server-console-demo.okdp.sandbox", "spark-history-server-demo.okdp.sandbox"}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("got %v, want %v", got, want)
+		}
+	})
+
 	t.Run("roles with no known convention contribute no extra candidate", func(t *testing.T) {
 		instance := &models.ServiceInstance{ReleaseName: "demo-spark-operator", TargetNamespace: "demo", Roles: []string{"compute"}, Service: "spark-operator"}
 		got := candidateHosts(instance, "okdp.sandbox")

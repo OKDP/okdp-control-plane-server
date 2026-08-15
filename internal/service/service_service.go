@@ -652,6 +652,10 @@ func (s *DefaultServiceService) setURLIfExposed(ctx context.Context, instance *m
 // a single, stable host regardless of which backend/instance is deployed.
 var roleHostConventions = map[string]func(namespace string) string{
 	"storage": func(namespace string) string { return fmt.Sprintf("storage-%s", namespace) },
+	// The Spark UIs (history server and live driver UIs) are reached through
+	// the web proxy, whose Ingress host is a fixed prefix, not the release
+	// or service name.
+	"spark": func(namespace string) string { return fmt.Sprintf("spark-web-proxy-%s", namespace) },
 }
 
 // candidateHosts lists the Ingress hosts, in priority order, that could
