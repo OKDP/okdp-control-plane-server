@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -16,6 +17,12 @@ type IdentityHandler struct {
 
 func NewIdentityHandler(service service.IdentityService) *IdentityHandler {
 	return &IdentityHandler{service: service}
+}
+
+// Available reports whether the kubauth CRDs back this API, for the guard the
+// router puts in front of the whole group.
+func (h *IdentityHandler) Available(ctx context.Context) bool {
+	return h.service.Available(ctx)
 }
 
 // --- Users ---

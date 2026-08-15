@@ -1,4 +1,4 @@
-# Design Proposal — Identity management scope & provider-driven gating
+# Design Proposal: identity management scope & provider-driven gating
 
 ## 1. Problem
 
@@ -15,9 +15,9 @@ before wiring the enterprise IdP).
 
 Goal, per the direction agreed in #25:
 
-- **BYO OIDC by default** — the control plane only assumes a standard OIDC issuer.
+- **BYO OIDC by default**. The control plane only assumes a standard OIDC issuer.
 - **kubauth is an optional fallback**, never a hard dependency.
-- **The Identity API is driven by the platform configuration** — active when kubauth is
+- **The Identity API is driven by the platform configuration**, active when kubauth is
   configured, cleanly disabled otherwise (endpoints off, UI hides the section).
 
 ## 2. Current state
@@ -78,8 +78,8 @@ providers declaratively, without restarting the server.
 
 | `identity.provider` | `/api/v1/identity` | UI Identity section | `provisioning.provider` | OIDC client cleanup on service delete |
 |---|---|---|---|---|
-| `external` (default) | 404, endpoints off | hidden | `none` (default) | no-op |
-| `external` | 404 | hidden | `keycloak` | Keycloak Admin API |
+| `external` (default) | 501, endpoints off | hidden | `none` (default) | no-op |
+| `external` | 501 | hidden | `keycloak` | Keycloak Admin API |
 | `kubauth` | active (kubauth CRDs) | shown | `kubauth` | kubauth `OidcClient` CRD |
 
 The two axes are independent: e.g. an external Keycloak for identities
@@ -107,9 +107,9 @@ GET /api/capabilities
 ```
 
 The UI shows/hides the Identity section based on `identity.userManagement`, and builds its
-OIDC client from `identity.oidc` — so the console is configured by the platform instead of
+OIDC client from `identity.oidc`, so the console is configured by the platform instead of
 hard-coding an issuer and client at build time. `identity.oidc` is omitted when the Context
-does not set both `authority` and `clientId`; the UI then falls back to its build-time
+does not set both `authority` and `clientId`. The UI then falls back to its build-time
 configuration, which keeps existing deployments working.
 
 ### 3.4 What the Identity API is (and is not)
@@ -130,10 +130,10 @@ type OidcClientProvisioner interface {
 ```
 
 Implementations are per-IdP adapters selected per call from the Context:
-- `none` — no-op (default; client registration handled by an external IT process or
-  declarative seeding),
-- `kubauth` — manages `OidcClient` CRDs in `identity.kubauth.namespace`,
-- `keycloak` — Keycloak Admin REST API, service-account credentials from a Kubernetes
+- `none`: no-op, the default. Client registration is handled by an external IT process or
+  declarative seeding.
+- `kubauth`: manages `OidcClient` CRDs in `identity.kubauth.namespace`.
+- `keycloak`: Keycloak Admin REST API, service-account credentials from a Kubernetes
   Secret.
 
 `cleanupOidcClient` (service deletion) goes through this contract instead of talking to
@@ -143,37 +143,37 @@ kubauth directly.
 
 Handler → service → repository pattern, no breaking change:
 
-- `internal/repository/context_repository.go` — `GetIdentityProvider`,
+- `internal/repository/context_repository.go`: `GetIdentityProvider`,
   `GetIdentityOidcConfig`, `GetIdentityProvisioningProvider`,
-  `GetKeycloakProvisioningConfig`; `GetKubauthNamespace` reads
+  `GetKeycloakProvisioningConfig`. `GetKubauthNamespace` reads
   `identity.kubauth.namespace` (legacy `kubauth.namespace` still honored).
-- `internal/service/capability_service.go` — derives capabilities from the Context.
-- `internal/api/handlers/capabilities_handler.go` — `GET /api/capabilities` +
-  `RequireIdentityAPI()` gin middleware gating the `/api/v1/identity` group (404 when
-  `identity.provider != kubauth`).
-- `internal/repository/provisioning/` — `OidcClientProvisioner` contract, `none`/
+- `internal/service/capability_service.go`: derives capabilities from the Context.
+- `internal/api/handlers/capabilities_handler.go`: `GET /api/capabilities` +
+  `RequireIdentityAPI()` gin middleware gating the `/api/v1/identity` group (501 when
+  `identity.provider != kubauth`, or when it is kubauth and the CRDs are absent).
+- `internal/repository/provisioning/`: `OidcClientProvisioner` contract, `none`/
   `kubauth`/`keycloak` adapters, Context-driven selector.
-- `internal/repository/identity_repository.go` — kubauth namespace resolved per call
+- `internal/repository/identity_repository.go`: kubauth namespace resolved per call
   (Context first, `PLATFORM_NAMESPACE` fallback) instead of fixed at startup.
 
 ## 5. Compatibility
 
 - Existing kubauth-based environments keep working: set `identity.provider: kubauth`
-  (and optionally `identity.kubauth.namespace`; the legacy `kubauth.namespace` key and
-  `PLATFORM_NAMESPACE` fallback are preserved).
-- Environments without kubauth see the Identity endpoints disappear behind 404 — which
-  matches reality (they were failing against missing CRDs anyway).
-- No endpoint is removed; no request/response schema changes.
+  (and optionally `identity.kubauth.namespace`, the legacy `kubauth.namespace` key and
+  `PLATFORM_NAMESPACE` fallback being preserved).
+- Environments without kubauth get a 501 on the Identity endpoints, where they used to
+  fail against missing CRDs.
+- No endpoint is removed. No request or response schema changes.
 
 ## 6. Decisions
 
 | # | Question | Decision |
 |---|----------|----------|
-| 1 | Remove or gate the Identity API? | **Gate.** kubauth remains a supported optional fallback (#25); removal would break sandbox/time-to-market use cases. |
-| 2 | Neutral users/groups abstraction? | **No.** The API stays kubauth-specific; only OIDC client provisioning gets a provider-neutral contract. |
-| 3 | Gate resolution | Per request from the Context (no restart to switch providers). Cost: one Context GET per identity/capabilities call — acceptable, consistent with the rest of the server. |
-| 4 | Disabled response code | `404` (the endpoints are not part of the platform's surface), with an explanatory body pointing to `/api/capabilities`. |
-| 5 | `EnsureClient` call sites | Not wired yet: packages register their own clients declaratively today. The contract ships now so adapters are complete; wiring at deploy time is follow-up work. |
+| 1 | Remove or gate the Identity API? | **Gate.** kubauth remains a supported optional fallback (#25). Removal would break sandbox/time-to-market use cases. |
+| 2 | Neutral users/groups abstraction? | **No.** The API stays kubauth-specific. Only OIDC client provisioning gets a provider-neutral contract. |
+| 3 | Gate resolution | Per request from the Context (no restart to switch providers). Cost: one Context GET per identity/capabilities call, acceptable and consistent with the rest of the server. |
+| 4 | Disabled response code | `501`, carrying the `FeatureUnavailable` body the other optional features already answer (`reason: feature-not-installed`) and pointing to `/api/capabilities`. A 404 would not be distinguishable from a wrong path. |
+| 5 | `EnsureClient` call sites | Not wired yet: packages register their own clients declaratively today. The contract ships now so adapters are complete. Wiring at deploy time is follow-up work. |
 
 ## 7. Implementation status
 

@@ -2,7 +2,7 @@ package service
 
 import "testing"
 
-// prop runs one title through the parser and hands back the expanded property.
+// prop expands one title and returns the resulting property.
 func prop(t *testing.T, title string) map[string]any {
 	t.Helper()
 	out := parseTitleMetadata(map[string]any{
@@ -40,22 +40,18 @@ func TestTitleExpandsIntoUIHints(t *testing.T) {
 	}
 }
 
-// The reason for splitOptions. Every placeholder written in the wild holds a
-// space, and splitting on it left the form suggesting "e.g." and nothing else.
 func TestQuotedOptionKeepsItsSpaces(t *testing.T) {
 	p := prop(t, `Storage | Storage Size | | order:1 placeholder:"e.g. 10Gi, 50Gi" columns:2`)
 
 	if got := p["x-ui-placeholder"]; got != "e.g. 10Gi, 50Gi" {
 		t.Errorf("expected the whole placeholder, got %v", got)
 	}
-	// The options after the quoted one must still be read.
 	if got := p["x-ui-columns"]; got != 2 {
 		t.Errorf("expected columns to survive the quoted value, got %v", got)
 	}
 }
 
-// Unquoted options keep the old behaviour, so nothing already published moves.
-func TestUnquotedOptionsSplitAsBefore(t *testing.T) {
+func TestUnquotedOptionsSplitOnSpaces(t *testing.T) {
 	p := prop(t, "Auth | Session Timeout | | order:3 advanced:true")
 
 	if got := p["x-ui-order"]; got != 3 {
@@ -78,7 +74,6 @@ func TestConditionBecomesFieldAndValue(t *testing.T) {
 	}
 }
 
-// A title without a pipe is a plain label and must not grow UI hints.
 func TestPlainTitleIsLeftAlone(t *testing.T) {
 	p := prop(t, "Storage Size")
 

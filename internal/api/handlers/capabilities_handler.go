@@ -33,10 +33,11 @@ func (h *CapabilitiesHandler) GetCapabilities(c *gin.Context) {
 	c.JSON(http.StatusOK, caps)
 }
 
-// RequireIdentityAPI gates the kubauth-specific identity endpoints: they are
-// only part of the API surface when identity.provider is kubauth in the
-// Context. Resolved per request, so switching providers needs no restart.
-func (h *CapabilitiesHandler) RequireIdentityAPI() gin.HandlerFunc {
+// RequireIdentityAPI gates the identity endpoints on two conditions: the
+// configured provider must be kubauth, and its CRDs must be installed. Both
+// answer 501 with the FeatureUnavailable contract, with a distinct message. The
+// provider is resolved per request, so switching it needs no restart.
+func (h *CapabilitiesHandler) RequireIdentityAPI(crdsInstalled func(c *gin.Context) bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		enabled, err := h.service.IdentityAPIEnabled(c.Request.Context())
 		if err != nil {
@@ -44,9 +45,18 @@ func (h *CapabilitiesHandler) RequireIdentityAPI() gin.HandlerFunc {
 			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-		if !enabled {
-			c.AbortWithStatusJSON(http.StatusNotFound, gin.H{
-				"error": "identity API is disabled: identity.provider is not kubauth (see /api/capabilities)",
+		message := ""
+		switch {
+		case !enabled:
+			message = "Identity management is not available on this platform: identity.provider is not kubauth (see /api/capabilities)."
+		case !crdsInstalled(c):
+			message = "Identity management is unavailable: identity.provider is kubauth but its CRDs are not installed on this cluster."
+		}
+		if message != "" {
+			c.AbortWithStatusJSON(http.StatusNotImplemented, FeatureUnavailable{
+				Error:   message,
+				Reason:  ReasonFeatureNotInstalled,
+				Feature: identityFeature,
 			})
 			return
 		}

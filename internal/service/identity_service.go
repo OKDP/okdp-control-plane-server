@@ -12,6 +12,10 @@ import (
 )
 
 type IdentityService interface {
+	// Available reports whether the kubauth CRDs are installed, so the API can
+	// say the feature is absent instead of failing on every call.
+	Available(ctx context.Context) bool
+
 	// Users
 	ListUsers(ctx context.Context) ([]models.User, error)
 	GetUser(ctx context.Context, name string) (*models.User, error)
@@ -39,6 +43,10 @@ func NewDefaultIdentityService(repo repository.IdentityRepository) IdentityServi
 	return &defaultIdentityService{
 		repo: repo,
 	}
+}
+
+func (s *defaultIdentityService) Available(ctx context.Context) bool {
+	return s.repo.Available(ctx)
 }
 
 // --- Users ---

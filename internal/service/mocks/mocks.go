@@ -148,6 +148,11 @@ type IdentityRepository struct {
 	mock.Mock
 }
 
+func (m *IdentityRepository) Available(ctx context.Context) bool {
+	args := m.Called(ctx)
+	return args.Bool(0)
+}
+
 func (m *IdentityRepository) ListUsers(ctx context.Context) ([]models.User, error) {
 	args := m.Called(ctx)
 	return args.Get(0).([]models.User), args.Error(1)

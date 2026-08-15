@@ -13,12 +13,18 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 )
 
 // SecretStoreRepository defines Kubernetes operations for ESO SecretStore resources.
 // Unlike other repositories, namespace is passed per call (project = namespace).
 type SecretStoreRepository interface {
+	// Available reports whether the external-secrets CRDs are installed. A
+	// cluster without them carries no vault integration at all, which is a
+	// deployment choice rather than a failure.
+	Available(ctx context.Context) bool
+
 	Create(ctx context.Context, namespace string, store *crd.ESOSecretStore) error
 	Get(ctx context.Context, namespace, name string) (*crd.ESOSecretStore, error)
 	List(ctx context.Context, namespace string) ([]crd.ESOSecretStore, error)
@@ -36,13 +42,20 @@ type SecretStoreRepository interface {
 type k8sSecretStoreRepository struct {
 	client dynamic.Interface
 	gvr    schema.GroupVersionResource
+	probe  *APIProbe
 }
 
-func NewSecretStoreRepository(client dynamic.Interface) SecretStoreRepository {
+func NewSecretStoreRepository(client dynamic.Interface, discoveryClient discovery.DiscoveryInterface) SecretStoreRepository {
+	gvr := crd.GetSecretStoreGVR()
 	return &k8sSecretStoreRepository{
 		client: client,
-		gvr:    crd.GetSecretStoreGVR(),
+		gvr:    gvr,
+		probe:  NewAPIProbe(discoveryClient, gvr, "external-secrets"),
 	}
+}
+
+func (r *k8sSecretStoreRepository) Available(ctx context.Context) bool {
+	return r.probe.Available()
 }
 
 func (r *k8sSecretStoreRepository) Create(ctx context.Context, namespace string, store *crd.ESOSecretStore) error {
