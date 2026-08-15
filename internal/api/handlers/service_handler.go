@@ -280,8 +280,6 @@ func (h *ServiceHandler) StreamServices(c *gin.Context) {
 	}
 	defer watcher.Stop()
 
-	ingressSuffix, _ := h.service.GetIngressSuffix(c.Request.Context())
-
 	c.Writer.Flush()
 
 	for {
@@ -300,10 +298,7 @@ func (h *ServiceHandler) StreamServices(c *gin.Context) {
 				continue
 			}
 
-			if ingressSuffix != "" && instance.ReleaseName != "" {
-				instance.URL = fmt.Sprintf("https://%s.%s", instance.ReleaseName, ingressSuffix)
-			}
-
+			h.service.EnrichURL(c.Request.Context(), &instance)
 			h.service.EnrichPodHealth(c.Request.Context(), &instance)
 
 			c.SSEvent("message", gin.H{"type": event.Type, "object": instance})
@@ -353,7 +348,7 @@ func (h *ServiceHandler) GetServiceInputs(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	// A package with no inputs is the normal case today; answer an empty list
+	// A package with no inputs is the normal case today. Answer an empty list
 	// rather than null, so the console can iterate without a guard.
 	if inputs == nil {
 		inputs = []models.PackageInput{}

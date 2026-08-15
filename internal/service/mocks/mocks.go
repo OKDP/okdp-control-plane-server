@@ -342,6 +342,10 @@ func (m *ServiceService) GetProfileImages(ctx context.Context) (map[string][]mod
 	return args.Get(0).(map[string][]models.ProfileImage), args.Error(1)
 }
 
+func (m *ServiceService) EnrichURL(ctx context.Context, instance *models.ServiceInstance) {
+	m.Called(ctx, instance)
+}
+
 func (m *ServiceService) EnrichPodHealth(ctx context.Context, instance *models.ServiceInstance) {
 	m.Called(ctx, instance)
 }

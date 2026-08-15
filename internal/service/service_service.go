@@ -58,6 +58,7 @@ type ServiceService interface {
 
 	GetProfileImages(ctx context.Context) (map[string][]models.ProfileImage, error)
 
+	EnrichURL(ctx context.Context, instance *models.ServiceInstance)
 	EnrichPodHealth(ctx context.Context, instance *models.ServiceInstance)
 	ListPods(ctx context.Context, project, serviceName string) ([]models.Pod, error)
 	GetPodLogs(ctx context.Context, project, podName, container string, tailLines int64, follow bool) (io.ReadCloser, error)
@@ -726,6 +727,10 @@ func (s *DefaultServiceService) enrichWithPodHealth(ctx context.Context, instanc
 		prefix := instances[i].ReleaseName + "-"
 		instances[i].Status = s.checkPodHealth(podList.Items, prefix, instances[i].Status)
 	}
+}
+
+func (s *DefaultServiceService) EnrichURL(ctx context.Context, instance *models.ServiceInstance) {
+	s.setURLIfExposed(ctx, instance)
 }
 
 func (s *DefaultServiceService) EnrichPodHealth(ctx context.Context, instance *models.ServiceInstance) {
