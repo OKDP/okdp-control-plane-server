@@ -6,20 +6,14 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// FeatureUnavailable is the body returned when a route rests on CRDs the
-// cluster does not carry.
-//
-// The status is 501: the request is well formed and the route exists, this
-// installation just does not implement the feature. 500 said "the server
-// broke", which sent readers looking for a fault that was not there; an empty
-// 200 list would have been worse, claiming there is no user when the truth is
-// that we cannot know.
+// FeatureUnavailable is the 501 body returned when a route rests on CRDs the
+// cluster does not carry: the route exists, this installation does not
+// implement it. An empty 200 would claim there is no user rather than that we
+// cannot know.
 type FeatureUnavailable struct {
 	Error string `json:"error"`
-	// Reason is stable and machine-readable, so the console can tell this apart
-	// from a genuine failure without matching on the message.
-	Reason string `json:"reason"`
-	// Feature names what is missing, in the operator's words.
+	// Reason is stable. The console keys off it rather than off the message.
+	Reason  string `json:"reason"`
 	Feature string `json:"feature"`
 }
 
@@ -44,10 +38,8 @@ func abortUnavailable(c *gin.Context, available bool, feature, message string) b
 	return true
 }
 
-// RequireFeature guards a whole route group, which is what makes the guarantee
-// worth anything: a route added to the group later is covered without anyone
-// remembering to cover it. Guarding each handler by hand is how one route keeps
-// answering 500 long after the others were fixed.
+// RequireFeature guards a whole route group, so a route added later is covered
+// without anyone remembering to cover it.
 func RequireFeature(available func(c *gin.Context) bool, feature, message string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if !available(c) {

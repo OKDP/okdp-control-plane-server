@@ -17,21 +17,12 @@ const crdAvailabilityTTL = 30 * time.Second
 
 // APIProbe answers "is this custom resource served by the cluster?".
 //
-// Several features of the console rest on CRDs that an installation may simply
-// not have: the KuboCD connections, kubauth for identity, external-secrets for
-// the secret stores. Without this, a missing CRD surfaces as a 500 and reads as
-// a broken server rather than as a feature that was never installed.
-//
-// Asking discovery is the only unambiguous way to tell the two apart. The error
-// returned by a call on an unserved resource is a NotFound, exactly like the one
-// returned for an object that does not exist, so the error alone cannot carry
-// the distinction.
+// Discovery is the only unambiguous way to know: a call on an unserved resource
+// fails with a NotFound, exactly like a call for a missing object.
 type APIProbe struct {
 	discoveryClient discovery.DiscoveryInterface
 	gvr             schema.GroupVersionResource
-	// feature names the thing in a log line, in the operator's words rather
-	// than the API's ("kubauth identity", not "users.kubauth.kubotal.io").
-	feature string
+	feature         string
 
 	mu        sync.Mutex
 	available bool
@@ -42,9 +33,8 @@ func NewAPIProbe(discoveryClient discovery.DiscoveryInterface, gvr schema.GroupV
 	return &APIProbe{discoveryClient: discoveryClient, gvr: gvr, feature: feature}
 }
 
-// Available reports whether the resource is served. A positive result is kept
-// for the lifetime of the process, CRDs do not go away in practice; a negative
-// one is re-probed, so installing them takes effect without a restart.
+// Available caches a positive answer for the process lifetime and re-probes a
+// negative one, so installing the CRDs takes effect without a restart.
 func (p *APIProbe) Available() bool {
 	if p == nil {
 		return false
@@ -67,8 +57,7 @@ func (p *APIProbe) Available() bool {
 	groupVersion := p.gvr.GroupVersion().String()
 	resources, err := p.discoveryClient.ServerResourcesForGroupVersion(groupVersion)
 	if err != nil {
-		// A missing group is the expected state on an installation that does not
-		// carry the feature, not a failure worth logging on every request.
+		// A missing group is expected, not a failure worth logging every time.
 		if !apierrors.IsNotFound(err) {
 			logrus.WithError(err).WithField("feature", p.feature).Debug("Could not discover the CRDs")
 		}
