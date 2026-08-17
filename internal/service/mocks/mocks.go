@@ -326,6 +326,11 @@ func (m *ServiceService) WatchServices(ctx context.Context, project string) (wat
 	return args.Get(0).(watch.Interface), args.Error(1)
 }
 
+func (m *ServiceService) GetMenuCategories(ctx context.Context) ([]models.MenuCategory, error) {
+	args := m.Called(ctx)
+	return args.Get(0).([]models.MenuCategory), args.Error(1)
+}
+
 func (m *ServiceService) GetCatalog(ctx context.Context) ([]models.CatalogCategory, error) {
 	args := m.Called(ctx)
 	return args.Get(0).([]models.CatalogCategory), args.Error(1)

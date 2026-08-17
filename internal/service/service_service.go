@@ -52,6 +52,8 @@ type ServiceService interface {
 	DeleteService(ctx context.Context, project, name string) error
 	WatchServices(ctx context.Context, project string) (watch.Interface, error)
 
+	GetMenuCategories(ctx context.Context) ([]models.MenuCategory, error)
+
 	GetCatalog(ctx context.Context) ([]models.CatalogCategory, error)
 
 	GetIngressSuffix(ctx context.Context) (string, error)
@@ -504,6 +506,10 @@ func (s *DefaultServiceService) WatchServices(ctx context.Context, project strin
 }
 
 // --- Catalog (self-service) ---
+
+func (s *DefaultServiceService) GetMenuCategories(ctx context.Context) ([]models.MenuCategory, error) {
+	return s.contextRepo.GetMenuCategories(ctx)
+}
 
 func (s *DefaultServiceService) GetCatalog(ctx context.Context) ([]models.CatalogCategory, error) {
 	return s.contextRepo.GetCatalog(ctx)
