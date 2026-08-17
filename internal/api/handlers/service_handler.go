@@ -46,6 +46,24 @@ func (h *ServiceHandler) GetPlatformServices(c *gin.Context) {
 	c.JSON(http.StatusOK, services)
 }
 
+// GetMenuCategories godoc
+// @Summary      List console navigation categories
+// @Description  Get the ordered menu sections (key, label, icon, order) the console groups services under
+// @Tags         platform-services
+// @Produce      json
+// @Success      200  {array}   models.MenuCategory
+// @Failure      500  {object}  map[string]string
+// @Router       /api/platform-categories [get]
+func (h *ServiceHandler) GetMenuCategories(c *gin.Context) {
+	categories, err := h.service.GetMenuCategories(c.Request.Context())
+	if err != nil {
+		logrus.WithError(err).Error("Failed to get menu categories")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, categories)
+}
+
 // CreatePlatformService godoc
 // @Summary      Add a service to the catalog
 // @Description  Expose a new managed service in the catalog (writes the default KuboCD Context)

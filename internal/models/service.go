@@ -11,6 +11,26 @@ type PlatformService struct {
 	Icon           string   `json:"icon,omitempty"`
 	Category       string   `json:"category,omitempty"`
 	Repository     string   `json:"repository,omitempty"`
+	// Label is the display name shown in the console menu; the service `name`
+	// (its identity and route) is used when empty.
+	Label string `json:"label,omitempty"`
+	// ExposesUI is false for infrastructure-only packages (operators, storage
+	// backends) that have no console page, and nil when the catalog does not set
+	// it, which the console treats as exposing a UI. It lets the catalog-driven
+	// menu leave purely infrastructural packages out of the navigation.
+	ExposesUI *bool `json:"exposesUI,omitempty"`
+}
+
+// MenuCategory describes a console navigation section, read from the Context
+// (spec.context.okdp.categories). It gives the per-service `category` key a
+// display label, an optional icon and an order, so the console can render an
+// ordered, labeled menu driven by the catalog instead of hardcoding the
+// section list in the UI.
+type MenuCategory struct {
+	Key   string `json:"key"`
+	Label string `json:"label"`
+	Icon  string `json:"icon,omitempty"`
+	Order int    `json:"order"`
 }
 
 // ProfileImage represents an available container image for a JupyterHub profile type.
