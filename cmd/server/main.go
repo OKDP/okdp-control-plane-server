@@ -10,7 +10,6 @@ import (
 	"github.com/okdp/okdp-control-plane-server/internal/api/handlers"
 	"github.com/okdp/okdp-control-plane-server/internal/api/router"
 	"github.com/okdp/okdp-control-plane-server/internal/config"
-	"github.com/okdp/okdp-control-plane-server/internal/models"
 	"github.com/okdp/okdp-control-plane-server/internal/repository"
 	"github.com/okdp/okdp-control-plane-server/internal/repository/provisioning"
 	"github.com/okdp/okdp-control-plane-server/internal/service"
@@ -80,9 +79,13 @@ func main() {
 	// Initialize Identity stack. The namespace is read per call from the Context,
 	// and the discovery client tells whether the kubauth CRDs are there at all.
 	kubauthNamespace := func(ctx context.Context) string {
-		if ns, err := contextRepo.GetKubauthNamespace(ctx); err == nil {
+		ns, err := contextRepo.GetKubauthNamespace(ctx)
+		if err == nil {
 			return ns
 		}
+		// Falling back silently would read and write the CRs in a namespace the
+		// kubauth controller does not watch, and answer 200 all along.
+		logrus.WithError(err).Warnf("Could not read the kubauth namespace, falling back to %s", cfg.PlatformNamespace)
 		return cfg.PlatformNamespace
 	}
 	identityRepo := repository.NewIdentityRepository(k8sClient, k8sDiscoveryClient, kubauthNamespace)
@@ -164,7 +167,7 @@ func checkIdentityConfiguration(ctx context.Context, contextRepo repository.Cont
 	identity, err := contextRepo.GetIdentity(ctx)
 	if err != nil {
 		// A block that is present and wrong is a configuration error worth
-		// stopping for; the two are told apart by the error the repository
+		// stopping for. The two are told apart by the error the repository
 		// returns, which only validates what it found.
 		if identity != nil {
 			logrus.Fatalf("Invalid oidc client-provisioning configuration: %v", err)
@@ -173,12 +176,26 @@ func checkIdentityConfiguration(ctx context.Context, contextRepo repository.Cont
 		return
 	}
 
-	if identity.ProvisionsWithKubauth() && !identityRepo.Available(ctx) {
-		logrus.Fatalf(
-			"oidc.clientProvisioning is %q but the kubauth CRDs are not installed on this cluster. "+
-				"Install kubauth, or set it to %q if another mechanism makes the OAuth client Secrets.",
-			models.ClientProvisioningKubauth, models.ClientProvisioningExisting)
+	// The check follows the field the provisioner actually resolves from, so a
+	// platform accepted here is a platform whose clients really get unmade.
+	provider, err := contextRepo.GetIdentityProvisioningProvider(ctx)
+	if err != nil {
+		logrus.WithError(err).Warn("Could not read identity.provisioning.provider, assuming clients are provisioned elsewhere")
+		return
 	}
 
-	logrus.WithField("clientProvisioning", identity.ClientProvisioning).Info("Identity configuration accepted")
+	if provider == provisioning.ProviderKubauth {
+		if !identityRepo.Available(ctx) {
+			logrus.Fatalf(
+				"identity.provisioning.provider is %q but the kubauth CRDs are not installed on this cluster. "+
+					"Install kubauth, or set it to %q if another mechanism makes the OAuth client Secrets.",
+				provisioning.ProviderKubauth, provisioning.ProviderNone)
+		}
+		if _, err := contextRepo.GetKubauthNamespace(ctx); err != nil {
+			logrus.Fatalf("identity.provisioning.provider is %q but the kubauth namespace is unreadable: %v",
+				provisioning.ProviderKubauth, err)
+		}
+	}
+
+	logrus.WithField("provisioningProvider", provider).Info("Identity configuration accepted")
 }
