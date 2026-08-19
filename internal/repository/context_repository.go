@@ -407,7 +407,6 @@ func (r *k8sContextRepository) getContext(ctx context.Context) (*unstructured.Un
 	return r.client.Resource(contextGVR).Namespace(r.namespace).Get(ctx, r.name, metav1.GetOptions{})
 }
 
-
 func getString(m map[string]interface{}, key string) string {
 	if v, ok := m[key]; ok {
 		if s, ok := v.(string); ok {
