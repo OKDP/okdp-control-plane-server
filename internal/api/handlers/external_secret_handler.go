@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
@@ -20,6 +21,12 @@ type ExternalSecretHandler struct {
 // NewExternalSecretHandler creates a new ExternalSecretHandler
 func NewExternalSecretHandler(service service.ExternalSecretService) *ExternalSecretHandler {
 	return &ExternalSecretHandler{service: service}
+}
+
+// Available reports whether the ExternalSecret CRD backs this API, for the
+// guard the router puts in front of the external-secret group.
+func (h *ExternalSecretHandler) Available(ctx context.Context) bool {
+	return h.service.Available(ctx)
 }
 
 // ListExternalSecrets godoc

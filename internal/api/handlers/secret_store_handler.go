@@ -22,9 +22,8 @@ func NewSecretStoreHandler(service service.SecretStoreService) *SecretStoreHandl
 	return &SecretStoreHandler{service: service}
 }
 
-// Available reports whether the external-secrets CRDs back this API, for the
-// guard the router puts in front of the secret-store and external-secret
-// groups: both speak to the same operator, so one probe answers for both.
+// Available reports whether the SecretStore CRD backs this API, for the guard
+// the router puts in front of the secret-store group.
 func (h *SecretStoreHandler) Available(ctx context.Context) bool {
 	return h.service.Available(ctx)
 }

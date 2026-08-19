@@ -70,14 +70,22 @@ func SetupRouter(cfg *config.Config, capabilitiesHandler *handlers.CapabilitiesH
 		requireProject := middleware.RequireProject(projectHandler.Resolve)
 
 		// Both groups rest on the external-secrets CRDs, absent from a cluster
-		// with no vault integration.
-		requireESO := handlers.RequireFeature(
+		// with no vault integration. Each group is gated on the CRD it actually
+		// uses: a rolling install can serve one and not the other, and the
+		// answer must be the 501 rather than a failure deeper in.
+		esoUnavailable := "Vault integration is not available on this cluster: the external-secrets CRDs are not installed."
+		requireSecretStores := handlers.RequireFeature(
 			func(c *gin.Context) bool { return secretStoreHandler.Available(c.Request.Context()) },
 			"external-secrets",
-			"Vault integration is not available on this cluster: the external-secrets CRDs are not installed.",
+			esoUnavailable,
+		)
+		requireExternalSecrets := handlers.RequireFeature(
+			func(c *gin.Context) bool { return externalSecretHandler.Available(c.Request.Context()) },
+			"external-secrets",
+			esoUnavailable,
 		)
 
-		secretStores := api.Group("/projects/:name/secret-stores", requireProject, requireESO)
+		secretStores := api.Group("/projects/:name/secret-stores", requireProject, requireSecretStores)
 		{
 			secretStores.GET("", secretStoreHandler.ListSecretStores)
 			secretStores.POST("", secretStoreHandler.CreateSecretStore)
@@ -88,7 +96,7 @@ func SetupRouter(cfg *config.Config, capabilitiesHandler *handlers.CapabilitiesH
 		}
 
 		// External Secrets (scoped per project namespace)
-		externalSecrets := api.Group("/projects/:name/external-secrets", requireProject, requireESO)
+		externalSecrets := api.Group("/projects/:name/external-secrets", requireProject, requireExternalSecrets)
 		{
 			externalSecrets.GET("", externalSecretHandler.ListExternalSecrets)
 			externalSecrets.POST("", externalSecretHandler.CreateExternalSecret)
