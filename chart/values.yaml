@@ -15,7 +15,7 @@ configuration:
   contextName: platform
   contextNamespace: ""
   # Single origin, set verbatim in the Access-Control-Allow-Origin header.
-  allowedOrigins: https://okdp-ui.okdp.sandbox
+  allowedOrigins: https://okdp-ui.example.com
   logLevel: info
   releaseInterval: 30m
   releaseTimeout: 10m
