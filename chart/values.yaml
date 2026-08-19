@@ -1,7 +1,7 @@
 replicaCount: 1
 
 image:
-  repository: quay.io/okdp/images/okdp-server
+  repository: quay.io/okdp/images/okdp-control-plane-server
   # Defaults to the chart appVersion.
   tag: ""
   pullPolicy: IfNotPresent
