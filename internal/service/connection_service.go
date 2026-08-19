@@ -253,14 +253,15 @@ func (s *DefaultConnectionService) Update(ctx context.Context, namespace, name s
 	secretNamespace := namespace
 	secretName := name + credentialsSecretSuffix
 
+	// Set when the connection moves off a Secret we owned. The old Secret is
+	// dropped only once the new reference is persisted, otherwise a failed
+	// update leaves the stored connection pointing at a Secret that no longer
+	// exists.
+	orphanedSecret := ""
+
 	if req.ExistingSecret != "" {
-		// Switched to, or kept on, a Secret owned elsewhere. A Secret we owned
-		// until now has no other reference left, and the delete path will read
-		// the connection as unowned, so it goes here or it never goes.
 		if previous, owned := credentialsSecretOf(existing, name); owned && previous != req.ExistingSecret {
-			if err := s.repo.DeleteSecret(ctx, secretNamespace, previous); err != nil {
-				logrus.WithError(err).WithField("secret", previous).Warn("Failed to remove the credentials secret left behind by a connection now pointing elsewhere")
-			}
+			orphanedSecret = previous
 		}
 		public[valueSecretRef] = req.ExistingSecret
 		existing.Annotations = withCredentialsSecret(existing.Annotations, secretNamespace+"/"+req.ExistingSecret, false)
@@ -290,6 +291,12 @@ func (s *DefaultConnectionService) Update(ctx context.Context, namespace, name s
 
 	if err := s.repo.Update(ctx, namespace, existing); err != nil {
 		return nil, err
+	}
+
+	if orphanedSecret != "" {
+		if err := s.repo.DeleteSecret(ctx, secretNamespace, orphanedSecret); err != nil {
+			logrus.WithError(err).WithField("secret", orphanedSecret).Warn("Failed to remove the credentials secret left behind by a connection now pointing elsewhere")
+		}
 	}
 
 	response := s.toResponse(existing, namespace)

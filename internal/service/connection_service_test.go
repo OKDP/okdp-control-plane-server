@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -815,4 +816,41 @@ func TestUpdateToAnExistingSecretRemovesTheOneItOwned(t *testing.T) {
 
 	connectionRepo.AssertCalled(t, "DeleteSecret", mock.Anything, "demo", "warehouse-credentials")
 	assert.Equal(t, "warehouse-from-vault", existing.Spec.Values["secretRef"])
+}
+
+// A failed update must not take the credentials with it. The stored connection
+// still points at the Secret we owned, so dropping it would break the workloads
+// mounting it while the API reports the update as failed.
+func TestUpdateKeepsTheOwnedSecretWhenTheUpdateFails(t *testing.T) {
+	svc, connectionRepo, _ := newServiceUnderTest(t, true)
+
+	existing := &crd.Connection{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "warehouse",
+			Namespace: "demo",
+			Annotations: map[string]string{
+				AnnotationCredentialsSecret: "demo/warehouse-credentials",
+				AnnotationCredentialsOwned:  "true",
+			},
+		},
+		Spec: crd.ConnectionSpec{
+			Contract: "database-server",
+			Values:   map[string]any{"secretRef": "warehouse-credentials"},
+		},
+	}
+	connectionRepo.On("Get", mock.Anything, "demo", "warehouse").Return(existing, nil)
+	connectionRepo.On("Update", mock.Anything, "demo", mock.Anything).Return(errors.New("the object has been modified"))
+	connectionRepo.On("SecretKeys", mock.Anything, "demo", "warehouse-from-vault").
+		Return([]string{"password", "username"}, true, nil)
+	connectionRepo.On("DeleteSecret", mock.Anything, "demo", "warehouse-credentials").Return(nil)
+
+	req := postgresRequest()
+	req.ExistingSecret = "warehouse-from-vault"
+	delete(req.Values, "password")
+	delete(req.Values, "username")
+
+	_, err := svc.Update(context.Background(), "demo", "warehouse", req)
+	require.Error(t, err)
+
+	connectionRepo.AssertNotCalled(t, "DeleteSecret", mock.Anything, "demo", "warehouse-credentials")
 }
