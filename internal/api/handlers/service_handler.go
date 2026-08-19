@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"bufio"
 	"errors"
 	"fmt"
 	"net/http"
@@ -568,7 +567,7 @@ func (h *ServiceHandler) GetPodLogs(c *gin.Context) {
 		w.Header().Set("Transfer-Encoding", "chunked")
 		w.Flush()
 
-		scanner := bufio.NewScanner(stream)
+		scanner := newLogStreamScanner(stream)
 		for scanner.Scan() {
 			select {
 			case <-c.Request.Context().Done():
@@ -577,6 +576,11 @@ func (h *ServiceHandler) GetPodLogs(c *gin.Context) {
 				c.SSEvent("message", scanner.Text())
 				w.Flush()
 			}
+		}
+		if err := scanner.Err(); err != nil {
+			logrus.WithError(err).Warn("Log stream ended on a scanner error")
+			c.SSEvent("error", logStreamErrorMessage(err))
+			w.Flush()
 		}
 	} else {
 		c.Header("Content-Type", "text/plain; charset=utf-8")
