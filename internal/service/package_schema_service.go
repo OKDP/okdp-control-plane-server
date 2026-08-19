@@ -131,11 +131,11 @@ func (s *DefaultPackageSchemaService) listOCITags(packageRepo, serviceName strin
 	if insecureOCIHost(packageRepo, s.insecureRegistries) {
 		scheme = "http"
 	}
-	registryURL := fmt.Sprintf("%s://%s/v2/%s/tags/list",
-		scheme,
-		strings.SplitN(packageRepo, "/", 2)[0],
-		strings.SplitN(packageRepo, "/", 2)[1]+"/"+serviceName,
-	)
+	host, path, found := strings.Cut(packageRepo, "/")
+	if !found || path == "" {
+		return nil, fmt.Errorf("package repository %q carries no path, it must be like registry/namespace", packageRepo)
+	}
+	registryURL := fmt.Sprintf("%s://%s/v2/%s/tags/list", scheme, host, path+"/"+serviceName)
 
 	resp, err := registryGet(registryURL)
 	if err != nil {
@@ -222,7 +222,7 @@ func parseBearerChallenge(header string) (realm string, params url.Values, err e
 }
 
 // fetchAnonymousToken resolves a bearer challenge by requesting a token from
-// its realm without credentials — registries grant pull tokens anonymously
+// its realm without credentials, registries grant pull tokens anonymously
 // for public repositories.
 func fetchAnonymousToken(challenge string) (string, error) {
 	realm, params, err := parseBearerChallenge(challenge)
@@ -559,11 +559,11 @@ func parametersOf(doc map[string]any) (map[string]any, error) {
 }
 
 // namedConnectionParameter finds the parameter reference in the template a
-// package uses to let the user pick the connection — typically
+// package uses to let the user pick the connection, typically
 // `{{ .Parameters.pgConnection | default "-" }}`. Pipelines around it are the
 // norm (the default is how an optional input expresses "none"), so this
 // searches for the reference rather than matching the whole template. An input
-// bound any other way — a fixed name, a release output — has no reference and
+// bound any other way (a fixed name, a release output) has no reference and
 // offers the user no choice.
 var namedConnectionParameter = regexp.MustCompile(`\.Parameters\.([A-Za-z_][A-Za-z0-9_]*)`)
 
@@ -624,7 +624,7 @@ func inputsOf(doc map[string]any) []models.PackageInput {
 // Only top-level parameters are reported: a ref nested in an array generates
 // one input per element, which no deployment form can offer a static choice
 // for. connectionSelector markers are skipped for the same reason the picker
-// would skip them — the package queries by labels, the user provides nothing.
+// would skip them, the package queries by labels, the user provides nothing.
 func inputsFromMarkers(doc map[string]any) []models.PackageInput {
 	schemaSection, ok := doc["schema"].(map[string]any)
 	if !ok {
