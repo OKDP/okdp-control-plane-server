@@ -26,6 +26,7 @@ type APIProbe struct {
 
 	mu        sync.Mutex
 	available bool
+	probing   bool
 	checkedAt time.Time
 }
 
@@ -35,21 +36,39 @@ func NewAPIProbe(discoveryClient discovery.DiscoveryInterface, gvr schema.GroupV
 
 // Available caches a positive answer for the process lifetime and re-probes a
 // negative one, so installing the CRDs takes effect without a restart.
+//
+// The discovery call runs outside the lock: holding it would queue every
+// request gated on this probe behind a slow API server, for a question whose
+// answer is already known.
 func (p *APIProbe) Available() bool {
 	if p == nil {
 		return false
 	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
 
-	if p.available {
+	p.mu.Lock()
+	switch {
+	case p.available:
+		p.mu.Unlock()
 		return true
-	}
-	if !p.checkedAt.IsZero() && time.Since(p.checkedAt) < crdAvailabilityTTL {
+	case p.probing, !p.checkedAt.IsZero() && time.Since(p.checkedAt) < crdAvailabilityTTL:
+		p.mu.Unlock()
 		return false
 	}
-	p.checkedAt = time.Now()
+	p.probing = true
+	p.mu.Unlock()
 
+	available := p.probe()
+
+	p.mu.Lock()
+	p.probing = false
+	p.checkedAt = time.Now()
+	p.available = available
+	p.mu.Unlock()
+
+	return available
+}
+
+func (p *APIProbe) probe() bool {
 	if p.discoveryClient == nil {
 		return false
 	}
@@ -66,7 +85,6 @@ func (p *APIProbe) Available() bool {
 
 	for _, resource := range resources.APIResources {
 		if resource.Name == p.gvr.Resource {
-			p.available = true
 			logrus.WithField("feature", p.feature).Info("CRDs detected: the feature is enabled")
 			return true
 		}
