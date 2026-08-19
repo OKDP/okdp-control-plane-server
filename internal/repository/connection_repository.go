@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 
@@ -185,6 +186,11 @@ func (r *k8sConnectionRepository) SecretKeys(ctx context.Context, namespace, nam
 	return keys, true, nil
 }
 
+// ErrForeignSecret is returned when the credentials name is already taken by a
+// Secret this server does not own. Adopting it would put someone else's data
+// under our lifecycle.
+var ErrForeignSecret = errors.New("the credentials secret already exists and is not managed by the control plane")
+
 func (r *k8sConnectionRepository) CreateOrUpdateSecret(ctx context.Context, namespace, name string, data map[string][]byte) error {
 	if namespace == "" {
 		return fmt.Errorf("a namespace is required to store credentials")
@@ -207,6 +213,14 @@ func (r *k8sConnectionRepository) CreateOrUpdateSecret(ctx context.Context, name
 	}
 	if err != nil {
 		return err
+	}
+
+	// The credentials name is derived from the connection name, so a Secret
+	// someone else put there is reachable by picking that name. Writing into it
+	// would also make us its owner, and the delete path would take it away with
+	// the connection.
+	if existing.Labels[crd.LabelManagedBy] != crd.ManagedByValue {
+		return fmt.Errorf("%w: secret %q in namespace %q", ErrForeignSecret, name, namespace)
 	}
 
 	// Merge rather than replace. The console only resubmits the credentials the

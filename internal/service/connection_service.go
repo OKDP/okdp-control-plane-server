@@ -111,6 +111,16 @@ func invalid(format string, args ...any) error {
 	return &ValidationError{message: fmt.Sprintf(format, args...)}
 }
 
+// storeCredentialsError turns a refused adoption into a rejected input: naming
+// a Secret the control plane does not own is a bad request, not a platform
+// failure, and the console can say which name to change.
+func storeCredentialsError(err error) error {
+	if errors.Is(err, repository.ErrForeignSecret) {
+		return invalid("%v", err)
+	}
+	return fmt.Errorf("failed to store the credentials: %w", err)
+}
+
 // IsValidationError reports whether err is a rejected user input.
 func IsValidationError(err error) bool {
 	var validationErr *ValidationError
@@ -180,7 +190,7 @@ func (s *DefaultConnectionService) Create(ctx context.Context, namespace string,
 		public[valueSecretRef] = secretName
 	} else if len(secrets) > 0 {
 		if err := s.repo.CreateOrUpdateSecret(ctx, secretNamespace, secretName, secrets); err != nil {
-			return nil, fmt.Errorf("failed to store the credentials: %w", err)
+			return nil, storeCredentialsError(err)
 		}
 		// Tell consumers where the credentials are, so a package can bind them.
 		public[valueSecretRef] = secretName
@@ -259,7 +269,7 @@ func (s *DefaultConnectionService) Update(ctx context.Context, namespace, name s
 		// write the Secret when new values actually arrived, otherwise an edit
 		// of, say, the port would blank out the password.
 		if err := s.repo.CreateOrUpdateSecret(ctx, secretNamespace, secretName, secrets); err != nil {
-			return nil, fmt.Errorf("failed to store the credentials: %w", err)
+			return nil, storeCredentialsError(err)
 		}
 		public[valueSecretRef] = secretName
 		existing.Annotations = withCredentialsSecret(existing.Annotations, secretNamespace+"/"+secretName, true)
