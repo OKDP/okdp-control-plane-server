@@ -1,10 +1,14 @@
 package repository
 
 import (
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/discovery"
 	fakediscovery "k8s.io/client-go/discovery/fake"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 )
@@ -110,5 +114,81 @@ func TestProbeWithoutDiscoveryIsUnavailable(t *testing.T) {
 
 	if probe.Available() {
 		t.Fatal("expected an unavailable feature with no discovery client")
+	}
+}
+
+// slowDiscovery answers after a delay, standing in for an API server that is
+// slow to reply on a cold start.
+type slowDiscovery struct {
+	discovery.DiscoveryInterface
+	delay time.Duration
+	calls atomic.Int32
+}
+
+func (d *slowDiscovery) ServerResourcesForGroupVersion(groupVersion string) (*metav1.APIResourceList, error) {
+	d.calls.Add(1)
+	time.Sleep(d.delay)
+	return d.DiscoveryInterface.ServerResourcesForGroupVersion(groupVersion)
+}
+
+// Callers arriving while the first probe runs must get its answer. Reporting
+// "unavailable" to them turns a cold start into 501s on a cluster that does
+// carry the CRDs.
+func TestProbeMakesConcurrentCallersWaitForTheAnswer(t *testing.T) {
+	slow := &slowDiscovery{
+		DiscoveryInterface: discoveryServing(t, &metav1.APIResourceList{
+			GroupVersion: usersGVR.GroupVersion().String(),
+			APIResources: []metav1.APIResource{{Name: "users", Kind: "User"}},
+		}),
+		delay: 50 * time.Millisecond,
+	}
+	probe := NewAPIProbe(slow, usersGVR, "kubauth identity")
+
+	const callers = 8
+	results := make(chan bool, callers)
+	var gate sync.WaitGroup
+	gate.Add(1)
+	for i := 0; i < callers; i++ {
+		go func() {
+			gate.Wait()
+			results <- probe.Available()
+		}()
+	}
+	gate.Done()
+
+	for i := 0; i < callers; i++ {
+		if !<-results {
+			t.Fatal("expected every concurrent caller to see the feature as available")
+		}
+	}
+	if calls := slow.calls.Load(); calls != 1 {
+		t.Fatalf("expected the probe to run once for all callers, ran %d times", calls)
+	}
+}
+
+// kubauth serves users but not groups: a half-installed CRD set must not pass
+// for the feature being there, or the routes answer 200 for users and fail on
+// groups.
+func TestProbeRequiresEveryDeclaredResource(t *testing.T) {
+	discoveryClient := discoveryServing(t, &metav1.APIResourceList{
+		GroupVersion: usersGVR.GroupVersion().String(),
+		APIResources: []metav1.APIResource{{Name: "users", Kind: "User"}},
+	})
+
+	partial := NewAPIProbe(discoveryClient, usersGVR, "kubauth identity", "groups", "groupbindings")
+	if partial.Available() {
+		t.Fatal("expected the feature to be unavailable while groups and groupbindings are not served")
+	}
+
+	complete := NewAPIProbe(discoveryServing(t, &metav1.APIResourceList{
+		GroupVersion: usersGVR.GroupVersion().String(),
+		APIResources: []metav1.APIResource{
+			{Name: "users", Kind: "User"},
+			{Name: "groups", Kind: "Group"},
+			{Name: "groupbindings", Kind: "GroupBinding"},
+		},
+	}), usersGVR, "kubauth identity", "groups", "groupbindings")
+	if !complete.Available() {
+		t.Fatal("expected the feature to be available once every resource is served")
 	}
 }
