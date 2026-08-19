@@ -75,7 +75,7 @@ func NewIdentityRepository(client dynamic.Interface, discoveryClient discovery.D
 			Version:  version,
 			Resource: "groupbindings",
 		},
-		probe: NewAPIProbe(discoveryClient, userGVR, "kubauth identity"),
+		probe: NewAPIProbe(discoveryClient, userGVR, "kubauth identity", "groups", "groupbindings"),
 	}
 }
 
