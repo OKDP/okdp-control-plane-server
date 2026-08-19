@@ -72,10 +72,6 @@ func main() {
 	// Context repository (shared by capabilities, catalog and Spark)
 	contextRepo := repository.NewContextRepository(k8sClient, cfg.ContextName, cfg.ContextNamespace)
 
-	// Initialize Capabilities stack (platform features derived from the Context)
-	capabilityService := service.NewDefaultCapabilityService(contextRepo)
-	capabilitiesHandler := handlers.NewCapabilitiesHandler(capabilityService)
-
 	// Initialize Identity stack. The namespace is read per call from the Context,
 	// and the discovery client tells whether the kubauth CRDs are there at all.
 	kubauthNamespace := func(ctx context.Context) string {
@@ -91,6 +87,13 @@ func main() {
 	identityRepo := repository.NewIdentityRepository(k8sClient, k8sDiscoveryClient, kubauthNamespace)
 	identityService := service.NewDefaultIdentityService(identityRepo)
 	identityHandler := handlers.NewIdentityHandler(identityService)
+
+	// Initialize Capabilities stack (platform features derived from the Context).
+	// Built after the identity repository: the identity capability answers on
+	// the same two conditions as the routes, the configured provider and the
+	// CRDs actually being served.
+	capabilityService := service.NewDefaultCapabilityService(contextRepo, identityRepo.Available)
+	capabilitiesHandler := handlers.NewCapabilitiesHandler(capabilityService)
 
 	// Initialize SecretStore stack (namespace is dynamic per project)
 	secretStoreRepo := repository.NewSecretStoreRepository(k8sClient, k8sDiscoveryClient)
