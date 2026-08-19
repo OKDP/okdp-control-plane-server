@@ -187,7 +187,12 @@ func checkIdentityConfiguration(ctx context.Context, contextRepo repository.Cont
 		return
 	}
 
-	if provider == provisioning.ProviderKubauth {
+	// Every provider is checked here, not just kubauth: an unsupported value or
+	// an incomplete Keycloak block would otherwise start fine and fail at the
+	// first client cleanup, leaving stale OIDC clients behind.
+	switch provider {
+	case "", provisioning.ProviderNone:
+	case provisioning.ProviderKubauth:
 		if !identityRepo.Available(ctx) {
 			logrus.Fatalf(
 				"identity.provisioning.provider is %q but the kubauth CRDs are not installed on this cluster. "+
@@ -198,6 +203,14 @@ func checkIdentityConfiguration(ctx context.Context, contextRepo repository.Cont
 			logrus.Fatalf("identity.provisioning.provider is %q but the kubauth namespace is unreadable: %v",
 				provisioning.ProviderKubauth, err)
 		}
+	case provisioning.ProviderKeycloak:
+		if _, err := contextRepo.GetKeycloakProvisioningConfig(ctx); err != nil {
+			logrus.Fatalf("identity.provisioning.provider is %q but its configuration is unusable: %v",
+				provisioning.ProviderKeycloak, err)
+		}
+	default:
+		logrus.Fatalf("identity.provisioning.provider is %q, which is not supported. Use %q, %q or %q.",
+			provider, provisioning.ProviderNone, provisioning.ProviderKubauth, provisioning.ProviderKeycloak)
 	}
 
 	logrus.WithField("provisioningProvider", provider).Info("Identity configuration accepted")
