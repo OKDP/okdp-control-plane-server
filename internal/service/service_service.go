@@ -1133,11 +1133,20 @@ func (s *DefaultServiceService) GetServiceMetrics(ctx context.Context, project, 
 		Version:  "v1beta1",
 		Resource: "pods",
 	}
+	metricsList, err := s.k8sClient.Resource(metricsGVR).Namespace(project).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		logrus.Debugf("metrics for namespace %s unavailable: %v", project, err)
+		metricsList = &unstructured.UnstructuredList{}
+	}
+	metricsByPod := make(map[string]*unstructured.Unstructured, len(metricsList.Items))
+	for i := range metricsList.Items {
+		metricsByPod[metricsList.Items[i].GetName()] = &metricsList.Items[i]
+	}
+
 	for _, pod := range podList.Items {
-		podMetrics, err := s.k8sClient.Resource(metricsGVR).Namespace(project).Get(ctx, pod.GetName(), metav1.GetOptions{})
-		if err != nil {
-			// metrics-server may not yet have a sample for a brand-new pod; skip it.
-			logrus.Debugf("metrics for pod %s/%s unavailable: %v", project, pod.GetName(), err)
+		podMetrics, ok := metricsByPod[pod.GetName()]
+		if !ok {
+			logrus.Debugf("metrics for pod %s/%s unavailable", project, pod.GetName())
 			continue
 		}
 		containers, _, _ := unstructured.NestedSlice(podMetrics.Object, "containers")
