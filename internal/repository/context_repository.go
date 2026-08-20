@@ -3,6 +3,8 @@ package repository
 import (
 	"context"
 	"fmt"
+	"sync"
+	"time"
 
 	"github.com/okdp/okdp-control-plane-server/internal/models"
 	"github.com/okdp/okdp-control-plane-server/internal/repository/provisioning"
@@ -79,10 +81,16 @@ type ContextRepository interface {
 // changes rarely and a change is expensive.
 //
 // The server reads from both. It consumes platform data, it does not own it.
+const contextCacheTTL = 5 * time.Second
+
 type k8sContextRepository struct {
 	client    dynamic.Interface
 	name      string
 	namespace string
+
+	mu       sync.Mutex
+	cached   *unstructured.Unstructured
+	cachedAt time.Time
 }
 
 func NewContextRepository(client dynamic.Interface, name, namespace string) ContextRepository {
@@ -439,7 +447,20 @@ func (r *k8sContextRepository) GetSparkConfig(ctx context.Context) (*models.Spar
 
 // getContext reads the Control Plane's own Context.
 func (r *k8sContextRepository) getContext(ctx context.Context) (*unstructured.Unstructured, error) {
-	return r.client.Resource(contextGVR).Namespace(r.namespace).Get(ctx, r.name, metav1.GetOptions{})
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.cached != nil && time.Since(r.cachedAt) < contextCacheTTL {
+		return r.cached, nil
+	}
+
+	u, err := r.client.Resource(contextGVR).Namespace(r.namespace).Get(ctx, r.name, metav1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
+	r.cached = u
+	r.cachedAt = time.Now()
+	return u, nil
 }
 
 func getString(m map[string]interface{}, key string) string {
