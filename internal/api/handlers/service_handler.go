@@ -492,6 +492,17 @@ func (h *ServiceHandler) ListPods(c *gin.Context) {
 // @Success      200  {object}  models.ServiceMetrics
 // @Failure      500  {object}  map[string]string
 // @Router       /api/projects/{name}/services/{serviceName}/metrics [get]
+func (h *ServiceHandler) GetProjectMetrics(c *gin.Context) {
+	project := c.Param("name")
+	metrics, err := h.service.GetProjectMetrics(c.Request.Context(), project)
+	if err != nil {
+		logrus.WithError(err).Error("Failed to get project metrics")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, metrics)
+}
+
 func (h *ServiceHandler) GetServiceMetrics(c *gin.Context) {
 	project := c.Param("name")
 	serviceName := c.Param("serviceName")
