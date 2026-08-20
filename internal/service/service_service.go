@@ -10,7 +10,6 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/okdp/okdp-control-plane-server/internal/models"
@@ -1070,65 +1069,60 @@ func (s *DefaultServiceService) GetProjectMetrics(ctx context.Context, project s
 		return nil, err
 	}
 
-	type result struct {
-		name    string
-		metrics *models.ServiceMetrics
+	podGVR := schema.GroupVersionResource{Version: "v1", Resource: "pods"}
+	allPods, err := s.k8sClient.Resource(podGVR).Namespace(project).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list pods: %w", err)
 	}
-	results := make(chan result, len(instances))
-	var wg sync.WaitGroup
-	for _, inst := range instances {
-		wg.Add(1)
-		go func(name string) {
-			defer wg.Done()
-			m, err := s.GetServiceMetrics(ctx, project, name)
-			if err != nil {
-				logrus.WithError(err).Debugf("metrics unavailable for %s/%s", project, name)
-				return
-			}
-			results <- result{name: name, metrics: m}
-		}(inst.Name)
-	}
-	wg.Wait()
-	close(results)
+	metricsByPod := s.listPodMetricsByName(ctx, project)
 
 	metrics := make(map[string]*models.ServiceMetrics, len(instances))
-	for r := range results {
-		metrics[r.name] = r.metrics
+	for _, inst := range instances {
+		releaseName := fmt.Sprintf("%s-%s", project, inst.Name)
+		prefix := releaseName + "-"
+		var pods []unstructured.Unstructured
+		for _, pod := range allPods.Items {
+			if pod.GetLabels()["app.kubernetes.io/instance"] == releaseName {
+				pods = append(pods, pod)
+			}
+		}
+		if len(pods) == 0 {
+			for _, pod := range allPods.Items {
+				if strings.HasPrefix(pod.GetName(), prefix) {
+					pods = append(pods, pod)
+				}
+			}
+		}
+		metrics[inst.Name] = buildServiceMetrics(pods, metricsByPod)
 	}
 	return metrics, nil
 }
 
-func (s *DefaultServiceService) GetServiceMetrics(ctx context.Context, project, serviceName string) (*models.ServiceMetrics, error) {
-	releaseName := fmt.Sprintf("%s-%s", project, serviceName)
-
-	// 1. Fetch the pods of the service (same selection logic as ListPods).
-	podGVR := schema.GroupVersionResource{Version: "v1", Resource: "pods"}
-	podList, err := s.k8sClient.Resource(podGVR).Namespace(project).List(ctx, metav1.ListOptions{
-		LabelSelector: fmt.Sprintf("app.kubernetes.io/instance=%s", releaseName),
-	})
+func (s *DefaultServiceService) listPodMetricsByName(ctx context.Context, namespace string) map[string]*unstructured.Unstructured {
+	metricsGVR := schema.GroupVersionResource{
+		Group:    "metrics.k8s.io",
+		Version:  "v1beta1",
+		Resource: "pods",
+	}
+	byName := map[string]*unstructured.Unstructured{}
+	list, err := s.k8sClient.Resource(metricsGVR).Namespace(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("failed to list pods: %w", err)
+		logrus.Debugf("metrics for namespace %s unavailable: %v", namespace, err)
+		return byName
 	}
-	if len(podList.Items) == 0 {
-		allPods, err := s.k8sClient.Resource(podGVR).Namespace(project).List(ctx, metav1.ListOptions{})
-		if err != nil {
-			return nil, fmt.Errorf("failed to list pods (fallback): %w", err)
-		}
-		prefix := releaseName + "-"
-		for _, pod := range allPods.Items {
-			if strings.HasPrefix(pod.GetName(), prefix) {
-				podList.Items = append(podList.Items, pod)
-			}
-		}
+	for i := range list.Items {
+		byName[list.Items[i].GetName()] = &list.Items[i]
 	}
+	return byName
+}
 
+func buildServiceMetrics(pods []unstructured.Unstructured, metricsByPod map[string]*unstructured.Unstructured) *models.ServiceMetrics {
 	var cpuLimit, memLimit float64
 	var cpuUsed, memUsed float64
 	cpuUsedAvailable := false
 	memUsedAvailable := false
 
-	// 2. Sum CPU/memory limits from the pod specs.
-	for _, pod := range podList.Items {
+	for _, pod := range pods {
 		containers, _, _ := unstructured.NestedSlice(pod.Object, "spec", "containers")
 		for _, c := range containers {
 			container, ok := c.(map[string]interface{})
@@ -1139,7 +1133,6 @@ func (s *DefaultServiceService) GetServiceMetrics(ctx context.Context, project, 
 			if resources == nil {
 				continue
 			}
-			// Prefer limits, fall back to requests.
 			for _, bucket := range []string{"limits", "requests"} {
 				quantities, _ := resources[bucket].(map[string]interface{})
 				if quantities == nil {
@@ -1159,31 +1152,14 @@ func (s *DefaultServiceService) GetServiceMetrics(ctx context.Context, project, 
 						memLimit += bytes
 					}
 				}
-				break // only count one bucket per container
+				break
 			}
 		}
 	}
 
-	// 3. Query metrics.k8s.io for live usage, once for the namespace.
-	metricsGVR := schema.GroupVersionResource{
-		Group:    "metrics.k8s.io",
-		Version:  "v1beta1",
-		Resource: "pods",
-	}
-	metricsList, err := s.k8sClient.Resource(metricsGVR).Namespace(project).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		logrus.Debugf("metrics for namespace %s unavailable: %v", project, err)
-		metricsList = &unstructured.UnstructuredList{}
-	}
-	metricsByPod := make(map[string]*unstructured.Unstructured, len(metricsList.Items))
-	for i := range metricsList.Items {
-		metricsByPod[metricsList.Items[i].GetName()] = &metricsList.Items[i]
-	}
-
-	for _, pod := range podList.Items {
+	for _, pod := range pods {
 		podMetrics, ok := metricsByPod[pod.GetName()]
 		if !ok {
-			logrus.Debugf("metrics for pod %s/%s unavailable", project, pod.GetName())
 			continue
 		}
 		containers, _, _ := unstructured.NestedSlice(podMetrics.Object, "containers")
@@ -1233,7 +1209,35 @@ func (s *DefaultServiceService) GetServiceMetrics(ctx context.Context, project, 
 			Available: memUsedAvailable,
 		},
 	}
-	return metrics, nil
+	return metrics
+}
+
+func (s *DefaultServiceService) GetServiceMetrics(ctx context.Context, project, serviceName string) (*models.ServiceMetrics, error) {
+	releaseName := fmt.Sprintf("%s-%s", project, serviceName)
+
+	// 1. Fetch the pods of the service (same selection logic as ListPods).
+	podGVR := schema.GroupVersionResource{Version: "v1", Resource: "pods"}
+	podList, err := s.k8sClient.Resource(podGVR).Namespace(project).List(ctx, metav1.ListOptions{
+		LabelSelector: fmt.Sprintf("app.kubernetes.io/instance=%s", releaseName),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list pods: %w", err)
+	}
+	if len(podList.Items) == 0 {
+		allPods, err := s.k8sClient.Resource(podGVR).Namespace(project).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return nil, fmt.Errorf("failed to list pods (fallback): %w", err)
+		}
+		prefix := releaseName + "-"
+		for _, pod := range allPods.Items {
+			if strings.HasPrefix(pod.GetName(), prefix) {
+				podList.Items = append(podList.Items, pod)
+			}
+		}
+	}
+
+	metricsByPod := s.listPodMetricsByName(ctx, project)
+	return buildServiceMetrics(podList.Items, metricsByPod), nil
 }
 
 // parseCPUQuantity parses a Kubernetes CPU quantity string (e.g. "500m",
