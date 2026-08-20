@@ -2,6 +2,7 @@
 bin/
 main
 okdp-control-plane-server
+kubocd-local
 *.exe
 *.exe~
 *.dll
@@ -45,6 +46,3 @@ CLAUDE.md
 .claude/
 .cursor/
 .agent/
-
-# Binaire kubocd construit localement pour les essais, jamais versionne.
-kubocd-local
