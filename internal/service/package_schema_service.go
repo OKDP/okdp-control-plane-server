@@ -170,7 +170,10 @@ func (s *DefaultPackageSchemaService) ListVersionsForServices(ctx context.Contex
 			}
 			tags, err := s.listOCITagsCached(repo, svc.Name)
 			if err != nil {
-				logrus.WithError(err).Warnf("failed to list OCI tags for %s", svc.Name)
+				logrus.WithError(err).Warnf("failed to list OCI tags for %s, falling back to default version", svc.Name)
+				if svc.DefaultVersion != "" {
+					results <- result{name: svc.Name, tags: []string{svc.DefaultVersion}}
+				}
 				return
 			}
 			results <- result{name: svc.Name, tags: tags}
