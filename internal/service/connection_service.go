@@ -532,16 +532,22 @@ func (s *DefaultConnectionService) checkExistingSecret(
 	descriptor *models.ContractDescriptor,
 ) error {
 	secretNamespace := namespace
-	keys, found, err := s.repo.SecretKeys(ctx, secretNamespace, req.ExistingSecret)
+	content, found, err := s.repo.InspectSecret(ctx, secretNamespace, req.ExistingSecret)
 	if err != nil {
 		return fmt.Errorf("failed to read the secret %q: %w", req.ExistingSecret, err)
 	}
 	if !found {
 		return invalid("no secret named %q in namespace %q", req.ExistingSecret, secretNamespace)
 	}
+	// A Secret this server wrote belongs to the connection it was created for,
+	// and goes away with it. Pointing a second connection at it would leave that
+	// one credentialless the day the first is deleted.
+	if content.Managed {
+		return invalid("secret %q belongs to another connection, name one this server does not manage", req.ExistingSecret)
+	}
 
-	present := make(map[string]bool, len(keys))
-	for _, key := range keys {
+	present := make(map[string]bool, len(content.Keys))
+	for _, key := range content.Keys {
 		present[key] = true
 	}
 	var missing []string

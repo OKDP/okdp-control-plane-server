@@ -40,10 +40,17 @@ type ConnectionRepository interface {
 
 	CreateOrUpdateSecret(ctx context.Context, namespace, name string, data map[string][]byte) error
 	DeleteSecret(ctx context.Context, namespace, name string) error
-	// SecretKeys returns the keys a Secret carries, so a connection pointed at
-	// an existing one can be checked before it is stored. Returns false when the
-	// Secret does not exist.
-	SecretKeys(ctx context.Context, namespace, name string) ([]string, bool, error)
+	// InspectSecret returns what an existing Secret exposes to the checks a
+	// connection runs before it is stored. Returns false when the Secret does
+	// not exist.
+	InspectSecret(ctx context.Context, namespace, name string) (SecretContent, bool, error)
+}
+
+// SecretContent is what a Secret exposes to those checks: the keys it carries,
+// and whether the control plane owns it.
+type SecretContent struct {
+	Keys    []string
+	Managed bool
 }
 
 type k8sConnectionRepository struct {
@@ -163,17 +170,17 @@ func (r *k8sConnectionRepository) Delete(ctx context.Context, namespace, name st
 
 // --- Kubernetes Secrets holding the credentials ---
 
-func (r *k8sConnectionRepository) SecretKeys(ctx context.Context, namespace, name string) ([]string, bool, error) {
+func (r *k8sConnectionRepository) InspectSecret(ctx context.Context, namespace, name string) (SecretContent, bool, error) {
 	if namespace == "" {
-		return nil, false, fmt.Errorf("a namespace is required to read credentials")
+		return SecretContent{}, false, fmt.Errorf("a namespace is required to read credentials")
 	}
 
 	secret, err := r.typedClient.CoreV1().Secrets(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return nil, false, nil
+			return SecretContent{}, false, nil
 		}
-		return nil, false, err
+		return SecretContent{}, false, err
 	}
 
 	// Only the key names are read, never the values: the console must be able to
@@ -183,7 +190,10 @@ func (r *k8sConnectionRepository) SecretKeys(ctx context.Context, namespace, nam
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	return keys, true, nil
+	return SecretContent{
+		Keys:    keys,
+		Managed: secret.Labels[crd.LabelManagedBy] == crd.ManagedByValue,
+	}, true, nil
 }
 
 // ErrForeignSecret is returned when the credentials name is already taken by a

@@ -12,6 +12,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/okdp/okdp-control-plane-server/internal/models"
+	"github.com/okdp/okdp-control-plane-server/internal/repository"
 	"github.com/okdp/okdp-control-plane-server/internal/repository/crd"
 	"github.com/okdp/okdp-control-plane-server/internal/service/mocks"
 )
@@ -507,8 +508,8 @@ func TestTestNormalizesBeforeValidating(t *testing.T) {
 func TestCreateCanPointAtAnExistingSecret(t *testing.T) {
 	svc, connectionRepo, _ := newServiceUnderTest(t, true)
 
-	connectionRepo.On("SecretKeys", mock.Anything, "demo", "warehouse-from-vault").
-		Return([]string{"password", "username"}, true, nil)
+	connectionRepo.On("InspectSecret", mock.Anything, "demo", "warehouse-from-vault").
+		Return(repository.SecretContent{Keys: []string{"password", "username"}}, true, nil)
 	connectionRepo.On("Get", mock.Anything, "demo", "warehouse").Return((*crd.Connection)(nil), apierrors.NewNotFound(crd.GetConnectionGVR().GroupResource(), "warehouse"))
 	connectionRepo.On("Create", mock.Anything, "demo", mock.Anything).Return(nil)
 
@@ -537,7 +538,7 @@ func TestCreateCanPointAtAnExistingSecret(t *testing.T) {
 func TestCreateRefusesASecretThatCannotWork(t *testing.T) {
 	tests := []struct {
 		name    string
-		keys    []string
+		content repository.SecretContent
 		found   bool
 		message string
 	}{
@@ -548,17 +549,23 @@ func TestCreateRefusesASecretThatCannotWork(t *testing.T) {
 		},
 		{
 			name:    "secret is missing a key the contract needs",
-			keys:    []string{"username"},
+			content: repository.SecretContent{Keys: []string{"username"}},
 			found:   true,
 			message: "does not carry the keys the database-server contract needs: password",
+		},
+		{
+			name:    "secret already belongs to another connection",
+			content: repository.SecretContent{Keys: []string{"password", "username"}, Managed: true},
+			found:   true,
+			message: "belongs to another connection",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			svc, connectionRepo, _ := newServiceUnderTest(t, true)
-			connectionRepo.On("SecretKeys", mock.Anything, "demo", "warehouse-from-vault").
-				Return(tt.keys, tt.found, nil)
+			connectionRepo.On("InspectSecret", mock.Anything, "demo", "warehouse-from-vault").
+				Return(tt.content, tt.found, nil)
 
 			req := postgresRequest()
 			req.ExistingSecret = "warehouse-from-vault"
@@ -820,8 +827,8 @@ func TestUpdateToAnExistingSecretRemovesTheOneItOwned(t *testing.T) {
 	}
 	connectionRepo.On("Get", mock.Anything, "demo", "warehouse").Return(existing, nil)
 	connectionRepo.On("Update", mock.Anything, "demo", mock.Anything).Return(nil)
-	connectionRepo.On("SecretKeys", mock.Anything, "demo", "warehouse-from-vault").
-		Return([]string{"password", "username"}, true, nil)
+	connectionRepo.On("InspectSecret", mock.Anything, "demo", "warehouse-from-vault").
+		Return(repository.SecretContent{Keys: []string{"password", "username"}}, true, nil)
 	connectionRepo.On("DeleteSecret", mock.Anything, "demo", "warehouse-credentials").Return(nil)
 
 	req := postgresRequest()
@@ -858,8 +865,8 @@ func TestUpdateKeepsTheOwnedSecretWhenTheUpdateFails(t *testing.T) {
 	}
 	connectionRepo.On("Get", mock.Anything, "demo", "warehouse").Return(existing, nil)
 	connectionRepo.On("Update", mock.Anything, "demo", mock.Anything).Return(errors.New("the object has been modified"))
-	connectionRepo.On("SecretKeys", mock.Anything, "demo", "warehouse-from-vault").
-		Return([]string{"password", "username"}, true, nil)
+	connectionRepo.On("InspectSecret", mock.Anything, "demo", "warehouse-from-vault").
+		Return(repository.SecretContent{Keys: []string{"password", "username"}}, true, nil)
 	connectionRepo.On("DeleteSecret", mock.Anything, "demo", "warehouse-credentials").Return(nil)
 
 	req := postgresRequest()

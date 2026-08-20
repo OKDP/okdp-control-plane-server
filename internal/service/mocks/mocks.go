@@ -5,6 +5,7 @@ import (
 	"io"
 
 	"github.com/okdp/okdp-control-plane-server/internal/models"
+	"github.com/okdp/okdp-control-plane-server/internal/repository"
 	"github.com/okdp/okdp-control-plane-server/internal/repository/crd"
 	"github.com/stretchr/testify/mock"
 	corev1 "k8s.io/api/core/v1"
@@ -466,13 +467,13 @@ func (m *ConnectionRepository) DeleteSecret(ctx context.Context, namespace, name
 	return args.Error(0)
 }
 
-func (m *ConnectionRepository) SecretKeys(ctx context.Context, namespace, name string) ([]string, bool, error) {
+func (m *ConnectionRepository) InspectSecret(ctx context.Context, namespace, name string) (repository.SecretContent, bool, error) {
 	args := m.Called(ctx, namespace, name)
-	var keys []string
+	var content repository.SecretContent
 	if raw := args.Get(0); raw != nil {
-		keys = raw.([]string)
+		content = raw.(repository.SecretContent)
 	}
-	return keys, args.Bool(1), args.Error(2)
+	return content, args.Bool(1), args.Error(2)
 }
 
 func (m *ConnectionRepository) ListKubeServices(ctx context.Context, namespace string) ([]corev1.Service, error) {
