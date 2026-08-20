@@ -482,16 +482,15 @@ func (h *ServiceHandler) ListPods(c *gin.Context) {
 	c.JSON(http.StatusOK, pods)
 }
 
-// GetServiceMetrics godoc
-// @Summary      Get live resource usage for a service instance
-// @Description  Aggregate CPU/memory usage (from metrics-server) and limits for every pod belonging to the instance.
+// GetProjectMetrics godoc
+// @Summary      Get live resource usage for every instance of a project
+// @Description  One call returns the aggregated CPU/memory usage and limits of each deployed instance, keyed by instance name.
 // @Tags         services
 // @Produce      json
 // @Param        name path string true "Project name"
-// @Param        serviceName path string true "Service instance name"
-// @Success      200  {object}  models.ServiceMetrics
+// @Success      200  {object}  map[string]models.ServiceMetrics
 // @Failure      500  {object}  map[string]string
-// @Router       /api/projects/{name}/services/{serviceName}/metrics [get]
+// @Router       /api/projects/{name}/metrics [get]
 func (h *ServiceHandler) GetProjectMetrics(c *gin.Context) {
 	project := c.Param("name")
 	metrics, err := h.service.GetProjectMetrics(c.Request.Context(), project)
@@ -503,6 +502,16 @@ func (h *ServiceHandler) GetProjectMetrics(c *gin.Context) {
 	c.JSON(http.StatusOK, metrics)
 }
 
+// GetServiceMetrics godoc
+// @Summary      Get live resource usage for a service instance
+// @Description  Aggregate CPU/memory usage (from metrics-server) and limits for every pod belonging to the instance.
+// @Tags         services
+// @Produce      json
+// @Param        name path string true "Project name"
+// @Param        serviceName path string true "Service instance name"
+// @Success      200  {object}  models.ServiceMetrics
+// @Failure      500  {object}  map[string]string
+// @Router       /api/projects/{name}/services/{serviceName}/metrics [get]
 func (h *ServiceHandler) GetServiceMetrics(c *gin.Context) {
 	project := c.Param("name")
 	serviceName := c.Param("serviceName")
