@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/okdp/okdp-control-plane-server/internal/models"
@@ -65,6 +66,7 @@ type ServiceService interface {
 	ListPods(ctx context.Context, project, serviceName string) ([]models.Pod, error)
 	GetPodLogs(ctx context.Context, project, podName, container string, tailLines int64, follow bool) (io.ReadCloser, error)
 	GetServiceMetrics(ctx context.Context, project, serviceName string) (*models.ServiceMetrics, error)
+	GetProjectMetrics(ctx context.Context, project string) (map[string]*models.ServiceMetrics, error)
 }
 
 type DefaultServiceService struct {
@@ -1062,6 +1064,40 @@ func boundConnections(r *crd.Release) []models.ServiceConnection {
 // GetServiceMetrics aggregates live CPU/memory usage from the metrics-server
 // for every pod belonging to a service instance, against the total limits
 // read from the pods' container specs.
+func (s *DefaultServiceService) GetProjectMetrics(ctx context.Context, project string) (map[string]*models.ServiceMetrics, error) {
+	instances, err := s.ListServices(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+
+	type result struct {
+		name    string
+		metrics *models.ServiceMetrics
+	}
+	results := make(chan result, len(instances))
+	var wg sync.WaitGroup
+	for _, inst := range instances {
+		wg.Add(1)
+		go func(name string) {
+			defer wg.Done()
+			m, err := s.GetServiceMetrics(ctx, project, name)
+			if err != nil {
+				logrus.WithError(err).Debugf("metrics unavailable for %s/%s", project, name)
+				return
+			}
+			results <- result{name: name, metrics: m}
+		}(inst.Name)
+	}
+	wg.Wait()
+	close(results)
+
+	metrics := make(map[string]*models.ServiceMetrics, len(instances))
+	for r := range results {
+		metrics[r.name] = r.metrics
+	}
+	return metrics, nil
+}
+
 func (s *DefaultServiceService) GetServiceMetrics(ctx context.Context, project, serviceName string) (*models.ServiceMetrics, error) {
 	releaseName := fmt.Sprintf("%s-%s", project, serviceName)
 

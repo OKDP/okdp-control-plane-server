@@ -147,6 +147,7 @@ func SetupRouter(cfg *config.Config, capabilitiesHandler *handlers.CapabilitiesH
 			services.GET("/:serviceName/pods/:podName/logs", serviceHandler.GetPodLogs)
 			services.GET("/:serviceName/metrics", serviceHandler.GetServiceMetrics)
 		}
+		api.GET("/projects/:name/metrics", requireProject, serviceHandler.GetProjectMetrics)
 
 		// Spark config (from Context) + CRD schema
 		api.GET("/spark-config", sparkHandler.GetSparkConfig)
