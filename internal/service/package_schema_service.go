@@ -46,6 +46,7 @@ type DefaultPackageSchemaService struct {
 	contextRepo        repository.ContextRepository
 	cache              sync.Map
 	inflight           singleflight.Group
+	tagsCache          sync.Map
 	cacheTTL           time.Duration
 	insecureRegistries []string
 }
@@ -99,7 +100,7 @@ func (s *DefaultPackageSchemaService) GetServiceVersions(ctx context.Context, se
 		packageRepo = svcRepository
 	}
 
-	versions, err := s.listOCITags(packageRepo, serviceName)
+	versions, err := s.listOCITagsCached(packageRepo, serviceName)
 	if err != nil {
 		logrus.WithError(err).Warnf("failed to list OCI tags for %s, falling back to default version", serviceName)
 		if defaultVersion != "" {
@@ -116,6 +117,35 @@ func (s *DefaultPackageSchemaService) GetServiceVersions(ctx context.Context, se
 // ListPackageTags resolves the package repository from the Context (or the
 // per-service override when set) and lists the OCI tags published for the given
 // service's package.
+const tagsCacheTTL = 5 * time.Minute
+
+type tagsCacheEntry struct {
+	tags      []string
+	fetchedAt time.Time
+}
+
+func (s *DefaultPackageSchemaService) cachedTags(repo, name string) ([]string, bool) {
+	if e, ok := s.tagsCache.Load(repo + "/" + name); ok {
+		ce := e.(*tagsCacheEntry)
+		if time.Since(ce.fetchedAt) < tagsCacheTTL {
+			return ce.tags, true
+		}
+	}
+	return nil, false
+}
+
+func (s *DefaultPackageSchemaService) listOCITagsCached(repo, name string) ([]string, error) {
+	if tags, ok := s.cachedTags(repo, name); ok {
+		return tags, nil
+	}
+	tags, err := s.listOCITags(repo, name)
+	if err != nil {
+		return nil, err
+	}
+	s.tagsCache.Store(repo+"/"+name, &tagsCacheEntry{tags: tags, fetchedAt: time.Now()})
+	return tags, nil
+}
+
 func (s *DefaultPackageSchemaService) ListVersionsForServices(ctx context.Context, services []models.PlatformService) map[string][]string {
 	defaultRepo, err := s.contextRepo.GetPackageRepository(ctx)
 	if err != nil {
@@ -138,7 +168,7 @@ func (s *DefaultPackageSchemaService) ListVersionsForServices(ctx context.Contex
 			if svc.Repository != "" {
 				repo = svc.Repository
 			}
-			tags, err := s.listOCITags(repo, svc.Name)
+			tags, err := s.listOCITagsCached(repo, svc.Name)
 			if err != nil {
 				logrus.WithError(err).Warnf("failed to list OCI tags for %s", svc.Name)
 				return
