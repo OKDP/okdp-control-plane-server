@@ -23,6 +23,8 @@ func getK8sConfig() (*rest.Config, error) {
 			return nil, fmt.Errorf("failed to get kubernetes config (tried in-cluster and local): %w", err)
 		}
 	}
+	config.QPS = 50
+	config.Burst = 100
 	return config, nil
 }
 
