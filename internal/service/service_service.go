@@ -149,6 +149,7 @@ func (s *DefaultServiceService) AddPlatformService(ctx context.Context, svc mode
 	if err := s.contextWriteRepo.AddPlatformService(ctx, svc); err != nil {
 		return nil, err
 	}
+	s.contextRepo.Invalidate()
 	return &svc, nil
 }
 
@@ -173,6 +174,7 @@ func (s *DefaultServiceService) UpdatePlatformService(ctx context.Context, name 
 	if err := s.contextWriteRepo.UpdatePlatformService(ctx, name, svc); err != nil {
 		return nil, err
 	}
+	s.contextRepo.Invalidate()
 	return &svc, nil
 }
 
@@ -184,7 +186,11 @@ func (s *DefaultServiceService) RemovePlatformService(ctx context.Context, name 
 	if _, err := s.findCatalogService(ctx, name); err != nil {
 		return err
 	}
-	return s.contextWriteRepo.RemovePlatformService(ctx, name)
+	if err := s.contextWriteRepo.RemovePlatformService(ctx, name); err != nil {
+		return err
+	}
+	s.contextRepo.Invalidate()
+	return nil
 }
 
 // findCatalogService returns the catalog service by name or ErrCatalogServiceNotFound.

@@ -7,20 +7,20 @@ import (
 
 // Config holds the application configuration
 type Config struct {
-	ServerPort             string
-	PlatformNamespace      string
-	AllowedOrigins         string
-	LogLevel               string
-	KuboCDNamespace        string
-	ContextName            string
-	ContextNamespace       string // empty: the namespace the server runs in
+	ServerPort        string
+	PlatformNamespace string
+	AllowedOrigins    string
+	LogLevel          string
+	KuboCDNamespace   string
+	ContextName       string
+	ContextNamespace  string // empty: the namespace the server runs in
 	// The platform Context, the one package templates also read. Empty means it
 	// is the same object as the Control Plane one, which is what a deployment
 	// that has not split them yet looks like.
-	ReleaseInterval        string
-	ReleaseTimeout         string
+	ReleaseInterval         string
+	ReleaseTimeout          string
 	ExcludedSidecarPrefixes []string
-	// InsecureOCIRegistries lists registry hosts reached over plain HTTP 
+	// InsecureOCIRegistries lists registry hosts reached over plain HTTP
 	// a development-sandbox affordance for local registries without TLS.
 	InsecureOCIRegistries []string
 }

@@ -24,6 +24,7 @@ var contextGVR = schema.GroupVersionResource{
 
 // ContextRepository reads KuboCD Context CRs to extract platform configuration.
 type ContextRepository interface {
+	Invalidate()
 	// GetPlatformServices returns the managed OKDP services (from spec.context.serviceCatalog.services).
 	GetPlatformServices(ctx context.Context) ([]models.PlatformService, error)
 
@@ -461,6 +462,12 @@ func (r *k8sContextRepository) getContext(ctx context.Context) (*unstructured.Un
 	r.cached = u
 	r.cachedAt = time.Now()
 	return u, nil
+}
+
+func (r *k8sContextRepository) Invalidate() {
+	r.mu.Lock()
+	r.cached = nil
+	r.mu.Unlock()
 }
 
 func getString(m map[string]interface{}, key string) string {

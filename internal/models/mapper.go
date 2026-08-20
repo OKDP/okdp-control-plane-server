@@ -122,4 +122,3 @@ func MapPhaseToStatus(phase string) string {
 		return "Installing"
 	}
 }
-

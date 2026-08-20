@@ -2,11 +2,11 @@ package models
 
 // SecretStoreRequest is the request body for creating or updating a secret store
 type SecretStoreRequest struct {
-	Name      string             `json:"name"`
-	Provider  string             `json:"provider" binding:"required"`
-	Vault     *VaultConfig       `json:"vault" binding:"required"`
-	Auth      *SecretStoreAuth   `json:"auth" binding:"required"`
-	IsDefault bool               `json:"isDefault,omitempty"`
+	Name      string           `json:"name"`
+	Provider  string           `json:"provider" binding:"required"`
+	Vault     *VaultConfig     `json:"vault" binding:"required"`
+	Auth      *SecretStoreAuth `json:"auth" binding:"required"`
+	IsDefault bool             `json:"isDefault,omitempty"`
 }
 
 // VaultConfig holds Vault-specific provider configuration
@@ -19,7 +19,7 @@ type VaultConfig struct {
 
 // SecretStoreAuth holds authentication configuration
 type SecretStoreAuth struct {
-	Type   string          `json:"type" binding:"required"`
+	Type   string           `json:"type" binding:"required"`
 	Config SecretAuthConfig `json:"config" binding:"required"`
 }
 
@@ -32,22 +32,22 @@ type SecretAuthConfig struct {
 
 // SecretStoreResponse is the API response model for a secret store
 type SecretStoreResponse struct {
-	Name          string       `json:"name"`
-	Provider      string       `json:"provider"`
-	Namespace     string       `json:"namespace"`
-	Status        string       `json:"status"`
-	LastCheckedAt *string      `json:"lastCheckedAt"`
-	LastError     *string      `json:"lastError"`
-	IsDefault     bool         `json:"isDefault"`
-	CreatedAt     string       `json:"createdAt"`
-	Vault         *VaultConfig `json:"vault,omitempty"`
+	Name          string                   `json:"name"`
+	Provider      string                   `json:"provider"`
+	Namespace     string                   `json:"namespace"`
+	Status        string                   `json:"status"`
+	LastCheckedAt *string                  `json:"lastCheckedAt"`
+	LastError     *string                  `json:"lastError"`
+	IsDefault     bool                     `json:"isDefault"`
+	CreatedAt     string                   `json:"createdAt"`
+	Vault         *VaultConfig             `json:"vault,omitempty"`
 	Auth          *SecretStoreAuthResponse `json:"auth,omitempty"`
 }
 
 // SecretStoreAuthResponse is the auth config returned in GET responses (token is NEVER included)
 type SecretStoreAuthResponse struct {
-	Type   string                `json:"type"`
-	Config SecretAuthConfigSafe  `json:"config"`
+	Type   string               `json:"type"`
+	Config SecretAuthConfigSafe `json:"config"`
 }
 
 // SecretAuthConfigSafe is the sanitized auth config that never exposes secrets
@@ -58,10 +58,10 @@ type SecretAuthConfigSafe struct {
 
 // SecretStoreStatusResponse is the detailed status of a secret store
 type SecretStoreStatusResponse struct {
-	Status        string                  `json:"status"`
-	Conditions    []SecretStoreCondition  `json:"conditions"`
-	LastCheckedAt *string                 `json:"lastCheckedAt"`
-	LastError     *string                 `json:"lastError"`
+	Status        string                 `json:"status"`
+	Conditions    []SecretStoreCondition `json:"conditions"`
+	LastCheckedAt *string                `json:"lastCheckedAt"`
+	LastError     *string                `json:"lastError"`
 }
 
 // SecretStoreCondition represents a single ESO condition entry

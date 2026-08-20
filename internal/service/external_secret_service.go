@@ -8,8 +8,8 @@ import (
 	"github.com/okdp/okdp-control-plane-server/internal/models"
 	"github.com/okdp/okdp-control-plane-server/internal/repository"
 	"github.com/okdp/okdp-control-plane-server/internal/repository/crd"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 type ExternalSecretService interface {
@@ -24,7 +24,7 @@ type ExternalSecretService interface {
 }
 
 type DefaultExternalSecretService struct {
-	repo          repository.ExternalSecretRepository
+	repo            repository.ExternalSecretRepository
 	secretStoreRepo repository.SecretStoreRepository
 }
 
@@ -232,9 +232,9 @@ func (s *DefaultExternalSecretService) toResponse(es *crd.ESOExternalSecret, nam
 	}
 
 	resp := models.ExternalSecretResponse{
-		Name:            es.Name,
-		Namespace:       namespace,
-		SecretStoreRef:  es.Spec.SecretStoreRef.Name,
+		Name:           es.Name,
+		Namespace:      namespace,
+		SecretStoreRef: es.Spec.SecretStoreRef.Name,
 		Target: models.ExternalSecretTargetResponse{
 			Name:           es.Spec.Target.Name,
 			CreationPolicy: es.Spec.Target.CreationPolicy,

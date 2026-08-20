@@ -27,17 +27,17 @@ type ESOProvider struct {
 
 // ESOVaultProvider configures the Vault backend
 type ESOVaultProvider struct {
-	Server   string        `json:"server"`
-	Path     string        `json:"path"`
-	Version  string        `json:"version"`
-	CABundle string        `json:"caBundle,omitempty"`
-	Auth     ESOVaultAuth  `json:"auth"`
+	Server   string       `json:"server"`
+	Path     string       `json:"path"`
+	Version  string       `json:"version"`
+	CABundle string       `json:"caBundle,omitempty"`
+	Auth     ESOVaultAuth `json:"auth"`
 }
 
 // ESOVaultAuth holds the authentication method for Vault
 type ESOVaultAuth struct {
-	TokenSecretRef *ESOTokenSecretRef  `json:"tokenSecretRef,omitempty"`
-	Kubernetes     *ESOKubernetesAuth  `json:"kubernetes,omitempty"`
+	TokenSecretRef *ESOTokenSecretRef `json:"tokenSecretRef,omitempty"`
+	Kubernetes     *ESOKubernetesAuth `json:"kubernetes,omitempty"`
 }
 
 // ESOTokenSecretRef references a Secret key containing the Vault token
