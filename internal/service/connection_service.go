@@ -220,9 +220,11 @@ func (s *DefaultConnectionService) Create(ctx context.Context, namespace string,
 	}
 
 	if err := s.repo.Create(ctx, namespace, connection); err != nil {
-		// Leave no orphan Secret behind when the Connection itself is refused.
-		// A Secret we do not own is never touched.
-		if ownSecret && len(secrets) > 0 {
+		// Leave no orphan Secret behind when the Connection itself is refused. A
+		// Secret we do not own is never touched, and neither is the one a
+		// concurrent create under the same name has just bound to its own
+		// Connection.
+		if ownSecret && len(secrets) > 0 && !apierrors.IsAlreadyExists(err) {
 			if cleanupErr := s.repo.DeleteSecret(ctx, secretNamespace, secretName); cleanupErr != nil {
 				logrus.WithError(cleanupErr).Warn("Failed to clean up the credentials secret of a rejected connection")
 			}

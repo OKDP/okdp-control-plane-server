@@ -131,6 +131,24 @@ func TestCreateRemovesTheSecretWhenTheConnectionIsRejected(t *testing.T) {
 	connectionRepo.AssertCalled(t, "DeleteSecret", mock.Anything, "demo", "warehouse-credentials")
 }
 
+// The name check and the create are two calls, so two creates of the same name
+// can both find the name free. The one that loses the race must leave the
+// Secret alone: it now holds the credentials of the connection that won.
+func TestCreateKeepsTheSecretWhenTheNameWasTakenConcurrently(t *testing.T) {
+	svc, connectionRepo, _ := newServiceUnderTest(t, true)
+
+	connectionRepo.On("CreateOrUpdateSecret", mock.Anything, "demo", "warehouse-credentials", mock.Anything).Return(nil)
+	connectionRepo.On("Get", mock.Anything, "demo", "warehouse").Return((*crd.Connection)(nil), apierrors.NewNotFound(crd.GetConnectionGVR().GroupResource(), "warehouse"))
+	connectionRepo.On("Create", mock.Anything, "demo", mock.Anything).
+		Return(apierrors.NewAlreadyExists(crd.GetConnectionGVR().GroupResource(), "warehouse"))
+
+	_, err := svc.Create(context.Background(), "demo", postgresRequest())
+
+	require.Error(t, err)
+	assert.True(t, apierrors.IsAlreadyExists(err), "the caller still gets the conflict")
+	connectionRepo.AssertNotCalled(t, "DeleteSecret", mock.Anything, mock.Anything, mock.Anything)
+}
+
 func TestUpdateOnlyWritesTheResubmittedCredentials(t *testing.T) {
 	svc, connectionRepo, _ := newServiceUnderTest(t, true)
 
