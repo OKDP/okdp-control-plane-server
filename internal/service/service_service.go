@@ -113,15 +113,10 @@ func (s *DefaultServiceService) GetPlatformServices(ctx context.Context) ([]mode
 		return nil, err
 	}
 
+	versions := s.schemaService.ListVersionsForServices(ctx, services)
 	for i, svc := range services {
-		versionsResp, err := s.schemaService.GetServiceVersions(ctx, svc.Name)
-		if err != nil {
-			logrus.WithError(err).Warnf("failed to fetch OCI versions for %s", svc.Name)
-			continue
-		}
-		services[i].Versions = versionsResp.Versions
-		if versionsResp.Default != "" {
-			services[i].DefaultVersion = versionsResp.Default
+		if tags, ok := versions[svc.Name]; ok {
+			services[i].Versions = tags
 		}
 	}
 
