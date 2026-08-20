@@ -723,6 +723,7 @@ func ingressHostsFromItems(items []unstructured.Unstructured) map[string]bool {
 func (s *DefaultServiceService) enrichWithPodHealth(ctx context.Context, instances []models.ServiceInstance) {
 	podGVR := schema.GroupVersionResource{Version: "v1", Resource: "pods"}
 
+	podsByNamespace := map[string][]unstructured.Unstructured{}
 	for i := range instances {
 		if instances[i].Status != "Ready" {
 			continue
@@ -731,13 +732,21 @@ func (s *DefaultServiceService) enrichWithPodHealth(ctx context.Context, instanc
 		if ns == "" {
 			continue
 		}
-		podList, err := s.k8sClient.Resource(podGVR).Namespace(ns).List(ctx, metav1.ListOptions{})
-		if err != nil {
+		if _, done := podsByNamespace[ns]; !done {
+			podList, err := s.k8sClient.Resource(podGVR).Namespace(ns).List(ctx, metav1.ListOptions{})
+			if err != nil {
+				podsByNamespace[ns] = nil
+			} else {
+				podsByNamespace[ns] = podList.Items
+			}
+		}
+		pods := podsByNamespace[ns]
+		if pods == nil {
 			continue
 		}
 
 		prefix := instances[i].ReleaseName + "-"
-		instances[i].Status = s.checkPodHealth(podList.Items, prefix, instances[i].Status)
+		instances[i].Status = s.checkPodHealth(pods, prefix, instances[i].Status)
 	}
 }
 
