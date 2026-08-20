@@ -1127,7 +1127,7 @@ func (s *DefaultServiceService) GetServiceMetrics(ctx context.Context, project, 
 		}
 	}
 
-	// 3. Query metrics.k8s.io for live usage, per pod.
+	// 3. Query metrics.k8s.io for live usage, once for the namespace.
 	metricsGVR := schema.GroupVersionResource{
 		Group:    "metrics.k8s.io",
 		Version:  "v1beta1",
