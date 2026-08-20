@@ -50,7 +50,7 @@ func TestEveryTypeWithCredentialsMarksThemSecret(t *testing.T) {
 	assert.Contains(t, s3.SecretFields(), "accessKey", "the s3 contract expects the key ID in the Secret")
 }
 
-// A database outside the cluster is often reachable only in clear text 
+// A database outside the cluster is often reachable only in clear text
 // public datasets, older corporate instances. Without "prefer" the only
 // working choice is "disable", which never even attempts TLS, so a server
 // that does support it would be talked to unencrypted.

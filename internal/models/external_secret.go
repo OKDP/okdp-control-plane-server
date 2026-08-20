@@ -16,8 +16,8 @@ type ExternalSecretTarget struct {
 
 // ExternalSecretDataEntry defines a single key mapping from remote to local
 type ExternalSecretDataEntry struct {
-	SecretKey string                `json:"secretKey" binding:"required"`
-	RemoteRef ExternalSecretRemote  `json:"remoteRef" binding:"required"`
+	SecretKey string               `json:"secretKey" binding:"required"`
+	RemoteRef ExternalSecretRemote `json:"remoteRef" binding:"required"`
 }
 
 // ExternalSecretRemote points to a key in the remote store
@@ -28,16 +28,16 @@ type ExternalSecretRemote struct {
 
 // ExternalSecretResponse is the API response model for an external secret
 type ExternalSecretResponse struct {
-	Name            string                          `json:"name"`
-	Namespace       string                          `json:"namespace"`
-	SecretStoreRef  string                          `json:"secretStoreRef"`
-	Target          ExternalSecretTargetResponse    `json:"target"`
-	RefreshInterval string                          `json:"refreshInterval"`
-	Data            []ExternalSecretDataEntry       `json:"data"`
-	Status          string                          `json:"status"`
-	LastSyncedAt    *string                         `json:"lastSyncedAt"`
-	LastError       *string                         `json:"lastError"`
-	CreatedAt       string                          `json:"createdAt"`
+	Name            string                       `json:"name"`
+	Namespace       string                       `json:"namespace"`
+	SecretStoreRef  string                       `json:"secretStoreRef"`
+	Target          ExternalSecretTargetResponse `json:"target"`
+	RefreshInterval string                       `json:"refreshInterval"`
+	Data            []ExternalSecretDataEntry    `json:"data"`
+	Status          string                       `json:"status"`
+	LastSyncedAt    *string                      `json:"lastSyncedAt"`
+	LastError       *string                      `json:"lastError"`
+	CreatedAt       string                       `json:"createdAt"`
 }
 
 // ExternalSecretTargetResponse includes the creation policy in the response
@@ -48,8 +48,8 @@ type ExternalSecretTargetResponse struct {
 
 // ExternalSecretStatusResponse is the detailed status of an external secret
 type ExternalSecretStatusResponse struct {
-	Status       string                  `json:"status"`
-	Conditions   []SecretStoreCondition  `json:"conditions"`
-	LastSyncedAt *string                 `json:"lastSyncedAt"`
-	LastError    *string                 `json:"lastError"`
+	Status       string                 `json:"status"`
+	Conditions   []SecretStoreCondition `json:"conditions"`
+	LastSyncedAt *string                `json:"lastSyncedAt"`
+	LastError    *string                `json:"lastError"`
 }

@@ -17,10 +17,10 @@ type ESOExternalSecret struct {
 
 // ESOExternalSecretSpec is the spec of an ExternalSecret
 type ESOExternalSecretSpec struct {
-	RefreshInterval string                      `json:"refreshInterval"`
-	SecretStoreRef  ESOSecretStoreRef           `json:"secretStoreRef"`
-	Target          ESOExternalSecretTarget     `json:"target"`
-	Data            []ESOExternalSecretData     `json:"data"`
+	RefreshInterval string                  `json:"refreshInterval"`
+	SecretStoreRef  ESOSecretStoreRef       `json:"secretStoreRef"`
+	Target          ESOExternalSecretTarget `json:"target"`
+	Data            []ESOExternalSecretData `json:"data"`
 }
 
 // ESOSecretStoreRef references a SecretStore
@@ -37,8 +37,8 @@ type ESOExternalSecretTarget struct {
 
 // ESOExternalSecretData defines a single key mapping
 type ESOExternalSecretData struct {
-	SecretKey string          `json:"secretKey"`
-	RemoteRef ESORemoteRef   `json:"remoteRef"`
+	SecretKey string       `json:"secretKey"`
+	RemoteRef ESORemoteRef `json:"remoteRef"`
 }
 
 // ESORemoteRef points to a key in the remote secret store

@@ -22,16 +22,16 @@ type SparkAppYAMLRequest struct {
 }
 
 type SparkAppInstance struct {
-	Name         string            `json:"name"`
-	Type         string            `json:"type"`
-	Mode         string            `json:"mode"`
-	Image        string            `json:"image"`
-	Status       string            `json:"status"`
-	ErrorMessage string            `json:"errorMessage,omitempty"`
-	DriverPodName string           `json:"driverPodName,omitempty"`
-	CreatedAt    string            `json:"createdAt,omitempty"`
-	CompletedAt  string            `json:"completedAt,omitempty"`
-	Executors    map[string]string `json:"executors,omitempty"`
+	Name          string            `json:"name"`
+	Type          string            `json:"type"`
+	Mode          string            `json:"mode"`
+	Image         string            `json:"image"`
+	Status        string            `json:"status"`
+	ErrorMessage  string            `json:"errorMessage,omitempty"`
+	DriverPodName string            `json:"driverPodName,omitempty"`
+	CreatedAt     string            `json:"createdAt,omitempty"`
+	CompletedAt   string            `json:"completedAt,omitempty"`
+	Executors     map[string]string `json:"executors,omitempty"`
 }
 
 type SparkAppUpdateRequest struct {
@@ -48,10 +48,10 @@ type SparkAppUpdateRequest struct {
 }
 
 type SparkUIInfo struct {
-	ServiceName       string `json:"serviceName"`
-	UIAddress         string `json:"uiAddress"`
-	HistoryServerURL  string `json:"historyServerUrl"`
-	Available         bool   `json:"available"`
+	ServiceName      string `json:"serviceName"`
+	UIAddress        string `json:"uiAddress"`
+	HistoryServerURL string `json:"historyServerUrl"`
+	Available        bool   `json:"available"`
 }
 
 type SparkConfig struct {

@@ -395,4 +395,3 @@ func (h *SparkHandler) GetSparkAppSchema(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, schema)
 }
-
