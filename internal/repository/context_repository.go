@@ -25,6 +25,9 @@ type ContextRepository interface {
 	// GetPlatformServices returns the managed OKDP services (from spec.context.serviceCatalog.services).
 	GetPlatformServices(ctx context.Context) ([]models.PlatformService, error)
 
+	// GetMenuCategories returns the console navigation sections (from spec.context.okdp.categories).
+	GetMenuCategories(ctx context.Context) ([]models.MenuCategory, error)
+
 	// GetPackageRepository returns the OCI package repository prefix (from spec.context.serviceCatalog.defaultRepository).
 	GetPackageRepository(ctx context.Context) (string, error)
 
@@ -122,6 +125,8 @@ func (r *k8sContextRepository) GetPlatformServices(ctx context.Context) ([]model
 			Icon:           getString(m, "icon"),
 			Category:       getString(m, "category"),
 			Repository:     getString(m, "repository"),
+			Label:          getString(m, "label"),
+			ExposesUI:      getBoolPtr(m, "exposesUI"),
 		}
 		if rawVersions, ok := m["versions"].([]interface{}); ok {
 			for _, v := range rawVersions {
@@ -136,6 +141,36 @@ func (r *k8sContextRepository) GetPlatformServices(ctx context.Context) ([]model
 		services = append(services, svc)
 	}
 	return services, nil
+}
+
+func (r *k8sContextRepository) GetMenuCategories(ctx context.Context) ([]models.MenuCategory, error) {
+	u, err := r.getContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	rawCategories, found, err := unstructured.NestedSlice(u.Object, "spec", "context", "okdp", "categories")
+	if err != nil {
+		return nil, fmt.Errorf("failed to read okdp.categories from Context: %w", err)
+	}
+	if !found {
+		return nil, nil
+	}
+
+	var categories []models.MenuCategory
+	for _, raw := range rawCategories {
+		m, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		categories = append(categories, models.MenuCategory{
+			Key:   getString(m, "key"),
+			Label: getString(m, "label"),
+			Icon:  getString(m, "icon"),
+			Order: getInt(m, "order"),
+		})
+	}
+	return categories, nil
 }
 
 func (r *k8sContextRepository) GetPackageRepository(ctx context.Context) (string, error) {
@@ -414,6 +449,15 @@ func getString(m map[string]interface{}, key string) string {
 		}
 	}
 	return ""
+}
+
+func getBoolPtr(m map[string]interface{}, key string) *bool {
+	if v, ok := m[key]; ok {
+		if b, ok := v.(bool); ok {
+			return &b
+		}
+	}
+	return nil
 }
 
 func getInt(m map[string]interface{}, key string) int {

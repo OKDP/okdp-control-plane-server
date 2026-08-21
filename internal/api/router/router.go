@@ -125,6 +125,7 @@ func SetupRouter(cfg *config.Config, capabilitiesHandler *handlers.CapabilitiesH
 
 		// Platform services (managed OKDP services)
 		api.GET("/platform-services", serviceHandler.GetPlatformServices)
+		api.GET("/platform-categories", serviceHandler.GetMenuCategories)
 		api.POST("/platform-services", serviceHandler.CreatePlatformService)
 		api.PUT("/platform-services/:serviceName", serviceHandler.UpdatePlatformService)
 		api.DELETE("/platform-services/:serviceName", serviceHandler.DeletePlatformService)

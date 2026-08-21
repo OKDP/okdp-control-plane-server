@@ -137,5 +137,11 @@ func platformServiceToMap(svc models.PlatformService) map[string]interface{} {
 	if svc.Repository != "" {
 		m["repository"] = svc.Repository
 	}
+	if svc.Label != "" {
+		m["label"] = svc.Label
+	}
+	if svc.ExposesUI != nil {
+		m["exposesUI"] = *svc.ExposesUI
+	}
 	return m
 }
