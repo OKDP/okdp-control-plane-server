@@ -4,9 +4,9 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ include "okdp-server.fullname" . }}
+  name: {{ include "okdp-control-plane-server.fullname" . }}
   labels:
-    {{- include "okdp-server.labels" . | nindent 4 }}
+    {{- include "okdp-control-plane-server.labels" . | nindent 4 }}
 rules:
   # Projects are namespaces labelled okdp.io/project. update/patch are needed
   # to edit a project's description (stored as the okdp.io/description annotation).
@@ -18,7 +18,30 @@ rules:
     resources: ["secrets"]
     verbs: ["get", "list", "create", "update", "delete"]
   - apiGroups: [""]
-    resources: ["pods", "pods/log"]
+    resources: ["pods"]
+    verbs: ["get", "list", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get", "list"]
+  # Read by the code but granted nowhere until now. Their failures are logged at
+  # Debug, so in a cluster the feature simply vanished: no reason shown for a
+  # stuck Release, no service URL, no volume reclaimed on deletion.
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list"]
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get", "list"]
+  # Services carry the in-cluster endpoint of the internal connections a
+  # project's deployed services expose.
+  - apiGroups: [""]
+    resources: ["services"]
     verbs: ["get", "list"]
   # Resource usage panels — metrics-server
   - apiGroups: ["metrics.k8s.io"]
@@ -30,7 +53,9 @@ rules:
     verbs: ["get", "list", "watch", "create", "update", "delete"]
   - apiGroups: ["kubauth.kubotal.io"]
     resources: ["oidcclients"]
-    verbs: ["get", "list"]
+    # delete: a service being removed takes its OIDC client with it
+    # (service_service.go, DeleteService)
+    verbs: ["get", "list", "delete"]
   # Secret management (External Secrets Operator)
   - apiGroups: ["external-secrets.io"]
     resources: ["secretstores", "externalsecrets"]
@@ -42,6 +67,16 @@ rules:
   - apiGroups: ["kubocd.kubotal.io"]
     resources: ["contexts"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Connections (kubocd). These CRDs ship with a KuboCD version the platform
+  # does not run yet: the rules are inert until they are installed, and the
+  # server probes for them before use. Contracts are read-only, they describe
+  # the schema a connection must satisfy and are owned by the packages.
+  - apiGroups: ["kubocd.kubotal.io"]
+    resources: ["connections", "clusterconnections"]
+    verbs: ["get", "list", "watch", "create", "update", "delete"]
+  - apiGroups: ["kubocd.kubotal.io"]
+    resources: ["contracts", "clustercontracts"]
+    verbs: ["get", "list", "watch"]
   # Spark workloads
   - apiGroups: ["sparkoperator.k8s.io"]
     resources: ["sparkapplications"]
@@ -50,14 +85,14 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ include "okdp-server.fullname" . }}
+  name: {{ include "okdp-control-plane-server.fullname" . }}
   labels:
-    {{- include "okdp-server.labels" . | nindent 4 }}
+    {{- include "okdp-control-plane-server.labels" . | nindent 4 }}
 subjects:
   - kind: ServiceAccount
-    name: {{ include "okdp-server.fullname" . }}
+    name: {{ include "okdp-control-plane-server.fullname" . }}
     namespace: {{ .Release.Namespace }}
 roleRef:
   kind: ClusterRole
-  name: {{ include "okdp-server.fullname" . }}
+  name: {{ include "okdp-control-plane-server.fullname" . }}
   apiGroup: rbac.authorization.k8s.io

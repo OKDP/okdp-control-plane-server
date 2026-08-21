@@ -1,0 +1,19 @@
+{
+  "name": "hive",
+  "displayName": "Hive metastore",
+  "description": "Hive metastore reached over thrift. Holds the table definitions a query engine reads.",
+  "icon": "pi pi-table",
+  "category": "catalog",
+  "external": true,
+  "endpointFrom": ["thriftUri"],
+  "fields": [
+    {
+      "name": "thriftUri",
+      "label": "Thrift URI",
+      "type": "string",
+      "required": true,
+      "placeholder": "thrift://metastore.example.com:9083",
+      "help": "The only address the hive contract carries."
+    }
+  ]
+}

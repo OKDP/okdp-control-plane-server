@@ -4,9 +4,11 @@ import (
 	"context"
 	"io"
 
-	"github.com/okdp/okdp-server-new/internal/models"
-	"github.com/okdp/okdp-server-new/internal/repository/crd"
+	"github.com/okdp/okdp-control-plane-server/internal/models"
+	"github.com/okdp/okdp-control-plane-server/internal/repository"
+	"github.com/okdp/okdp-control-plane-server/internal/repository/crd"
 	"github.com/stretchr/testify/mock"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/watch"
 )
 
@@ -145,6 +147,11 @@ func (m *SecretStoreRepository) RemoveDefaultLabel(ctx context.Context, namespac
 // IdentityRepository Mock
 type IdentityRepository struct {
 	mock.Mock
+}
+
+func (m *IdentityRepository) Available(ctx context.Context) bool {
+	args := m.Called(ctx)
+	return args.Bool(0)
 }
 
 func (m *IdentityRepository) ListUsers(ctx context.Context) ([]models.User, error) {
@@ -331,11 +338,6 @@ func (m *ServiceService) GetMenuCategories(ctx context.Context) ([]models.MenuCa
 	return args.Get(0).([]models.MenuCategory), args.Error(1)
 }
 
-func (m *ServiceService) GetCatalog(ctx context.Context) ([]models.CatalogCategory, error) {
-	args := m.Called(ctx)
-	return args.Get(0).([]models.CatalogCategory), args.Error(1)
-}
-
 func (m *ServiceService) GetIngressSuffix(ctx context.Context) (string, error) {
 	args := m.Called(ctx)
 	return args.String(0), args.Error(1)
@@ -344,6 +346,10 @@ func (m *ServiceService) GetIngressSuffix(ctx context.Context) (string, error) {
 func (m *ServiceService) GetProfileImages(ctx context.Context) (map[string][]models.ProfileImage, error) {
 	args := m.Called(ctx)
 	return args.Get(0).(map[string][]models.ProfileImage), args.Error(1)
+}
+
+func (m *ServiceService) EnrichURL(ctx context.Context, instance *models.ServiceInstance) {
+	m.Called(ctx, instance)
 }
 
 func (m *ServiceService) EnrichPodHealth(ctx context.Context, instance *models.ServiceInstance) {
@@ -369,4 +375,116 @@ func (m *ServiceService) GetPodLogs(ctx context.Context, project, podName, conta
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(io.ReadCloser), args.Error(1)
+}
+
+// ServiceRepository Mock (KuboCD Releases)
+type ServiceRepository struct {
+	mock.Mock
+}
+
+func (m *ServiceRepository) Create(ctx context.Context, namespace string, release *crd.Release) error {
+	args := m.Called(ctx, namespace, release)
+	return args.Error(0)
+}
+
+func (m *ServiceRepository) Get(ctx context.Context, namespace, name string) (*crd.Release, error) {
+	args := m.Called(ctx, namespace, name)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*crd.Release), args.Error(1)
+}
+
+func (m *ServiceRepository) List(ctx context.Context, namespace, project string) ([]crd.Release, error) {
+	args := m.Called(ctx, namespace, project)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]crd.Release), args.Error(1)
+}
+
+func (m *ServiceRepository) Update(ctx context.Context, namespace string, release *crd.Release) error {
+	args := m.Called(ctx, namespace, release)
+	return args.Error(0)
+}
+
+func (m *ServiceRepository) Delete(ctx context.Context, namespace, name string) error {
+	args := m.Called(ctx, namespace, name)
+	return args.Error(0)
+}
+
+func (m *ServiceRepository) Watch(ctx context.Context, namespace, project string) (watch.Interface, error) {
+	args := m.Called(ctx, namespace, project)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(watch.Interface), args.Error(1)
+}
+
+// ConnectionRepository Mock (KuboCD Connections)
+type ConnectionRepository struct {
+	mock.Mock
+}
+
+func (m *ConnectionRepository) Available(ctx context.Context) bool {
+	args := m.Called(ctx)
+	return args.Bool(0)
+}
+
+func (m *ConnectionRepository) List(ctx context.Context, namespace string) ([]crd.Connection, error) {
+	args := m.Called(ctx, namespace)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]crd.Connection), args.Error(1)
+}
+
+func (m *ConnectionRepository) Get(ctx context.Context, namespace, name string) (*crd.Connection, error) {
+	args := m.Called(ctx, namespace, name)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*crd.Connection), args.Error(1)
+}
+
+func (m *ConnectionRepository) Create(ctx context.Context, namespace string, connection *crd.Connection) error {
+	args := m.Called(ctx, namespace, connection)
+	return args.Error(0)
+}
+
+func (m *ConnectionRepository) Update(ctx context.Context, namespace string, connection *crd.Connection) error {
+	args := m.Called(ctx, namespace, connection)
+	return args.Error(0)
+}
+
+func (m *ConnectionRepository) Delete(ctx context.Context, namespace, name string) error {
+	args := m.Called(ctx, namespace, name)
+	return args.Error(0)
+}
+
+func (m *ConnectionRepository) CreateOrUpdateSecret(ctx context.Context, namespace, name string, data map[string][]byte) error {
+	args := m.Called(ctx, namespace, name, data)
+	return args.Error(0)
+}
+
+func (m *ConnectionRepository) DeleteSecret(ctx context.Context, namespace, name string) error {
+	args := m.Called(ctx, namespace, name)
+	return args.Error(0)
+}
+
+func (m *ConnectionRepository) InspectSecret(ctx context.Context, namespace, name string) (repository.SecretContent, bool, error) {
+	args := m.Called(ctx, namespace, name)
+	var content repository.SecretContent
+	if raw := args.Get(0); raw != nil {
+		content = raw.(repository.SecretContent)
+	}
+	return content, args.Bool(1), args.Error(2)
+}
+
+func (m *ConnectionRepository) ListKubeServices(ctx context.Context, namespace string) ([]corev1.Service, error) {
+	args := m.Called(ctx, namespace)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]corev1.Service), args.Error(1)
 }

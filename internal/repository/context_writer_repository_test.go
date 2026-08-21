@@ -3,7 +3,7 @@ package repository
 import (
 	"testing"
 
-	"github.com/okdp/okdp-server-new/internal/models"
+	"github.com/okdp/okdp-control-plane-server/internal/models"
 )
 
 func TestPlatformServiceToMap(t *testing.T) {

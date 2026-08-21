@@ -4,8 +4,8 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
-	"github.com/okdp/okdp-server-new/internal/models"
-	"github.com/okdp/okdp-server-new/internal/service"
+	"github.com/okdp/okdp-control-plane-server/internal/models"
+	"github.com/okdp/okdp-control-plane-server/internal/service"
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -138,11 +138,17 @@ func (h *ProjectHandler) UpdateProject(c *gin.Context) {
 // @Produce      json
 // @Param        name path string true "Project Name"
 // @Success      204  {object}  nil
+// @Failure      404  {object}  map[string]string
 // @Failure      500  {object}  map[string]string
 // @Router       /api/projects/{name} [delete]
 func (h *ProjectHandler) DeleteProject(c *gin.Context) {
 	name := c.Param("name")
 	if err := h.service.DeleteProject(c.Request.Context(), name); err != nil {
+		if apierrors.IsNotFound(err) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Project not found"})
+			return
+		}
+		logrus.WithError(err).Error("Failed to delete project")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -196,4 +202,11 @@ func (h *ProjectHandler) StreamProjects(c *gin.Context) {
 			c.Writer.Flush()
 		}
 	}
+}
+
+// Resolve looks a project up by name. It is what middleware.RequireProject
+// calls to establish that a path segment really designates a project, before
+// any handler passes it to the Kubernetes client as a namespace.
+func (h *ProjectHandler) Resolve(c *gin.Context, name string) (*models.Project, error) {
+	return h.service.GetProject(c.Request.Context(), name)
 }

@@ -8,8 +8,8 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
-	"github.com/okdp/okdp-server-new/internal/models"
-	"github.com/okdp/okdp-server-new/internal/service"
+	"github.com/okdp/okdp-control-plane-server/internal/models"
+	"github.com/okdp/okdp-control-plane-server/internal/service"
 	"github.com/sirupsen/logrus"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -298,8 +298,6 @@ func (h *ServiceHandler) StreamServices(c *gin.Context) {
 	}
 	defer watcher.Stop()
 
-	ingressSuffix, _ := h.service.GetIngressSuffix(c.Request.Context())
-
 	c.Writer.Flush()
 
 	for {
@@ -318,10 +316,7 @@ func (h *ServiceHandler) StreamServices(c *gin.Context) {
 				continue
 			}
 
-			if ingressSuffix != "" && instance.ReleaseName != "" {
-				instance.URL = fmt.Sprintf("https://%s.%s", instance.ReleaseName, ingressSuffix)
-			}
-
+			h.service.EnrichURL(c.Request.Context(), &instance)
 			h.service.EnrichPodHealth(c.Request.Context(), &instance)
 
 			c.SSEvent("message", gin.H{"type": event.Type, "object": instance})
@@ -351,6 +346,32 @@ func (h *ServiceHandler) GetServiceVersions(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, resp)
+}
+
+// GetServiceInputs godoc
+// @Summary      Connections a service's package declares it needs
+// @Tags         platform-services
+// @Produce      json
+// @Param        serviceName path string true "Service name"
+// @Param        tag query string false "Package version tag (defaults to Context CR tag)"
+// @Success      200  {array}  models.PackageInput
+// @Router       /api/platform-services/{serviceName}/inputs [get]
+func (h *ServiceHandler) GetServiceInputs(c *gin.Context) {
+	serviceName := c.Param("serviceName")
+	tag := c.Query("tag")
+
+	inputs, err := h.schemaService.GetPackageInputs(c.Request.Context(), serviceName, tag)
+	if err != nil {
+		logrus.WithError(err).WithField("service", serviceName).Error("Failed to get service inputs")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	// A package with no inputs is the normal case today. Answer an empty list
+	// rather than null, so the console can iterate without a guard.
+	if inputs == nil {
+		inputs = []models.PackageInput{}
+	}
+	c.JSON(http.StatusOK, inputs)
 }
 
 // GetServiceSchema godoc
@@ -541,22 +562,4 @@ func (h *ServiceHandler) GetPodLogs(c *gin.Context) {
 		c.Header("Content-Type", "text/plain; charset=utf-8")
 		c.DataFromReader(http.StatusOK, -1, "text/plain; charset=utf-8", stream, nil)
 	}
-}
-
-// GetCatalog godoc
-// @Summary      Get self-service catalog
-// @Description  Get the list of additional packages that clients can deploy on their own
-// @Tags         catalog
-// @Produce      json
-// @Success      200  {array}   models.CatalogCategory
-// @Failure      500  {object}  map[string]string
-// @Router       /api/catalog [get]
-func (h *ServiceHandler) GetCatalog(c *gin.Context) {
-	catalog, err := h.service.GetCatalog(c.Request.Context())
-	if err != nil {
-		logrus.WithError(err).Error("Failed to get catalog")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, catalog)
 }

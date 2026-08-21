@@ -1,8 +1,12 @@
 name: publish-chart
 
-# Package the Helm chart and publish it to the OKDP registry (OCI):
-# oci://quay.io/okdp/charts/<chart-name>. Triggered on published releases
-# (cut by release-please) so the chart version matches the released version.
+# Package the Helm chart and publish it to an OCI registry:
+# oci://<registry>/<chart-name>. Triggered on published releases (cut by
+# release-please) so the chart version matches the released version.
+#
+# The registry defaults to the OKDP one. A fork that must not push there sets
+# the CHART_REGISTRY repository variable instead of diverging from this file:
+# a chart nobody can pull is a package nobody can build.
 
 on:
   release:
@@ -12,7 +16,8 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    permissions: { contents: read }
+    # packages: write is what ghcr needs. Quay ignores it.
+    permissions: { contents: read, packages: write }
     steps:
       - uses: actions/checkout@v4
       - id: vars
@@ -22,10 +27,26 @@ jobs:
       - uses: azure/setup-helm@v4
       - name: Package and push chart
         env:
+          CHART_REGISTRY: ${{ vars.CHART_REGISTRY || 'quay.io/okdp/charts' }}
           REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
           REGISTRY_ROBOT_TOKEN: ${{ secrets.REGISTRY_ROBOT_TOKEN }}
+          GH_ACTOR: ${{ github.actor }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.vars.outputs.version }}
         run: |
-          echo "$REGISTRY_ROBOT_TOKEN" | helm registry login quay.io -u "$REGISTRY_USERNAME" --password-stdin
+          REGISTRY_HOST="${CHART_REGISTRY%%/*}"
+          # Credentials follow the registry, not the presence of a secret: a
+          # fork keeps the quay secrets it inherited, and using them against
+          # ghcr answers 403.
+          if [ "$REGISTRY_HOST" = "ghcr.io" ]; then
+            LOGIN_USER="$GH_ACTOR"; LOGIN_TOKEN="$GH_TOKEN"
+          else
+            LOGIN_USER="$REGISTRY_USERNAME"; LOGIN_TOKEN="$REGISTRY_ROBOT_TOKEN"
+          fi
+          echo "$LOGIN_TOKEN" | helm registry login "$REGISTRY_HOST" -u "$LOGIN_USER" --password-stdin
+          # The chart name comes from Chart.yaml, never hardcoded: renaming the
+          # chart would otherwise leave this line pushing a file that no longer
+          # exists.
+          CHART_NAME=$(helm show chart chart | awk '/^name:/{print $2}')
           helm package chart --version "$VERSION" --app-version "$VERSION"
-          helm push "okdp-server-$VERSION.tgz" oci://quay.io/okdp/charts
+          helm push "${CHART_NAME}-${VERSION}.tgz" "oci://$CHART_REGISTRY"

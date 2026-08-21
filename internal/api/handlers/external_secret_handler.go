@@ -1,13 +1,14 @@
 package handlers
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	"github.com/okdp/okdp-server-new/internal/models"
-	"github.com/okdp/okdp-server-new/internal/service"
+	"github.com/okdp/okdp-control-plane-server/internal/models"
+	"github.com/okdp/okdp-control-plane-server/internal/service"
 	"github.com/sirupsen/logrus"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
@@ -20,6 +21,12 @@ type ExternalSecretHandler struct {
 // NewExternalSecretHandler creates a new ExternalSecretHandler
 func NewExternalSecretHandler(service service.ExternalSecretService) *ExternalSecretHandler {
 	return &ExternalSecretHandler{service: service}
+}
+
+// Available reports whether the ExternalSecret CRD backs this API, for the
+// guard the router puts in front of the external-secret group.
+func (h *ExternalSecretHandler) Available(ctx context.Context) bool {
+	return h.service.Available(ctx)
 }
 
 // ListExternalSecrets godoc

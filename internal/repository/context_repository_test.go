@@ -10,9 +10,9 @@ import (
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 )
 
-// newContextWithOKDP builds a fake dynamic client holding a single KuboCD
-// Context whose spec.context.okdp carries the given categories and services.
-func newContextWithOKDP(t *testing.T, okdp map[string]interface{}) ContextRepository {
+// newContextWith builds a fake dynamic client holding a single KuboCD Context
+// whose spec.context carries the given body.
+func newContextWith(t *testing.T, body map[string]interface{}) ContextRepository {
 	t.Helper()
 	obj := &unstructured.Unstructured{
 		Object: map[string]interface{}{
@@ -23,9 +23,7 @@ func newContextWithOKDP(t *testing.T, okdp map[string]interface{}) ContextReposi
 				"namespace": "kubocd-system",
 			},
 			"spec": map[string]interface{}{
-				"context": map[string]interface{}{
-					"okdp": okdp,
-				},
+				"context": body,
 			},
 		},
 	}
@@ -38,12 +36,12 @@ func newContextWithOKDP(t *testing.T, okdp map[string]interface{}) ContextReposi
 }
 
 func TestGetMenuCategories(t *testing.T) {
-	repo := newContextWithOKDP(t, map[string]interface{}{
+	repo := newContextWith(t, map[string]interface{}{"okdp": map[string]interface{}{
 		"categories": []interface{}{
 			map[string]interface{}{"key": "data-processing", "label": "Data Processing", "icon": "pi-cog", "order": int64(2)},
 			map[string]interface{}{"key": "data-science", "label": "Data Science", "order": int64(1)},
 		},
-	})
+	}})
 
 	cats, err := repo.GetMenuCategories(context.Background())
 	if err != nil {
@@ -62,11 +60,11 @@ func TestGetMenuCategories(t *testing.T) {
 }
 
 func TestGetMenuCategoriesAbsentReturnsNil(t *testing.T) {
-	repo := newContextWithOKDP(t, map[string]interface{}{
+	repo := newContextWith(t, map[string]interface{}{"serviceCatalog": map[string]interface{}{
 		"services": []interface{}{
 			map[string]interface{}{"name": "jupyterhub", "default": "0.6.0"},
 		},
-	})
+	}})
 
 	cats, err := repo.GetMenuCategories(context.Background())
 	if err != nil {
@@ -78,12 +76,12 @@ func TestGetMenuCategoriesAbsentReturnsNil(t *testing.T) {
 }
 
 func TestGetPlatformServicesLabelAndExposesUI(t *testing.T) {
-	repo := newContextWithOKDP(t, map[string]interface{}{
+	repo := newContextWith(t, map[string]interface{}{"serviceCatalog": map[string]interface{}{
 		"services": []interface{}{
 			map[string]interface{}{"name": "spark-operator", "default": "0.3.0", "exposesUI": false},
 			map[string]interface{}{"name": "trino", "default": "0.3.0", "label": "Trino SQL", "category": "data-querying"},
 		},
-	})
+	}})
 
 	services, err := repo.GetPlatformServices(context.Background())
 	if err != nil {

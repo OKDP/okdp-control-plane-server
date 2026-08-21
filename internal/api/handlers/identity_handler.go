@@ -1,11 +1,12 @@
 package handlers
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
-	"github.com/okdp/okdp-server-new/internal/models"
-	"github.com/okdp/okdp-server-new/internal/service"
+	"github.com/okdp/okdp-control-plane-server/internal/models"
+	"github.com/okdp/okdp-control-plane-server/internal/service"
 	"github.com/sirupsen/logrus"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
@@ -16,6 +17,12 @@ type IdentityHandler struct {
 
 func NewIdentityHandler(service service.IdentityService) *IdentityHandler {
 	return &IdentityHandler{service: service}
+}
+
+// Available reports whether the kubauth CRDs back this API, for the guard the
+// router puts in front of the whole group.
+func (h *IdentityHandler) Available(ctx context.Context) bool {
+	return h.service.Available(ctx)
 }
 
 // --- Users ---

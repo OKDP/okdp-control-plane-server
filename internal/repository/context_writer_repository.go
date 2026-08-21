@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/okdp/okdp-server-new/internal/models"
+	"github.com/okdp/okdp-control-plane-server/internal/models"
 	"github.com/sirupsen/logrus"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -13,18 +13,18 @@ import (
 	"k8s.io/client-go/util/retry"
 )
 
-// ContextWriterRepository creates, syncs, and deletes KuboCD Context CRs for per-project isolation,
-// and manages the platform service catalog on the default Context (spec.context.okdp.services).
+// ContextWriterRepository manages the platform service catalog on the platform
+// Context (spec.context.serviceCatalog.services).
+//
+// Per-project configuration is not its business: KuboCD resolves an optional
+// Context by name in the namespace of each Release, through
+// Config.defaultNamespaceContexts.
 type ContextWriterRepository interface {
-	CreateFromDefault(ctx context.Context, projectName string) error
-	SyncFromDefault(ctx context.Context, projectName string) error
-	Delete(ctx context.Context, projectName string) error
-
-	// AddPlatformService appends a service to the default Context's okdp.services.
+	// AddPlatformService appends a service to the default Context's serviceCatalog.services.
 	AddPlatformService(ctx context.Context, svc models.PlatformService) error
-	// UpdatePlatformService replaces the service matching name in okdp.services.
+	// UpdatePlatformService replaces the service matching name in serviceCatalog.services.
 	UpdatePlatformService(ctx context.Context, name string, svc models.PlatformService) error
-	// RemovePlatformService drops the service matching name from okdp.services.
+	// RemovePlatformService drops the service matching name from serviceCatalog.services.
 	RemovePlatformService(ctx context.Context, name string) error
 }
 
@@ -42,89 +42,7 @@ func NewContextWriterRepository(client dynamic.Interface, defaultName, defaultNa
 	}
 }
 
-// CreateFromDefault copies the default Context CR into a project-scoped Context.
-func (r *k8sContextWriterRepository) CreateFromDefault(ctx context.Context, projectName string) error {
-	defaultCtx, err := r.client.Resource(contextGVR).Namespace(r.defaultNamespace).Get(ctx, r.defaultName, metav1.GetOptions{})
-	if err != nil {
-		return fmt.Errorf("failed to read default context %s/%s: %w", r.defaultNamespace, r.defaultName, err)
-	}
-
-	specContext, found, err := unstructured.NestedMap(defaultCtx.Object, "spec", "context")
-	if err != nil || !found {
-		return fmt.Errorf("default context has no spec.context")
-	}
-
-	projectCtx := &unstructured.Unstructured{
-		Object: map[string]interface{}{
-			"apiVersion": "kubocd.kubotal.io/v1alpha1",
-			"kind":       "Context",
-			"metadata": map[string]interface{}{
-				"name":      projectName,
-				"namespace": r.defaultNamespace,
-				"labels": map[string]interface{}{
-					"okdp.io/project": projectName,
-					"okdp.io/source":  "default",
-				},
-			},
-			"spec": map[string]interface{}{
-				"context": specContext,
-			},
-		},
-	}
-
-	_, err = r.client.Resource(contextGVR).Namespace(r.defaultNamespace).Create(ctx, projectCtx, metav1.CreateOptions{})
-	if err != nil {
-		return fmt.Errorf("failed to create project context %q: %w", projectName, err)
-	}
-
-	logrus.WithField("project", projectName).Info("Created per-project Context CR")
-	return nil
-}
-
-// SyncFromDefault creates the project Context if missing, or updates it from the default if it already exists.
-// This ensures project contexts always reflect the latest default context (e.g. new service blocks).
-func (r *k8sContextWriterRepository) SyncFromDefault(ctx context.Context, projectName string) error {
-	defaultCtx, err := r.client.Resource(contextGVR).Namespace(r.defaultNamespace).Get(ctx, r.defaultName, metav1.GetOptions{})
-	if err != nil {
-		return fmt.Errorf("failed to read default context %s/%s: %w", r.defaultNamespace, r.defaultName, err)
-	}
-
-	specContext, found, err := unstructured.NestedMap(defaultCtx.Object, "spec", "context")
-	if err != nil || !found {
-		return fmt.Errorf("default context has no spec.context")
-	}
-
-	existing, err := r.client.Resource(contextGVR).Namespace(r.defaultNamespace).Get(ctx, projectName, metav1.GetOptions{})
-	if err != nil {
-		logrus.WithField("project", projectName).Info("Project Context missing, creating from default")
-		return r.CreateFromDefault(ctx, projectName)
-	}
-
-	if err := unstructured.SetNestedMap(existing.Object, specContext, "spec", "context"); err != nil {
-		return fmt.Errorf("failed to set spec.context on project context %q: %w", projectName, err)
-	}
-
-	_, err = r.client.Resource(contextGVR).Namespace(r.defaultNamespace).Update(ctx, existing, metav1.UpdateOptions{})
-	if err != nil {
-		return fmt.Errorf("failed to update project context %q: %w", projectName, err)
-	}
-
-	logrus.WithField("project", projectName).Info("Synced project Context from default")
-	return nil
-}
-
-func (r *k8sContextWriterRepository) Delete(ctx context.Context, projectName string) error {
-	err := r.client.Resource(contextGVR).Namespace(r.defaultNamespace).Delete(ctx, projectName, metav1.DeleteOptions{})
-	if err != nil {
-		return fmt.Errorf("failed to delete project context %q: %w", projectName, err)
-	}
-	logrus.WithField("project", projectName).Info("Deleted per-project Context CR")
-	return nil
-}
-
-// --- Catalog management (spec.context.okdp.services on the default Context) ---
-
-// mutateServices performs a read-modify-write on the default Context's okdp.services
+// mutateServices performs a read-modify-write on the default Context's serviceCatalog.services
 // list, retrying on resource-version conflicts so concurrent edits don't clobber each other.
 func (r *k8sContextWriterRepository) mutateServices(ctx context.Context, fn func(services []interface{}) ([]interface{}, error)) error {
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
@@ -133,9 +51,9 @@ func (r *k8sContextWriterRepository) mutateServices(ctx context.Context, fn func
 			return fmt.Errorf("failed to read default context %s/%s: %w", r.defaultNamespace, r.defaultName, err)
 		}
 
-		services, _, err := unstructured.NestedSlice(cur.Object, "spec", "context", "okdp", "services")
+		services, _, err := unstructured.NestedSlice(cur.Object, "spec", "context", "serviceCatalog", "services")
 		if err != nil {
-			return fmt.Errorf("failed to read okdp.services: %w", err)
+			return fmt.Errorf("failed to read serviceCatalog.services: %w", err)
 		}
 
 		updated, err := fn(services)
@@ -143,8 +61,8 @@ func (r *k8sContextWriterRepository) mutateServices(ctx context.Context, fn func
 			return err
 		}
 
-		if err := unstructured.SetNestedSlice(cur.Object, updated, "spec", "context", "okdp", "services"); err != nil {
-			return fmt.Errorf("failed to set okdp.services: %w", err)
+		if err := unstructured.SetNestedSlice(cur.Object, updated, "spec", "context", "serviceCatalog", "services"); err != nil {
+			return fmt.Errorf("failed to set serviceCatalog.services: %w", err)
 		}
 
 		_, err = r.client.Resource(contextGVR).Namespace(r.defaultNamespace).Update(ctx, cur, metav1.UpdateOptions{})
@@ -196,7 +114,7 @@ func (r *k8sContextWriterRepository) RemovePlatformService(ctx context.Context, 
 }
 
 // platformServiceToMap converts a PlatformService into the unstructured shape stored
-// under spec.context.okdp.services (versions as []interface{} of strings).
+// under spec.context.serviceCatalog.services (versions as []interface{} of strings).
 func platformServiceToMap(svc models.PlatformService) map[string]interface{} {
 	versions := make([]interface{}, 0, len(svc.Versions))
 	for _, v := range svc.Versions {

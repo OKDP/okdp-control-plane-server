@@ -3,9 +3,9 @@ package service
 import (
 	"context"
 
-	"github.com/okdp/okdp-server-new/internal/models"
-	"github.com/okdp/okdp-server-new/internal/repository"
-	"github.com/okdp/okdp-server-new/internal/repository/provisioning"
+	"github.com/okdp/okdp-control-plane-server/internal/models"
+	"github.com/okdp/okdp-control-plane-server/internal/repository"
+	"github.com/okdp/okdp-control-plane-server/internal/repository/provisioning"
 )
 
 // Identity providers accepted in the Context (identity.provider).
@@ -27,10 +27,18 @@ type CapabilityService interface {
 
 type DefaultCapabilityService struct {
 	contextRepo repository.ContextRepository
+	// Reports whether the kubauth CRDs are served. The identity routes rest on
+	// the same answer, so advertising the capability without it would offer a
+	// section whose every call comes back 501.
+	identityCRDsInstalled func(ctx context.Context) bool
 }
 
-func NewDefaultCapabilityService(contextRepo repository.ContextRepository) *DefaultCapabilityService {
-	return &DefaultCapabilityService{contextRepo: contextRepo}
+func NewDefaultCapabilityService(contextRepo repository.ContextRepository, identityCRDsInstalled func(ctx context.Context) bool) *DefaultCapabilityService {
+	return &DefaultCapabilityService{contextRepo: contextRepo, identityCRDsInstalled: identityCRDsInstalled}
+}
+
+func (s *DefaultCapabilityService) identityCRDs(ctx context.Context) bool {
+	return s.identityCRDsInstalled != nil && s.identityCRDsInstalled(ctx)
 }
 
 func (s *DefaultCapabilityService) GetCapabilities(ctx context.Context) (*models.Capabilities, error) {
@@ -58,7 +66,7 @@ func (s *DefaultCapabilityService) GetCapabilities(ctx context.Context) (*models
 	return &models.Capabilities{
 		Identity: models.IdentityCapability{
 			Provider:       identityProvider,
-			UserManagement: identityProvider == IdentityProviderKubauth,
+			UserManagement: identityProvider == IdentityProviderKubauth && s.identityCRDs(ctx),
 			Oidc:           oidc,
 		},
 		OidcProvisioning: models.OidcProvisioningCapability{

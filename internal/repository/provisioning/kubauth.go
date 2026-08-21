@@ -27,7 +27,7 @@ func newKubauthProvisioner(client dynamic.Interface, namespaceFn func(ctx contex
 
 func (p *kubauthProvisioner) EnsureClient(ctx context.Context, spec OidcClientSpec) error {
 	// Client creation currently happens declaratively (packages register their
-	// own OidcClient CRs); the server only cleans up on service deletion.
+	// own OidcClient CRs). The server only cleans up on service deletion.
 	return errors.ErrUnsupported
 }
 

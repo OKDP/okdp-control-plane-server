@@ -8,15 +8,18 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/okdp/okdp-server-new/internal/models"
-	"github.com/okdp/okdp-server-new/internal/repository"
-	"github.com/okdp/okdp-server-new/internal/repository/crd"
+	"github.com/okdp/okdp-control-plane-server/internal/models"
+	"github.com/okdp/okdp-control-plane-server/internal/repository"
+	"github.com/okdp/okdp-control-plane-server/internal/repository/crd"
 	"github.com/sirupsen/logrus"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 type SecretStoreService interface {
+	// Available reports whether the external-secrets CRDs are installed.
+	Available(ctx context.Context) bool
+
 	ListSecretStores(ctx context.Context, namespace string) ([]models.SecretStoreResponse, error)
 	CreateSecretStore(ctx context.Context, namespace string, req models.SecretStoreRequest) (*models.SecretStoreResponse, error)
 	UpdateSecretStore(ctx context.Context, namespace, name string, req models.SecretStoreRequest) (*models.SecretStoreResponse, error)
@@ -27,6 +30,10 @@ type SecretStoreService interface {
 
 type DefaultSecretStoreService struct {
 	repo repository.SecretStoreRepository
+}
+
+func (s *DefaultSecretStoreService) Available(ctx context.Context) bool {
+	return s.repo.Available(ctx)
 }
 
 func NewDefaultSecretStoreService(repo repository.SecretStoreRepository) *DefaultSecretStoreService {

@@ -5,18 +5,22 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/okdp/okdp-server-new/internal/models"
-	"github.com/okdp/okdp-server-new/internal/repository/crd"
+	"github.com/okdp/okdp-control-plane-server/internal/models"
+	"github.com/okdp/okdp-control-plane-server/internal/repository/crd"
 	"github.com/sirupsen/logrus"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 )
 
 type IdentityRepository interface {
+	// Available reports whether the kubauth CRDs are installed on this cluster.
+	Available(ctx context.Context) bool
+
 	// Users
 	ListUsers(ctx context.Context) ([]models.User, error)
 	GetUser(ctx context.Context, name string) (*models.User, error)
@@ -44,20 +48,23 @@ type k8sIdentityRepository struct {
 	userGVR   schema.GroupVersionResource
 	groupGVR  schema.GroupVersionResource
 	gbGVR     schema.GroupVersionResource
+	probe     *APIProbe
 }
 
-func NewIdentityRepository(client dynamic.Interface, namespace func(ctx context.Context) string) IdentityRepository {
+func NewIdentityRepository(client dynamic.Interface, discoveryClient discovery.DiscoveryInterface, namespace func(ctx context.Context) string) IdentityRepository {
 	groupName := "kubauth.kubotal.io"
 	version := "v1alpha1"
+
+	userGVR := schema.GroupVersionResource{
+		Group:    groupName,
+		Version:  version,
+		Resource: "users",
+	}
 
 	return &k8sIdentityRepository{
 		client:    client,
 		namespace: namespace,
-		userGVR: schema.GroupVersionResource{
-			Group:    groupName,
-			Version:  version,
-			Resource: "users",
-		},
+		userGVR:   userGVR,
 		groupGVR: schema.GroupVersionResource{
 			Group:    groupName,
 			Version:  version,
@@ -68,7 +75,15 @@ func NewIdentityRepository(client dynamic.Interface, namespace func(ctx context.
 			Version:  version,
 			Resource: "groupbindings",
 		},
+		probe: NewAPIProbe(discoveryClient, userGVR, "kubauth identity", "groups", "groupbindings"),
 	}
+}
+
+// Available reports whether the kubauth CRDs are installed. The identity routes
+// rest on it, so an installation without kubauth answers 501 rather than failing
+// deeper.
+func (r *k8sIdentityRepository) Available(ctx context.Context) bool {
+	return r.probe.Available()
 }
 
 // --- Users ---

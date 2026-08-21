@@ -8,13 +8,14 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
-	"github.com/okdp/okdp-server-new/internal/models"
-	"github.com/okdp/okdp-server-new/internal/repository"
-	"github.com/okdp/okdp-server-new/internal/repository/crd"
-	"github.com/okdp/okdp-server-new/internal/repository/provisioning"
+	"github.com/okdp/okdp-control-plane-server/internal/models"
+	"github.com/okdp/okdp-control-plane-server/internal/repository"
+	"github.com/okdp/okdp-control-plane-server/internal/repository/crd"
+	"github.com/okdp/okdp-control-plane-server/internal/repository/provisioning"
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
@@ -55,12 +56,11 @@ type ServiceService interface {
 
 	GetMenuCategories(ctx context.Context) ([]models.MenuCategory, error)
 
-	GetCatalog(ctx context.Context) ([]models.CatalogCategory, error)
-
 	GetIngressSuffix(ctx context.Context) (string, error)
 
 	GetProfileImages(ctx context.Context) (map[string][]models.ProfileImage, error)
 
+	EnrichURL(ctx context.Context, instance *models.ServiceInstance)
 	EnrichPodHealth(ctx context.Context, instance *models.ServiceInstance)
 	ListPods(ctx context.Context, project, serviceName string) ([]models.Pod, error)
 	GetPodLogs(ctx context.Context, project, podName, container string, tailLines int64, follow bool) (io.ReadCloser, error)
@@ -79,6 +79,14 @@ type DefaultServiceService struct {
 	releaseInterval  string
 	releaseTimeout   string
 	sidecarPrefixes  []string
+	// insecureRegistries mirrors INSECURE_OCI_REGISTRIES so the Releases this
+	// service creates carry the insecure flag for those hosts.
+	insecureRegistries []string
+}
+
+// SetInsecureRegistries declares the plain-HTTP registry hosts.
+func (s *DefaultServiceService) SetInsecureRegistries(hosts []string) {
+	s.insecureRegistries = hosts
 }
 
 func NewDefaultServiceService(releaseRepo repository.ServiceRepository, contextRepo repository.ContextRepository, contextWriteRepo repository.ContextWriterRepository, schemaService PackageSchemaService, oidcProvisioner provisioning.OidcClientProvisioner, k8sClient dynamic.Interface, typedClient kubernetes.Interface, contextNamespace, releaseInterval, releaseTimeout string, sidecarPrefixes []string) *DefaultServiceService {
@@ -289,12 +297,6 @@ func (s *DefaultServiceService) DeployService(ctx context.Context, project strin
 		return nil, fmt.Errorf("failed to resolve ingress suffix: %w", err)
 	}
 
-	if s.contextWriteRepo != nil {
-		if err := s.contextWriteRepo.SyncFromDefault(ctx, project); err != nil {
-			logrus.WithError(err).WithField("project", project).Warn("Failed to sync project Context from default")
-		}
-	}
-
 	instanceName := req.InstanceName
 	if instanceName == "" {
 		instanceName = req.Service
@@ -322,11 +324,12 @@ func (s *DefaultServiceService) DeployService(ctx context.Context, project strin
 				Tag:        deployTag,
 				Interval:   s.releaseInterval,
 				Timeout:    s.releaseTimeout,
+				Insecure:   insecureOCIHost(packageRepo, s.insecureRegistries),
 			},
 			Parameters: req.Parameters,
-			Contexts: []crd.ContextRef{
-				{Name: project, Namespace: s.contextNamespace},
-			},
+			// No explicit Contexts. KuboCD merges Config.defaultContexts, then the
+			// optional Context named by Config.defaultNamespaceContexts looked up in
+			// this Release's namespace. A project overriding nothing needs no object.
 			TargetNamespace: project,
 			CreateNamespace: false,
 		},
@@ -367,7 +370,7 @@ func (s *DefaultServiceService) GetService(ctx context.Context, project, name st
 	instances := []models.ServiceInstance{*instance}
 	s.enrichWithPodHealth(ctx, instances)
 	instance.Status = instances[0].Status
-	// Only surface an explanatory message when the instance is not Ready — there
+	// Only surface an explanatory message when the instance is not Ready: there
 	// is nothing useful to show on a healthy service, and scanning events has a
 	// non-trivial API cost per request.
 	if instance.Status != "Ready" {
@@ -381,7 +384,7 @@ func (s *DefaultServiceService) GetService(ctx context.Context, project, name st
 // release (prefix match). Used to turn a stuck KuboCD release into an
 // actionable UI error like "Deployment.apps is invalid: memory request must
 // be less than or equal to memory limit of 1". Returns "" if no relevant
-// event exists or the API call fails — callers should treat empty as "no
+// event exists or the API call fails, so callers should treat empty as "no
 // additional context available".
 func (s *DefaultServiceService) latestWarningMessage(ctx context.Context, namespace, releaseName string) string {
 	if namespace == "" || releaseName == "" {
@@ -436,7 +439,7 @@ func pickEventTimestamp(obj map[string]interface{}) time.Time {
 }
 
 // truncateMessage keeps UI tooltips readable. K8s validation errors can run
-// several hundred characters — we cap to 400 so the UI does not blow up.
+// several hundred characters, we cap to 400 so the UI does not blow up.
 func truncateMessage(msg string) string {
 	const max = 400
 	if len(msg) <= max {
@@ -462,34 +465,87 @@ func (s *DefaultServiceService) DeleteService(ctx context.Context, project, name
 // identity.provisioning.provider is unset/none).
 func (s *DefaultServiceService) cleanupOidcClient(ctx context.Context, releaseName string) {
 	if err := s.oidcProvisioner.DeleteClient(ctx, releaseName); err != nil {
-		logrus.WithError(err).WithField("oidcClient", releaseName).Debug("OidcClient cleanup skipped")
+		// Warn, not Debug: a client left registered outlives the service that
+		// owned it and nothing else reports it.
+		logrus.WithError(err).WithField("oidcClient", releaseName).Warn("OidcClient cleanup failed")
 	} else {
 		logrus.WithField("oidcClient", releaseName).Info("Cleaned up OidcClient")
 	}
 }
 
-func (s *DefaultServiceService) cleanupUserResources(ctx context.Context, namespace, releaseName string) {
+// ownsByName reports whether an object named by a release belongs to
+// releaseName rather than to one of the other releases still living in the
+// namespace. Names are the only link available here (the singleuser objects
+// JupyterHub creates carry no ownerReference back to the Release), and a bare
+// prefix test is not enough: `demo-jupyter-` also matches
+// `demo-jupyter-ds-claim-alice`, the home volume of a user of the *other*
+// instance. Whichever prefix is the longest match wins, so an object is only
+// ever claimed by the release whose name reaches furthest into it.
+func ownsByName(objectName, releaseName string, otherReleases []string) bool {
 	prefix := releaseName + "-"
+	if len(objectName) <= len(prefix) || objectName[:len(prefix)] != prefix {
+		return false
+	}
+	for _, other := range otherReleases {
+		if len(other) <= len(releaseName) {
+			continue
+		}
+		// The neighbour's own name is one of its objects too: a chart names its
+		// PVC after the release itself.
+		if objectName == other {
+			return false
+		}
+		otherPrefix := other + "-"
+		if len(objectName) > len(otherPrefix) && objectName[:len(otherPrefix)] == otherPrefix {
+			return false
+		}
+	}
+	return true
+}
 
-	podGVR := schema.GroupVersionResource{Version: "v1", Resource: "pods"}
-	pods, err := s.k8sClient.Resource(podGVR).Namespace(namespace).List(ctx, metav1.ListOptions{})
-	if err == nil {
-		for _, pod := range pods.Items {
-			if len(pod.GetName()) > len(prefix) && pod.GetName()[:len(prefix)] == prefix {
-				_ = s.k8sClient.Resource(podGVR).Namespace(namespace).Delete(ctx, pod.GetName(), metav1.DeleteOptions{})
-				logrus.WithField("pod", pod.GetName()).Info("Cleaned up user pod")
-			}
+// cleanupUserResources removes the pods and volumes a release created outside
+// its own manifests, JupyterHub's per-user servers and home volumes, which no
+// controller reclaims when the Release goes.
+//
+// Deleting a volume is irreversible, so this fails closed: if the surviving
+// releases cannot be listed, nothing is deleted rather than everything matching
+// a prefix.
+func (s *DefaultServiceService) cleanupUserResources(ctx context.Context, namespace, releaseName string) {
+	// Called after the Release has been deleted, so this lists the neighbours.
+	survivors, err := s.releaseRepo.List(ctx, namespace, namespace)
+	if err != nil {
+		logrus.WithError(err).WithField("release", releaseName).
+			Error("Skipping user resource cleanup: cannot tell this release's objects from its neighbours'")
+		return
+	}
+	others := make([]string, 0, len(survivors))
+	for i := range survivors {
+		if survivors[i].Name != releaseName {
+			others = append(others, survivors[i].Name)
 		}
 	}
 
-	pvcGVR := schema.GroupVersionResource{Version: "v1", Resource: "persistentvolumeclaims"}
-	pvcs, err := s.k8sClient.Resource(pvcGVR).Namespace(namespace).List(ctx, metav1.ListOptions{})
-	if err == nil {
-		for _, pvc := range pvcs.Items {
-			if len(pvc.GetName()) > len(prefix) && pvc.GetName()[:len(prefix)] == prefix {
-				_ = s.k8sClient.Resource(pvcGVR).Namespace(namespace).Delete(ctx, pvc.GetName(), metav1.DeleteOptions{})
-				logrus.WithField("pvc", pvc.GetName()).Info("Cleaned up user PVC")
+	for _, target := range []struct {
+		gvr  schema.GroupVersionResource
+		kind string
+	}{
+		{schema.GroupVersionResource{Version: "v1", Resource: "pods"}, "pod"},
+		{schema.GroupVersionResource{Version: "v1", Resource: "persistentvolumeclaims"}, "pvc"},
+	} {
+		objects, err := s.k8sClient.Resource(target.gvr).Namespace(namespace).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			logrus.WithError(err).WithField("kind", target.kind).Warn("Could not list user resources to clean up")
+			continue
+		}
+		for _, object := range objects.Items {
+			if !ownsByName(object.GetName(), releaseName, others) {
+				continue
 			}
+			if err := s.k8sClient.Resource(target.gvr).Namespace(namespace).Delete(ctx, object.GetName(), metav1.DeleteOptions{}); err != nil {
+				logrus.WithError(err).WithField(target.kind, object.GetName()).Warn("Could not clean up user resource")
+				continue
+			}
+			logrus.WithField(target.kind, object.GetName()).Info("Cleaned up user resource")
 		}
 	}
 }
@@ -502,10 +558,6 @@ func (s *DefaultServiceService) WatchServices(ctx context.Context, project strin
 
 func (s *DefaultServiceService) GetMenuCategories(ctx context.Context) ([]models.MenuCategory, error) {
 	return s.contextRepo.GetMenuCategories(ctx)
-}
-
-func (s *DefaultServiceService) GetCatalog(ctx context.Context) ([]models.CatalogCategory, error) {
-	return s.contextRepo.GetCatalog(ctx)
 }
 
 func (s *DefaultServiceService) GetIngressSuffix(ctx context.Context) (string, error) {
@@ -584,7 +636,7 @@ func (s *DefaultServiceService) enrichWithURL(ctx context.Context, instances []m
 
 // setURLIfExposed sets instance.URL to the first candidate host (see
 // candidateHosts) that an Ingress in the instance's namespace actually
-// routes to — the single-instance counterpart of enrichWithURL (see it for
+// routes to, the single-instance counterpart of enrichWithURL (see it for
 // the rationale).
 func (s *DefaultServiceService) setURLIfExposed(ctx context.Context, instance *models.ServiceInstance) {
 	suffix, err := s.contextRepo.GetIngressSuffix(ctx)
@@ -603,17 +655,21 @@ func (s *DefaultServiceService) setURLIfExposed(ctx context.Context, instance *m
 // roleHostConventions maps a role (models.ServiceInstance.Roles) to the
 // canonical Ingress host a service filling that role is expected to publish,
 // for roles whose URL is a project-wide convention rather than tied to
-// whatever name a given instance happens to have — e.g. a project has at
+// whatever name a given instance happens to have, e.g. a project has at
 // most one default storage service, so consumers and the console can assume
 // a single, stable host regardless of which backend/instance is deployed.
 var roleHostConventions = map[string]func(namespace string) string{
 	"storage": func(namespace string) string { return fmt.Sprintf("storage-%s", namespace) },
+	// The Spark UIs (history server and live driver UIs) are reached through
+	// the web proxy, whose Ingress host is a fixed prefix, not the release
+	// or service name.
+	"spark": func(namespace string) string { return fmt.Sprintf("spark-web-proxy-%s", namespace) },
 }
 
 // candidateHosts lists the Ingress hosts, in priority order, that could
 // expose instance: its own release name first, then any role-specific
 // convention that applies to it, then the platform-packages catalog's own
-// "<service>[-console]-<namespace>" convention — most service contexts
+// "<service>[-console]-<namespace>" convention, most service contexts
 // (Trino, Superset, JupyterHub, Spark History, Polaris, ...) publish their
 // endpoint at a host built from the service name and namespace rather than
 // the release name, independently of whatever instance name the user chose.
@@ -683,6 +739,10 @@ func (s *DefaultServiceService) enrichWithPodHealth(ctx context.Context, instanc
 		prefix := instances[i].ReleaseName + "-"
 		instances[i].Status = s.checkPodHealth(podList.Items, prefix, instances[i].Status)
 	}
+}
+
+func (s *DefaultServiceService) EnrichURL(ctx context.Context, instance *models.ServiceInstance) {
+	s.setURLIfExposed(ctx, instance)
 }
 
 func (s *DefaultServiceService) EnrichPodHealth(ctx context.Context, instance *models.ServiceInstance) {
@@ -937,8 +997,56 @@ func releaseToInstance(r *crd.Release) *models.ServiceInstance {
 		TargetNamespace: r.Spec.TargetNamespace,
 		Roles:           r.Status.Roles,
 		Parameters:      r.Spec.Parameters,
+		Connections:     boundConnections(r),
 		CreatedAt:       createdAt,
 	}
+}
+
+// boundConnections describes what a release is wired to, from what the
+// controller published.
+//
+// The two lists do not mean what their names suggest. A connectionRef with no
+// kind resolves by looking on both sides, so watchedInputConnections holds
+// every *candidate*, a Connection and a ClusterConnection per name, not a set
+// of pending bindings. Listing them as they come showed "demo-db
+// (ClusterConnection) waiting" next to the Connection that had resolved, for a
+// ClusterConnection that never existed. Candidates are therefore grouped by
+// name: a name that resolved shows once, resolved. A name that resolved nowhere
+// shows once, waiting, which is the case a reader opens this page for.
+func boundConnections(r *crd.Release) []models.ServiceConnection {
+	byName := map[string]models.ServiceConnection{}
+	order := make([]string, 0, len(r.Status.WatchedInputConnections))
+
+	remember := func(ref crd.InputConnectionReference, resolved bool) {
+		current, seen := byName[ref.Name]
+		if !seen {
+			order = append(order, ref.Name)
+		}
+		// A resolved candidate always wins over a pending one.
+		if seen && current.Resolved {
+			return
+		}
+		byName[ref.Name] = models.ServiceConnection{
+			Name: ref.Name, Namespace: ref.Namespace, Kind: ref.Kind, Resolved: resolved,
+		}
+	}
+
+	for _, ref := range r.Status.EffectiveInputConnections {
+		remember(ref, true)
+	}
+	for _, ref := range r.Status.WatchedInputConnections {
+		remember(ref, false)
+	}
+
+	if len(order) == 0 {
+		return nil
+	}
+	sort.Strings(order)
+	out := make([]models.ServiceConnection, 0, len(order))
+	for _, name := range order {
+		out = append(out, byName[name])
+	}
+	return out
 }
 
 // GetServiceMetrics aggregates live CPU/memory usage from the metrics-server
@@ -1075,8 +1183,8 @@ func (s *DefaultServiceService) GetServiceMetrics(ctx context.Context, project, 
 
 // parseCPUQuantity parses a Kubernetes CPU quantity string (e.g. "500m",
 // "2", "1500000000n", "1.5") and returns the value in whole cores. Wraps
-// k8s.io/apimachinery resource.ParseQuantity — the canonical parser used
-// throughout the Kubernetes ecosystem — so we inherit correct handling of
+// k8s.io/apimachinery resource.ParseQuantity, the canonical parser used
+// throughout the Kubernetes ecosystem, so we inherit correct handling of
 // every SI suffix (n, u, m, k, M, G, T, P, E) and binary suffix (Ki, Mi,
 // Gi, Ti, Pi, Ei) as well as decimal and scientific notation.
 // Returns an error when s is not a valid quantity; callers are expected
@@ -1097,7 +1205,7 @@ func parseCPUQuantity(s string) (float64, error) {
 
 // parseMemoryQuantity parses a Kubernetes memory quantity string (e.g.
 // "512Mi", "2Gi", "1024", "1.5Gi") and returns the value in bytes. Same
-// rationale as parseCPUQuantity — we delegate to resource.ParseQuantity.
+// rationale as parseCPUQuantity, we delegate to resource.ParseQuantity.
 func parseMemoryQuantity(s string) (float64, error) {
 	if s == "" {
 		return 0, nil

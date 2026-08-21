@@ -17,8 +17,8 @@ of it, the UI admin space — ui#23).
 ## 2. Current state (read path)
 
 - Source of truth: the KuboCD `Context` CR (`kubocd.kubotal.io/v1alpha1`), name/namespace from
-  `CONTEXT_NAME` / `CONTEXT_NAMESPACE` (defaults `default` / `kubocd-system`).
-- The catalog lives under `spec.context.okdp.services[]`, each entry:
+  `CONTEXT_NAME` / `CONTEXT_NAMESPACE` (defaults `platform` / the server's own namespace).
+- The catalog lives under `spec.context.serviceCatalog.services[]`, each entry:
   ```yaml
   - name: trino
     versions: ["0.3.0", "0.2.0", "0.1.0"]
@@ -27,12 +27,11 @@ of it, the UI admin space — ui#23).
     icon: "pi-search"
     category: "data-querying"
   ```
-  plus `spec.context.okdp.packageRepository` (e.g. `quay.io/okdp/packages-dev`).
-- Read code: `internal/repository/context_repository.go` (`GetPlatformServices`, `GetCatalog`,
+  plus `spec.context.serviceCatalog.defaultRepository` (e.g. `quay.io/okdp/packages-dev`).
+- Read code: `internal/repository/context_repository.go` (`GetPlatformServices`,
   `GetPackageRepository`), `internal/service/service_service.go`, handler routes in
   `internal/api/router/router.go` (`GET /api/platform-services`, `/:name/versions`, `/:name/schema`).
-- There is already a `context_writer_repository.go` that clones/syncs/deletes per-project Contexts,
-  but it cannot edit the catalog granularly.
+- There is already a `context_writer_repository.go`, but it cannot edit the catalog granularly.
 
 ## 3. Proposed API
 
@@ -72,10 +71,9 @@ existing JSON error shape (`{"error": "..."}`), with appropriate status codes (s
 
 ## 4. Where it writes
 
-- All writes target the **`default` Context** — the single source of truth. Per-project Contexts
-  are derived from it via `SyncFromDefault`, so editing a project Context would be overwritten;
-  the catalog must be managed on `default` only.
-- **Read-modify-write** on `spec.context.okdp.services`: read the CR, mutate the slice in memory,
+- All writes target the **platform Context**, the single source of truth. There is no per-project
+  copy of the catalog to keep in step.
+- **Read-modify-write** on `spec.context.serviceCatalog.services`: read the CR, mutate the slice in memory,
   write it back with `Update`, wrapped in `client-go/util/retry.RetryOnConflict` to handle
   concurrent edits (`resourceVersion` conflicts).
 - Implemented by extending `ContextWriterRepository` with `AddService` / `UpdateService` /
@@ -123,7 +121,7 @@ regardless.
 | # | Question | Decision |
 |---|----------|----------|
 | 1 | Endpoint grouping | Keep under `/api/platform-services` (symmetry with the existing read routes). **Done.** |
-| 2 | Default vs per-project propagation | Accepted as-is: editing the `default` Context propagates to a project on its next `SyncFromDefault` (at deploy time). Documented; no forced re-sync for now. |
+| 2 | Default vs per-project propagation | Moot since the platform Context became the only one: a catalog edit is visible to every project at once. |
 | 3 | Version validation strictness | **Hard-fail**: a version absent from the OCI registry is rejected (400). **Done** (reuses the OCI tag listing). |
 | 4 | Authorization (who can edit) | **Deferred.** Should eventually be gated on the `admins` group, but the server has no auth middleware yet — tracked separately with the broader authz work. |
 

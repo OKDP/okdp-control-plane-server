@@ -6,7 +6,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	"github.com/okdp/okdp-server-new/internal/models"
+	"github.com/okdp/okdp-control-plane-server/internal/models"
 )
 
 // ingress builds a minimal unstructured Ingress with the given rule hosts.
@@ -66,6 +66,15 @@ func TestCandidateHosts(t *testing.T) {
 		instance := &models.ServiceInstance{ReleaseName: "demo-rustfs", TargetNamespace: "demo", Roles: []string{"storage"}}
 		got := candidateHosts(instance, "okdp.sandbox")
 		want := []string{"demo-rustfs.okdp.sandbox", "storage-demo.okdp.sandbox"}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("got %v, want %v", got, want)
+		}
+	})
+
+	t.Run("release name first, then the spark role convention (web proxy host)", func(t *testing.T) {
+		instance := &models.ServiceInstance{ReleaseName: "demo-spark-history", TargetNamespace: "demo", Roles: []string{"spark"}, Service: "spark-history-server"}
+		got := candidateHosts(instance, "okdp.sandbox")
+		want := []string{"demo-spark-history.okdp.sandbox", "spark-web-proxy-demo.okdp.sandbox", "spark-history-server-console-demo.okdp.sandbox", "spark-history-server-demo.okdp.sandbox"}
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf("got %v, want %v", got, want)
 		}

@@ -144,10 +144,14 @@ func (p *keycloakProvisioner) connect(ctx context.Context) (*KeycloakConfig, *ke
 
 	httpClient := &http.Client{Timeout: 15 * time.Second}
 	if cfg.InsecureSkipTLSVerify {
-		httpClient.Transport = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
+		// Cloned, not built from scratch: a bare Transport has no Proxy, and the
+		// chart passes the egress proxy the pod must go through.
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+		httpClient.Transport = transport
 	}
 
-	// A fresh token per operation keeps the adapter stateless; client cleanup is
+	// A fresh token per operation keeps the adapter stateless. Client cleanup is
 	// rare enough that caching is not worth the invalidation logic.
 	form := url.Values{
 		"grant_type":    {"client_credentials"},
@@ -215,7 +219,7 @@ func (s *keycloakSession) findClient(ctx context.Context, clientID string) (map[
 	if err := json.NewDecoder(resp.Body).Decode(&clients); err != nil {
 		return nil, fmt.Errorf("decoding keycloak clients response: %w", err)
 	}
-	// The clientId filter can match partially; require an exact match.
+	// The clientId filter can match partially. Require an exact match.
 	for _, c := range clients {
 		if id, _ := c["clientId"].(string); id == clientID {
 			return c, nil

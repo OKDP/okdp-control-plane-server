@@ -5,15 +5,14 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/okdp/okdp-server-new/internal/models"
-	"github.com/okdp/okdp-server-new/internal/service/mocks"
+	"github.com/okdp/okdp-control-plane-server/internal/models"
+	"github.com/okdp/okdp-control-plane-server/internal/service/mocks"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestListProjects(t *testing.T) {
 	mockRepo := new(mocks.ProjectRepository)
-	mockCtxRepo := new(mocks.ContextWriterRepository)
-	service := NewDefaultProjectService(mockRepo, mockCtxRepo)
+	service := NewDefaultProjectService(mockRepo)
 
 	ctx := context.Background()
 	expectedProjects := []models.Project{
@@ -32,8 +31,7 @@ func TestListProjects(t *testing.T) {
 
 func TestGetProject(t *testing.T) {
 	mockRepo := new(mocks.ProjectRepository)
-	mockCtxRepo := new(mocks.ContextWriterRepository)
-	service := NewDefaultProjectService(mockRepo, mockCtxRepo)
+	service := NewDefaultProjectService(mockRepo)
 
 	ctx := context.Background()
 	expectedProject := &models.Project{Name: "proj1", Description: "desc1"}
@@ -49,52 +47,42 @@ func TestGetProject(t *testing.T) {
 
 func TestCreateProject(t *testing.T) {
 	mockRepo := new(mocks.ProjectRepository)
-	mockCtxRepo := new(mocks.ContextWriterRepository)
-	service := NewDefaultProjectService(mockRepo, mockCtxRepo)
+	service := NewDefaultProjectService(mockRepo)
 
 	ctx := context.Background()
 	newProject := &models.Project{Name: "proj1", Description: "desc1"}
 
 	mockRepo.On("Create", ctx, newProject).Return(nil)
-	// CreateProject also provisions a per-project KuboCD Context CR cloned
-	// from the default one; the write is best-effort so a nil error is fine.
-	mockCtxRepo.On("CreateFromDefault", ctx, newProject.Name).Return(nil)
 
 	err := service.CreateProject(ctx, newProject)
 
 	assert.NoError(t, err)
 	mockRepo.AssertExpectations(t)
-	mockCtxRepo.AssertExpectations(t)
 }
 
 func TestDeleteProject(t *testing.T) {
 	mockRepo := new(mocks.ProjectRepository)
-	mockCtxRepo := new(mocks.ContextWriterRepository)
-	service := NewDefaultProjectService(mockRepo, mockCtxRepo)
+	service := NewDefaultProjectService(mockRepo)
 
 	ctx := context.Background()
 	projectToDelete := "proj1"
 
-	// DeleteProject removes the per-project KuboCD Context CR then the Namespace.
-	mockCtxRepo.On("Delete", ctx, projectToDelete).Return(nil)
+	// DeleteProject removes the Namespace. No per-project Context is managed.
 	mockRepo.On("Delete", ctx, projectToDelete).Return(nil)
 
 	err := service.DeleteProject(ctx, projectToDelete)
 
 	assert.NoError(t, err)
 	mockRepo.AssertExpectations(t)
-	mockCtxRepo.AssertExpectations(t)
 }
 
 func TestDeleteProject_RepoError(t *testing.T) {
 	mockRepo := new(mocks.ProjectRepository)
-	mockCtxRepo := new(mocks.ContextWriterRepository)
-	service := NewDefaultProjectService(mockRepo, mockCtxRepo)
+	service := NewDefaultProjectService(mockRepo)
 
 	ctx := context.Background()
 	projectToDelete := "proj1"
 
-	mockCtxRepo.On("Delete", ctx, projectToDelete).Return(nil)
 	mockRepo.On("Delete", ctx, projectToDelete).Return(errors.New("ns delete error"))
 
 	err := service.DeleteProject(ctx, projectToDelete)

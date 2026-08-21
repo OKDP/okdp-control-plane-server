@@ -38,33 +38,21 @@
                 }
             }
         },
-        "/api/catalog": {
+        "/api/contracts": {
             "get": {
-                "description": "Get the list of additional packages that clients can deploy on their own",
+                "description": "Descriptors of every contract, used to build the creation form, plus whether connections can currently be persisted",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
-                    "catalog"
+                    "connections"
                 ],
-                "summary": "Get self-service catalog",
+                "summary": "List the available contracts",
                 "responses": {
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "type": "array",
-                            "items": {
-                                "$ref": "#/definitions/models.CatalogCategory"
-                            }
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/models.ConnectionCatalogResponse"
                         }
                     }
                 }
@@ -297,6 +285,43 @@
                             "type": "object",
                             "additionalProperties": {
                                 "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/platform-services/{serviceName}/inputs": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "platform-services"
+                ],
+                "summary": "Connections a service's package declares it needs",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Service name",
+                        "name": "serviceName",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Package version tag (defaults to Context CR tag)",
+                        "name": "tag",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/models.PackageInput"
                             }
                         }
                     }
@@ -684,12 +709,417 @@
                     "204": {
                         "description": "No Content"
                     },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
                                 "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/projects/{name}/connections": {
+            "get": {
+                "description": "Connections declared in the project namespace. Connections owned by a deployed release are excluded. They are returned by the internal endpoint.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "connections"
+                ],
+                "summary": "List the external connections of a project",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project name (= Kubernetes namespace)",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/models.ConnectionResponse"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "Stores the credential fields in a Kubernetes Secret and creates the Connection CRD referencing it",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "connections"
+                ],
+                "summary": "Create an external connection in a project",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project name (= Kubernetes namespace)",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Connection",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/models.ConnectionRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/models.ConnectionResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "501": {
+                        "description": "Not Implemented",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/projects/{name}/connections/internal": {
+            "get": {
+                "description": "Connections provided by the services already deployed in the project, that the project's other services can consume",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "connections"
+                ],
+                "summary": "List the internal connections of a project",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project name (= Kubernetes namespace)",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/models.InternalConnection"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/projects/{name}/connections/selectable": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "connections"
+                ],
+                "summary": "Connections offered for a package input of a given contract",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Contract the connections must satisfy",
+                        "name": "contract",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/models.SelectableConnection"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/projects/{name}/connections/test": {
+            "post": {
+                "description": "Opens a real connection to the endpoint and checks the credentials. Nothing is written to the cluster, so a connection can be validated before being created. Always answers 200: the outcome is in the body.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "connections"
+                ],
+                "summary": "Test a connection from the platform",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project name (= Kubernetes namespace)",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Connection settings to probe",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/models.ConnectionTestRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.ConnectionTestResult"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/projects/{name}/connections/{connName}": {
+            "put": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "connections"
+                ],
+                "summary": "Update an external connection of a project",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project name (= Kubernetes namespace)",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Connection name",
+                        "name": "connName",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Connection",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/models.ConnectionRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.ConnectionResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "501": {
+                        "description": "Not Implemented",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "description": "Removes the Connection CRD and the Secret holding its credentials",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "connections"
+                ],
+                "summary": "Delete an external connection of a project",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project name (= Kubernetes namespace)",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Connection name",
+                        "name": "connName",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "501": {
+                        "description": "Not Implemented",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/projects/{name}/connections/{connName}/consumers": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "connections"
+                ],
+                "summary": "Services of the project bound to a connection",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Connection name",
+                        "name": "connName",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/models.ConnectionConsumer"
                             }
                         }
                     }
@@ -2707,34 +3137,235 @@
                 }
             }
         },
-        "models.CatalogCategory": {
+        "models.ConnectionCatalogResponse": {
             "type": "object",
             "properties": {
-                "description": {
-                    "type": "string"
+                "crdAvailable": {
+                    "description": "CRDAvailable reports whether the KuboCD connection CRDs are installed.\nWhile they are not, external connections cannot be persisted and the\nconsole says so instead of failing on save. Internal connections are\nderived from deployed services and stay available either way.",
+                    "type": "boolean"
                 },
-                "id": {
-                    "type": "string"
-                },
-                "name": {
-                    "type": "string"
-                },
-                "packages": {
+                "types": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/models.CatalogPackage"
+                        "$ref": "#/definitions/models.ContractDescriptor"
                     }
                 }
             }
         },
-        "models.CatalogPackage": {
+        "models.ConnectionConsumer": {
             "type": "object",
             "properties": {
+                "effective": {
+                    "description": "Effective reports that the release actually resolved this connection, as\nopposed to merely waiting for it.",
+                    "type": "boolean"
+                },
+                "releaseName": {
+                    "type": "string"
+                },
+                "service": {
+                    "description": "Service is the instance name as the console displays it, ReleaseName the\nunderlying KuboCD Release.",
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.ConnectionField": {
+            "type": "object",
+            "properties": {
+                "default": {},
+                "derived": {
+                    "description": "Derived computes the value from another field instead of asking for it.\nThe JDBC driver follows from the engine, and a form that lets the two\ndisagree only produces connections nothing can open.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.FieldDerivation"
+                        }
+                    ]
+                },
+                "help": {
+                    "type": "string"
+                },
+                "label": {
+                    "type": "string"
+                },
+                "masked": {
+                    "description": "Masked hides the value as it is typed. A database user name lives in the\nSecret because the contract puts it there, but hiding it behind dots only\nstops the user from checking what they typed.",
+                    "type": "boolean"
+                },
+                "max": {
+                    "type": "number"
+                },
+                "min": {
+                    "type": "number"
+                },
                 "name": {
                     "type": "string"
                 },
-                "tag": {
+                "options": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "placeholder": {
                     "type": "string"
+                },
+                "required": {
+                    "type": "boolean"
+                },
+                "secret": {
+                    "description": "Secret says where the value is stored: in the credentials Secret rather\nthan in the Connection spec. It says nothing about how it is typed in.",
+                    "type": "boolean"
+                },
+                "showWhen": {
+                    "description": "ShowWhen limits the field to one value of another field. A PostgreSQL TLS\nmode and a MySQL one are not the same list, and offering both at once is\nhow a connection ends up carrying the wrong one.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.FieldCondition"
+                        }
+                    ]
+                },
+                "type": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.ConnectionRequest": {
+            "type": "object",
+            "required": [
+                "name",
+                "type",
+                "values"
+            ],
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "existingSecret": {
+                    "description": "ExistingSecret names a Secret already present in the namespace, holding\nthe credentials of this connection. When it is set the server stores no\ncredential of its own: the Secret may come from anywhere, typically\nprojected from a vault by External Secrets, and the connection only\npoints at it. The credential fields of the payload are then ignored.",
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
+                },
+                "values": {
+                    "type": "object",
+                    "additionalProperties": {}
+                }
+            }
+        },
+        "models.ConnectionResponse": {
+            "type": "object",
+            "properties": {
+                "createdAt": {
+                    "type": "string"
+                },
+                "credentialsSecret": {
+                    "description": "CredentialsSecret is the Secret holding the secret fields, so a consumer\ncan reference it from a Deployment without the console ever reading it.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.CredentialsSecretRef"
+                        }
+                    ]
+                },
+                "description": {
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "namespace": {
+                    "type": "string"
+                },
+                "scope": {
+                    "type": "string"
+                },
+                "secretFields": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "status": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
+                },
+                "values": {
+                    "type": "object",
+                    "additionalProperties": {}
+                }
+            }
+        },
+        "models.ConnectionTestCheck": {
+            "type": "object",
+            "properties": {
+                "decisive": {
+                    "description": "Decisive marks the path a workload will actually take, the one Success\nreflects. The others are shown for diagnosis.",
+                    "type": "boolean"
+                },
+                "label": {
+                    "description": "Label names the path for a reader (\"In-cluster URL\", \"Public URL\").",
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "success": {
+                    "type": "boolean"
+                },
+                "target": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.ConnectionTestRequest": {
+            "type": "object",
+            "required": [
+                "type",
+                "values"
+            ],
+            "properties": {
+                "type": {
+                    "type": "string"
+                },
+                "values": {
+                    "type": "object",
+                    "additionalProperties": {}
+                }
+            }
+        },
+        "models.ConnectionTestResult": {
+            "type": "object",
+            "properties": {
+                "checks": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.ConnectionTestCheck"
+                    }
+                },
+                "durationMs": {
+                    "type": "integer"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "success": {
+                    "type": "boolean"
                 }
             }
         },
@@ -2748,6 +3379,65 @@
                     "type": "string"
                 },
                 "ready": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "models.ContractDescriptor": {
+            "type": "object",
+            "properties": {
+                "category": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "displayName": {
+                    "type": "string"
+                },
+                "endpointFrom": {
+                    "description": "EndpointFrom names the value fields carrying the address a consumer would\nreach, most specific first. A contract publishing a plain host and port\nneeds none: that convention is the fallback.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "external": {
+                    "description": "External reports whether a user may declare a connection against this\ncontract by hand. A contract that is not external is listed for the\ninternal view, where the connections come from the deployed services,\nbut offers no creation form.",
+                    "type": "boolean"
+                },
+                "fields": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.ConnectionField"
+                    }
+                },
+                "icon": {
+                    "type": "string"
+                },
+                "name": {
+                    "description": "Name IS the KuboCD Contract this descriptor produces. One descriptor, one\ncontract, deliberately: an entry form that produced a differently named\ncontract would mean nothing a package asks for could be found by its own\nname.",
+                    "type": "string"
+                }
+            }
+        },
+        "models.CredentialsSecretRef": {
+            "type": "object",
+            "properties": {
+                "keys": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "name": {
+                    "type": "string"
+                },
+                "namespace": {
+                    "type": "string"
+                },
+                "owned": {
+                    "description": "Owned reports that the console wrote this Secret, as opposed to pointing\nat one that was already there, typically projected from a vault. The two\nbehave differently on edit and on delete, so the panel says which it is.",
                     "type": "boolean"
                 }
             }
@@ -2904,6 +3594,31 @@
                 }
             }
         },
+        "models.FieldCondition": {
+            "type": "object",
+            "properties": {
+                "field": {
+                    "type": "string"
+                },
+                "value": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.FieldDerivation": {
+            "type": "object",
+            "properties": {
+                "from": {
+                    "type": "string"
+                },
+                "map": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
         "models.Group": {
             "type": "object",
             "properties": {
@@ -2957,6 +3672,60 @@
                 }
             }
         },
+        "models.InternalConnection": {
+            "type": "object",
+            "properties": {
+                "category": {
+                    "type": "string"
+                },
+                "createdAt": {
+                    "type": "string"
+                },
+                "endpoint": {
+                    "description": "Endpoint is the in-cluster address another service uses to reach it.",
+                    "type": "string"
+                },
+                "host": {
+                    "type": "string"
+                },
+                "icon": {
+                    "type": "string"
+                },
+                "managed": {
+                    "description": "Managed reports that the entry comes from a Connection the KuboCD release\ncontroller owns, rather than being derived from the deployed service.",
+                    "type": "boolean"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "namespace": {
+                    "type": "string"
+                },
+                "port": {
+                    "type": "integer"
+                },
+                "releaseName": {
+                    "type": "string"
+                },
+                "service": {
+                    "description": "Service and ReleaseName identify the deployed instance providing it.",
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
+                },
+                "typeDisplay": {
+                    "type": "string"
+                },
+                "values": {
+                    "type": "object",
+                    "additionalProperties": {}
+                }
+            }
+        },
         "models.MenuCategory": {
             "type": "object",
             "properties": {
@@ -3002,6 +3771,35 @@
             "properties": {
                 "provider": {
                     "description": "Provider is the configured provisioning backend: \"none\" (default),\n\"kubauth\" or \"keycloak\".",
+                    "type": "string"
+                }
+            }
+        },
+        "models.PackageInput": {
+            "type": "object",
+            "properties": {
+                "alias": {
+                    "description": "Alias names the input in the package's templates, and is the key the\nconsole sends back when the user picks a connection.",
+                    "type": "string"
+                },
+                "contract": {
+                    "description": "Contract names the contract the chosen connection must satisfy. It is what\nmakes the choice safe: only connections of that contract are offered.",
+                    "type": "string"
+                },
+                "default": {
+                    "description": "Default is the template the package falls back to when the deployer picks\nnothing. KuboCD forbids a literal here, so it is always rendered against\nthe Context: this is how an Environment says \"here, the database is that\none\" without the deployer naming it. The console must therefore leave the\nparameter out rather than send an empty string, which would win over it.",
+                    "type": "string"
+                },
+                "description": {
+                    "description": "Description is shown next to the field.",
+                    "type": "string"
+                },
+                "optional": {
+                    "description": "Optional reports that the package tolerates no connection at all.",
+                    "type": "boolean"
+                },
+                "parameter": {
+                    "description": "Parameter is the package parameter carrying the chosen connection name,\nderived from the input's namedConnection template. Empty when the input\nbinds some other way, in which case the console offers no choice.",
                     "type": "string"
                 }
             }
@@ -3253,9 +4051,62 @@
                 }
             }
         },
+        "models.SelectableConnection": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "managed": {
+                    "type": "boolean"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "providedBy": {
+                    "description": "ProvidedBy names the release publishing a managed connection.",
+                    "type": "string"
+                },
+                "scope": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.ServiceConnection": {
+            "type": "object",
+            "properties": {
+                "kind": {
+                    "description": "Kind separates a Connection from a ClusterConnection, which may share a\nname, and tells the console which page to link to.",
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "namespace": {
+                    "type": "string"
+                },
+                "resolved": {
+                    "description": "Resolved is false while the release is still waiting for it.",
+                    "type": "boolean"
+                }
+            }
+        },
         "models.ServiceInstance": {
             "type": "object",
             "properties": {
+                "connections": {
+                    "description": "Connections is what the release actually resolved, published by the\ncontroller. Without it the console can only show what a service asked\nfor, never what it runs against.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.ServiceConnection"
+                    }
+                },
                 "createdAt": {
                     "type": "string"
                 },

@@ -1,7 +1,7 @@
 replicaCount: 1
 
 image:
-  repository: quay.io/okdp/images/okdp-server
+  repository: quay.io/okdp/images/okdp-control-plane-server
   # Defaults to the chart appVersion.
   tag: ""
   pullPolicy: IfNotPresent
@@ -10,16 +10,30 @@ image:
 configuration:
   platformNamespace: okdp-system
   kubocdNamespace: kubocd-system
-  contextName: default
-  contextNamespace: kubocd-system
+  # The platform Context, read by the server and written for its service
+  # catalog. Empty namespace: the namespace the server runs in.
+  contextName: platform
+  contextNamespace: ""
   # Single origin, set verbatim in the Access-Control-Allow-Origin header.
-  allowedOrigins: https://console.okdp.dev-sandbox
+  allowedOrigins: https://okdp-ui.example.com
   logLevel: info
   releaseInterval: 30m
   releaseTimeout: 10m
+  # Comma-separated registry hosts to reach over plain HTTP (dev sandboxes
+  # with a local registry). Leave empty in any real deployment.
+  insecureOciRegistries: ""
+
 
 service:
   type: ClusterIP
   port: 8093
 
 resources: {}
+
+# Forward proxy the pod must go through to reach anything outside the cluster.
+# Empty means no proxy, which is the case on any sandbox. Rendered as the three
+# environment variables every HTTP client reads.
+proxy:
+  httpProxy: ""
+  httpsProxy: ""
+  noProxy: ""

@@ -5,14 +5,17 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/okdp/okdp-server-new/internal/models"
-	"github.com/okdp/okdp-server-new/internal/repository"
-	"github.com/okdp/okdp-server-new/internal/repository/crd"
+	"github.com/okdp/okdp-control-plane-server/internal/models"
+	"github.com/okdp/okdp-control-plane-server/internal/repository"
+	"github.com/okdp/okdp-control-plane-server/internal/repository/crd"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
 type ExternalSecretService interface {
+	// Available reports whether the external-secrets CRDs are installed.
+	Available(ctx context.Context) bool
+
 	ListExternalSecrets(ctx context.Context, namespace string) ([]models.ExternalSecretResponse, error)
 	CreateExternalSecret(ctx context.Context, namespace string, req models.ExternalSecretRequest) (*models.ExternalSecretResponse, error)
 	UpdateExternalSecret(ctx context.Context, namespace, name string, req models.ExternalSecretRequest) (*models.ExternalSecretResponse, error)
@@ -23,6 +26,10 @@ type ExternalSecretService interface {
 type DefaultExternalSecretService struct {
 	repo          repository.ExternalSecretRepository
 	secretStoreRepo repository.SecretStoreRepository
+}
+
+func (s *DefaultExternalSecretService) Available(ctx context.Context) bool {
+	return s.repo.Available(ctx)
 }
 
 func NewDefaultExternalSecretService(repo repository.ExternalSecretRepository, secretStoreRepo repository.SecretStoreRepository) *DefaultExternalSecretService {

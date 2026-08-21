@@ -4,14 +4,18 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/okdp/okdp-server-new/internal/models"
-	"github.com/okdp/okdp-server-new/internal/repository"
-	"github.com/okdp/okdp-server-new/internal/repository/crd"
+	"github.com/okdp/okdp-control-plane-server/internal/models"
+	"github.com/okdp/okdp-control-plane-server/internal/repository"
+	"github.com/okdp/okdp-control-plane-server/internal/repository/crd"
 
 	"golang.org/x/crypto/bcrypt"
 )
 
 type IdentityService interface {
+	// Available reports whether the kubauth CRDs are installed, so the API can
+	// say the feature is absent instead of failing on every call.
+	Available(ctx context.Context) bool
+
 	// Users
 	ListUsers(ctx context.Context) ([]models.User, error)
 	GetUser(ctx context.Context, name string) (*models.User, error)
@@ -39,6 +43,10 @@ func NewDefaultIdentityService(repo repository.IdentityRepository) IdentityServi
 	return &defaultIdentityService{
 		repo: repo,
 	}
+}
+
+func (s *defaultIdentityService) Available(ctx context.Context) bool {
+	return s.repo.Available(ctx)
 }
 
 // --- Users ---

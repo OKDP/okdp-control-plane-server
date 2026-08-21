@@ -4,19 +4,23 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/okdp/okdp-server-new/internal/repository/crd"
+	"github.com/okdp/okdp-control-plane-server/internal/repository/crd"
 	"github.com/sirupsen/logrus"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 )
 
 // ExternalSecretRepository defines Kubernetes operations for ESO ExternalSecret resources.
 // Namespace is passed per call (project = namespace).
 type ExternalSecretRepository interface {
+	// Available reports whether the external-secrets CRDs are installed.
+	Available(ctx context.Context) bool
+
 	Create(ctx context.Context, namespace string, es *crd.ESOExternalSecret) error
 	Get(ctx context.Context, namespace, name string) (*crd.ESOExternalSecret, error)
 	List(ctx context.Context, namespace string) ([]crd.ESOExternalSecret, error)
@@ -27,13 +31,20 @@ type ExternalSecretRepository interface {
 type k8sExternalSecretRepository struct {
 	client dynamic.Interface
 	gvr    schema.GroupVersionResource
+	probe  *APIProbe
 }
 
-func NewExternalSecretRepository(client dynamic.Interface) ExternalSecretRepository {
+func NewExternalSecretRepository(client dynamic.Interface, discoveryClient discovery.DiscoveryInterface) ExternalSecretRepository {
+	gvr := crd.GetExternalSecretGVR()
 	return &k8sExternalSecretRepository{
 		client: client,
-		gvr:    crd.GetExternalSecretGVR(),
+		gvr:    gvr,
+		probe:  NewAPIProbe(discoveryClient, gvr, "external-secrets"),
 	}
+}
+
+func (r *k8sExternalSecretRepository) Available(ctx context.Context) bool {
+	return r.probe.Available()
 }
 
 func (r *k8sExternalSecretRepository) Create(ctx context.Context, namespace string, es *crd.ESOExternalSecret) error {

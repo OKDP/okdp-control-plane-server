@@ -1,12 +1,13 @@
 package handlers
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
-	"github.com/okdp/okdp-server-new/internal/models"
-	"github.com/okdp/okdp-server-new/internal/service"
+	"github.com/okdp/okdp-control-plane-server/internal/models"
+	"github.com/okdp/okdp-control-plane-server/internal/service"
 	"github.com/sirupsen/logrus"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
@@ -19,6 +20,12 @@ type SecretStoreHandler struct {
 // NewSecretStoreHandler creates a new SecretStoreHandler
 func NewSecretStoreHandler(service service.SecretStoreService) *SecretStoreHandler {
 	return &SecretStoreHandler{service: service}
+}
+
+// Available reports whether the SecretStore CRD backs this API, for the guard
+// the router puts in front of the secret-store group.
+func (h *SecretStoreHandler) Available(ctx context.Context) bool {
+	return h.service.Available(ctx)
 }
 
 // ListSecretStores godoc

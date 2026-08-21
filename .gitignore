@@ -1,7 +1,8 @@
 # Binaries
 bin/
 main
-okdp-server-new
+okdp-control-plane-server
+kubocd-local
 *.exe
 *.exe~
 *.dll
@@ -19,6 +20,16 @@ tmp/
 
 # generated container kubeconfig (holds credentials)
 .dev/
+
+# IDEs and editors
+.idea/
+.project
+.classpath
+.c9/
+*.launch
+.settings/
+*.sublime-workspace
+*.iml
 
 # Go workspace file
 go.work
