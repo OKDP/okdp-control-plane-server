@@ -4,7 +4,8 @@
   "packages": {
     ".": {
       "release-type": "simple",
-      "component": "okdp-server"
+      "component": "okdp-control-plane-server",
+      "bump-minor-pre-major": true
     }
   }
 }
