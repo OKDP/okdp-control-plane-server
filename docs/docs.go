@@ -76,6 +76,38 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/platform-categories": {
+            "get": {
+                "description": "Get the ordered menu sections (key, label, icon, order) the console groups services under",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "platform-services"
+                ],
+                "summary": "List console navigation categories",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/models.MenuCategory"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/platform-services": {
             "get": {
                 "description": "Get the list of managed OKDP services that can be deployed per project",
@@ -2931,6 +2963,23 @@ const docTemplate = `{
                 }
             }
         },
+        "models.MenuCategory": {
+            "type": "object",
+            "properties": {
+                "icon": {
+                    "type": "string"
+                },
+                "key": {
+                    "type": "string"
+                },
+                "label": {
+                    "type": "string"
+                },
+                "order": {
+                    "type": "integer"
+                }
+            }
+        },
         "models.MetricValue": {
             "type": "object",
             "properties": {
@@ -2975,7 +3024,15 @@ const docTemplate = `{
                 "description": {
                     "type": "string"
                 },
+                "exposesUI": {
+                    "description": "ExposesUI is false for infrastructure-only packages (operators, storage\nbackends) that have no console page, and nil when the catalog does not set\nit, which the console treats as exposing a UI. It lets the catalog-driven\nmenu leave purely infrastructural packages out of the navigation.",
+                    "type": "boolean"
+                },
                 "icon": {
+                    "type": "string"
+                },
+                "label": {
+                    "description": "Label is the display name shown in the console menu; the service ` + "`" + `name` + "`" + `\n(its identity and route) is used when empty.",
                     "type": "string"
                 },
                 "name": {
@@ -3217,6 +3274,12 @@ const docTemplate = `{
                 },
                 "releaseName": {
                     "type": "string"
+                },
+                "roles": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 },
                 "service": {
                     "type": "string"
