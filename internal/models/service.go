@@ -2,7 +2,9 @@ package models
 
 // --- Platform Services (core OKDP, full lifecycle management) ---
 
-// PlatformService is a managed service available in the OKDP data platform (from Context serviceCatalog.services).
+// PlatformService is a managed service available in the OKDP data platform,
+// read from the Context under serviceCatalog.categories[].services. Category
+// is the title of the section the service sits in.
 type PlatformService struct {
 	Name           string   `json:"name"`
 	Versions       []string `json:"versions"`
@@ -22,10 +24,9 @@ type PlatformService struct {
 }
 
 // MenuCategory describes a console navigation section, read from the Context
-// (spec.context.okdp.categories). It gives the per-service `category` key a
-// display label, an optional icon and an order, so the console can render an
-// ordered, labeled menu driven by the catalog instead of hardcoding the
-// section list in the UI.
+// (spec.context.serviceCatalog.categories). Key and Label both carry the
+// section title, Order its position in the list, so the console renders an
+// ordered, labeled menu driven by the catalog.
 type MenuCategory struct {
 	Key   string `json:"key"`
 	Label string `json:"label"`

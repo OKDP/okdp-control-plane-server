@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/okdp/okdp-control-plane-server/internal/models"
+
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -36,10 +38,12 @@ func newContextWith(t *testing.T, body map[string]interface{}) ContextRepository
 }
 
 func TestGetMenuCategories(t *testing.T) {
-	repo := newContextWith(t, map[string]interface{}{"okdp": map[string]interface{}{
+	repo := newContextWith(t, map[string]interface{}{"serviceCatalog": map[string]interface{}{
 		"categories": []interface{}{
-			map[string]interface{}{"key": "data-processing", "label": "Data Processing", "icon": "pi-cog", "order": int64(2)},
-			map[string]interface{}{"key": "data-science", "label": "Data Science", "order": int64(1)},
+			map[string]interface{}{"title": "Data Processing", "icon": "pi-cog", "services": []interface{}{
+				map[string]interface{}{"name": "spark-operator", "default": "0.3.0"},
+			}},
+			map[string]interface{}{"title": "Data Science"},
 		},
 	}})
 
@@ -50,20 +54,18 @@ func TestGetMenuCategories(t *testing.T) {
 	if len(cats) != 2 {
 		t.Fatalf("expected 2 categories, got %d (%+v)", len(cats), cats)
 	}
-	// Categories are returned in Context order; the console orders them via Order.
-	if cats[0].Key != "data-processing" || cats[0].Label != "Data Processing" || cats[0].Icon != "pi-cog" || cats[0].Order != 2 {
-		t.Errorf("category[0] = %+v, want {data-processing Data Processing pi-cog 2}", cats[0])
+	// The section title is both key and label, the position is the order.
+	if cats[0].Key != "Data Processing" || cats[0].Label != "Data Processing" || cats[0].Icon != "pi-cog" || cats[0].Order != 1 {
+		t.Errorf("category[0] = %+v, want {Data Processing Data Processing pi-cog 1}", cats[0])
 	}
-	if cats[1].Key != "data-science" || cats[1].Order != 1 || cats[1].Icon != "" {
-		t.Errorf("category[1] = %+v, want key=data-science order=1 icon empty", cats[1])
+	if cats[1].Key != "Data Science" || cats[1].Order != 2 || cats[1].Icon != "" {
+		t.Errorf("category[1] = %+v, want key=Data Science order=2 icon empty", cats[1])
 	}
 }
 
 func TestGetMenuCategoriesAbsentReturnsNil(t *testing.T) {
 	repo := newContextWith(t, map[string]interface{}{"serviceCatalog": map[string]interface{}{
-		"services": []interface{}{
-			map[string]interface{}{"name": "jupyterhub", "default": "0.6.0"},
-		},
+		"defaultRepository": "quay.io/okdp/platform-packages",
 	}})
 
 	cats, err := repo.GetMenuCategories(context.Background())
@@ -71,15 +73,19 @@ func TestGetMenuCategoriesAbsentReturnsNil(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if cats != nil {
-		t.Errorf("expected nil categories when okdp.categories is absent, got %+v", cats)
+		t.Errorf("expected nil categories when serviceCatalog.categories is absent, got %+v", cats)
 	}
 }
 
 func TestGetPlatformServicesLabelAndExposesUI(t *testing.T) {
 	repo := newContextWith(t, map[string]interface{}{"serviceCatalog": map[string]interface{}{
-		"services": []interface{}{
-			map[string]interface{}{"name": "spark-operator", "default": "0.3.0", "exposesUI": false},
-			map[string]interface{}{"name": "trino", "default": "0.3.0", "label": "Trino SQL", "category": "data-querying"},
+		"categories": []interface{}{
+			map[string]interface{}{"title": "Spark", "services": []interface{}{
+				map[string]interface{}{"name": "spark-operator", "default": "0.3.0", "exposesUI": false},
+			}},
+			map[string]interface{}{"title": "Interactive Query", "services": []interface{}{
+				map[string]interface{}{"name": "trino", "default": "0.3.0", "label": "Trino SQL"},
+			}},
 		},
 	}})
 
@@ -87,31 +93,31 @@ func TestGetPlatformServicesLabelAndExposesUI(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	byName := map[string]struct {
-		label     string
-		exposesUI *bool
-	}{}
+	byName := map[string]models.PlatformService{}
 	for _, s := range services {
-		byName[s.Name] = struct {
-			label     string
-			exposesUI *bool
-		}{s.Label, s.ExposesUI}
+		byName[s.Name] = s
 	}
 
 	sparkOp, ok := byName["spark-operator"]
 	if !ok {
 		t.Fatal("spark-operator not returned")
 	}
-	if sparkOp.exposesUI == nil || *sparkOp.exposesUI != false {
-		t.Errorf("spark-operator ExposesUI = %v, want explicit false", sparkOp.exposesUI)
+	if sparkOp.ExposesUI == nil || *sparkOp.ExposesUI != false {
+		t.Errorf("spark-operator ExposesUI = %v, want explicit false", sparkOp.ExposesUI)
+	}
+	if sparkOp.Category != "Spark" {
+		t.Errorf("spark-operator Category = %q, want the section title %q", sparkOp.Category, "Spark")
 	}
 
 	trino := byName["trino"]
-	if trino.label != "Trino SQL" {
-		t.Errorf("trino Label = %q, want %q", trino.label, "Trino SQL")
+	if trino.Label != "Trino SQL" {
+		t.Errorf("trino Label = %q, want %q", trino.Label, "Trino SQL")
+	}
+	if trino.Category != "Interactive Query" {
+		t.Errorf("trino Category = %q, want %q", trino.Category, "Interactive Query")
 	}
 	// exposesUI absent stays nil so the console can default it to "exposes a UI".
-	if trino.exposesUI != nil {
-		t.Errorf("trino ExposesUI = %v, want nil when unset", *trino.exposesUI)
+	if trino.ExposesUI != nil {
+		t.Errorf("trino ExposesUI = %v, want nil when unset", *trino.ExposesUI)
 	}
 }

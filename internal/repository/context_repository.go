@@ -28,7 +28,7 @@ type ContextRepository interface {
 	// GetPlatformServices returns the managed OKDP services (from spec.context.serviceCatalog.services).
 	GetPlatformServices(ctx context.Context) ([]models.PlatformService, error)
 
-	// GetMenuCategories returns the console navigation sections (from spec.context.okdp.categories).
+	// GetMenuCategories returns the console navigation sections (from spec.context.serviceCatalog.categories).
 	GetMenuCategories(ctx context.Context) ([]models.MenuCategory, error)
 
 	// GetPackageRepository returns the OCI package repository prefix (from spec.context.serviceCatalog.defaultRepository).
@@ -102,52 +102,80 @@ func NewContextRepository(client dynamic.Interface, name, namespace string) Cont
 	}
 }
 
+// catalogCategories returns the ordered sections of the Context catalog, each
+// with its raw services. The catalog lives under
+// spec.context.serviceCatalog.categories[], a service belongs to the section
+// it is nested in.
+func catalogCategories(u *unstructured.Unstructured) ([]map[string]interface{}, bool, error) {
+	raw, found, err := unstructured.NestedSlice(u.Object, "spec", "context", "serviceCatalog", "categories")
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to read serviceCatalog.categories from Context: %w", err)
+	}
+	if !found {
+		return nil, false, nil
+	}
+	var cats []map[string]interface{}
+	for _, r := range raw {
+		if m, ok := r.(map[string]interface{}); ok {
+			cats = append(cats, m)
+		}
+	}
+	return cats, true, nil
+}
+
+func platformServiceFromMap(m map[string]interface{}, category string) models.PlatformService {
+	defaultVersion := getString(m, "default")
+	if defaultVersion == "" {
+		defaultVersion = getString(m, "tag")
+	}
+	svc := models.PlatformService{
+		Name:           getString(m, "name"),
+		DefaultVersion: defaultVersion,
+		Description:    getString(m, "description"),
+		Category:       category,
+		Repository:     getString(m, "repository"),
+		Label:          getString(m, "label"),
+		ExposesUI:      getBoolPtr(m, "exposesUI"),
+	}
+	if rawVersions, ok := m["versions"].([]interface{}); ok {
+		for _, v := range rawVersions {
+			if s, ok := v.(string); ok {
+				svc.Versions = append(svc.Versions, s)
+			}
+		}
+	}
+	if len(svc.Versions) == 0 && svc.DefaultVersion != "" {
+		svc.Versions = []string{svc.DefaultVersion}
+	}
+	return svc
+}
+
 func (r *k8sContextRepository) GetPlatformServices(ctx context.Context) ([]models.PlatformService, error) {
 	u, err := r.getContext(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	rawServices, found, err := unstructured.NestedSlice(u.Object, "spec", "context", "serviceCatalog", "services")
+	cats, found, err := catalogCategories(u)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read serviceCatalog.services from Context: %w", err)
+		return nil, err
 	}
 	if !found {
-		logrus.Warn("No serviceCatalog.services found in Context CR")
+		logrus.Warn("No serviceCatalog.categories found in Context CR")
 		return nil, nil
 	}
 
 	var services []models.PlatformService
-	for _, raw := range rawServices {
-		m, ok := raw.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		defaultVersion := getString(m, "default")
-		if defaultVersion == "" {
-			defaultVersion = getString(m, "tag")
-		}
-		svc := models.PlatformService{
-			Name:           getString(m, "name"),
-			DefaultVersion: defaultVersion,
-			Description:    getString(m, "description"),
-			Icon:           getString(m, "icon"),
-			Category:       getString(m, "category"),
-			Repository:     getString(m, "repository"),
-			Label:          getString(m, "label"),
-			ExposesUI:      getBoolPtr(m, "exposesUI"),
-		}
-		if rawVersions, ok := m["versions"].([]interface{}); ok {
-			for _, v := range rawVersions {
-				if s, ok := v.(string); ok {
-					svc.Versions = append(svc.Versions, s)
-				}
+	for _, cat := range cats {
+		title := getString(cat, "title")
+		rawServices, _ := cat["services"].([]interface{})
+		for _, raw := range rawServices {
+			m, ok := raw.(map[string]interface{})
+			if !ok {
+				continue
 			}
+			services = append(services, platformServiceFromMap(m, title))
 		}
-		if len(svc.Versions) == 0 && svc.DefaultVersion != "" {
-			svc.Versions = []string{svc.DefaultVersion}
-		}
-		services = append(services, svc)
 	}
 	return services, nil
 }
@@ -158,25 +186,22 @@ func (r *k8sContextRepository) GetMenuCategories(ctx context.Context) ([]models.
 		return nil, err
 	}
 
-	rawCategories, found, err := unstructured.NestedSlice(u.Object, "spec", "context", "okdp", "categories")
+	cats, found, err := catalogCategories(u)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read okdp.categories from Context: %w", err)
+		return nil, err
 	}
 	if !found {
 		return nil, nil
 	}
 
 	var categories []models.MenuCategory
-	for _, raw := range rawCategories {
-		m, ok := raw.(map[string]interface{})
-		if !ok {
-			continue
-		}
+	for i, cat := range cats {
+		title := getString(cat, "title")
 		categories = append(categories, models.MenuCategory{
-			Key:   getString(m, "key"),
-			Label: getString(m, "label"),
-			Icon:  getString(m, "icon"),
-			Order: getInt(m, "order"),
+			Key:   title,
+			Label: title,
+			Icon:  getString(cat, "icon"),
+			Order: i + 1,
 		})
 	}
 	return categories, nil
