@@ -246,6 +246,10 @@ func normalizeAndValidateCatalogService(svc *models.PlatformService) error {
 	if !serviceNameRe.MatchString(svc.Name) {
 		return fmt.Errorf("%w: name %q must be a lowercase DNS-style identifier", ErrCatalogValidation, svc.Name)
 	}
+	svc.Category = strings.TrimSpace(svc.Category)
+	if svc.Category == "" {
+		return fmt.Errorf("%w: category is required, it names the console section the service belongs to", ErrCatalogValidation)
+	}
 	if len(svc.Versions) == 0 {
 		return fmt.Errorf("%w: at least one version is required", ErrCatalogValidation)
 	}
