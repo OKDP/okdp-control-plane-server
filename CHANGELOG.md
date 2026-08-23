@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.1](https://github.com/OKDP/okdp-control-plane-server/compare/v0.7.0...v0.7.1) (2026-08-23)
+
+
+### Bug Fixes
+
+* **catalog:** nest the services under their console section in the Context ([41ddf2e](https://github.com/OKDP/okdp-control-plane-server/commit/41ddf2eb8b665af5399959645b54c921259b69d4))
+
 ## [0.7.0](https://github.com/OKDP/okdp-control-plane-server/compare/v0.6.0...v0.7.0) (2026-08-21)
 
 
