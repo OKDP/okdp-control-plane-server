@@ -1,17 +1,32 @@
 name: publish-chart
 
 # Package the Helm chart and publish it to an OCI registry:
-# oci://<registry>/<chart-name>. Triggered on published releases (cut by
-# release-please) so the chart version matches the released version.
+# oci://<registry>/<chart-name>. Called from the release-please workflow
+# with the released version, so the chart version matches the released
+# version.
 #
 # The registry defaults to the OKDP one. A fork that must not push there sets
 # the CHART_REGISTRY repository variable instead of diverging from this file:
 # a chart nobody can pull is a package nobody can build.
 
 on:
-  release:
-    types: [published]
+  workflow_call:
+    inputs:
+      version:
+        description: Version to publish the chart as
+        required: true
+        type: string
+    secrets:
+      REGISTRY_USERNAME:
+        required: true
+      REGISTRY_ROBOT_TOKEN:
+        required: true
   workflow_dispatch:
+    inputs:
+      version:
+        description: Version to publish the chart as (defaults to the manifest version)
+        required: false
+        type: string
 
 jobs:
   publish:
@@ -21,8 +36,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - id: vars
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
-          VERSION=$(jq -r '.["."] // "0.1.0"' .release-please-manifest.json)
+          VERSION="${INPUT_VERSION:-$(jq -r '.["."] // "0.1.0"' .release-please-manifest.json)}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
       - uses: azure/setup-helm@v4
       - name: Package and push chart
