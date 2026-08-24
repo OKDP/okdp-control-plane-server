@@ -352,20 +352,51 @@ func (h *SparkHandler) GetSparkAppLogs(c *gin.Context) {
 		w.Header().Set("Transfer-Encoding", "chunked")
 		w.Flush()
 
-		scanner := newLogStreamScanner(stream)
-		for scanner.Scan() {
+		lines := make(chan string)
+		scanErr := make(chan error, 1)
+		go func() {
+			scanner := newLogStreamScanner(stream)
+			for scanner.Scan() {
+				select {
+				case lines <- scanner.Text():
+				case <-c.Request.Context().Done():
+					close(lines)
+					return
+				}
+			}
+			scanErr <- scanner.Err()
+			close(lines)
+		}()
+
+		keepalive := time.NewTicker(30 * time.Second)
+		defer keepalive.Stop()
+
+		for {
 			select {
 			case <-c.Request.Context().Done():
 				return
-			default:
-				c.SSEvent("message", scanner.Text())
+			case <-keepalive.C:
+				// A comment line keeps proxies from cutting an idle stream.
+				if _, err := w.WriteString(": keepalive\n\n"); err != nil {
+					return
+				}
+				w.Flush()
+			case line, ok := <-lines:
+				if !ok {
+					select {
+					case err := <-scanErr:
+						if err != nil {
+							logrus.WithError(err).Warn("Log stream ended on a scanner error")
+							c.SSEvent("error", logStreamErrorMessage(err))
+							w.Flush()
+						}
+					default:
+					}
+					return
+				}
+				c.SSEvent("message", line)
 				w.Flush()
 			}
-		}
-		if err := scanner.Err(); err != nil {
-			logrus.WithError(err).Warn("Log stream ended on a scanner error")
-			c.SSEvent("error", logStreamErrorMessage(err))
-			w.Flush()
 		}
 	} else {
 		c.Header("Content-Type", "text/plain; charset=utf-8")
