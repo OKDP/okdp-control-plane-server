@@ -7,7 +7,6 @@ metadata:
 data:
   PORT: {{ .Values.service.port | quote }}
   PLATFORM_NAMESPACE: {{ .Values.configuration.platformNamespace | quote }}
-  KUBOCD_NAMESPACE: {{ .Values.configuration.kubocdNamespace | quote }}
   CONTEXT_NAME: {{ .Values.configuration.contextName | quote }}
   CONTEXT_NAMESPACE: {{ .Values.configuration.contextNamespace | quote }}
   ALLOWED_ORIGINS: {{ .Values.configuration.allowedOrigins | quote }}

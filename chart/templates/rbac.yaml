@@ -69,14 +69,10 @@ rules:
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   # Connections (kubocd). These CRDs ship with a KuboCD version the platform
   # does not run yet: the rules are inert until they are installed, and the
-  # server probes for them before use. Contracts are read-only, they describe
-  # the schema a connection must satisfy and are owned by the packages.
+  # server probes for them before use.
   - apiGroups: ["kubocd.kubotal.io"]
     resources: ["connections", "clusterconnections"]
     verbs: ["get", "list", "watch", "create", "update", "delete"]
-  - apiGroups: ["kubocd.kubotal.io"]
-    resources: ["contracts", "clustercontracts"]
-    verbs: ["get", "list", "watch"]
   # Spark workloads
   - apiGroups: ["sparkoperator.k8s.io"]
     resources: ["sparkapplications"]

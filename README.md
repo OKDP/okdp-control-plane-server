@@ -201,7 +201,6 @@ its `configuration:` values (see [`chart/values.yaml`](chart/values.yaml)).
 | `PLATFORM_NAMESPACE` | Namespace where the OKDP platform runs | `okdp-system` | No |
 | `ALLOWED_ORIGINS` | Single CORS origin, set verbatim in `Access-Control-Allow-Origin` (the console URL) | `http://localhost:4200` | No |
 | `LOG_LEVEL` | Log verbosity (`debug`, `info`, `warn`, `error`) | `info` | No |
-| `KUBOCD_NAMESPACE` | Namespace where KuboCD runs | `kubocd-system` | No |
 | `CONTEXT_NAME` | Name of the KuboCD `Context` holding the platform configuration | `platform` | No |
 | `CONTEXT_NAMESPACE` | Namespace of that `Context` | the server's own namespace | No |
 | `RELEASE_INTERVAL` | Reconcile interval set on created KuboCD `Release`s | `30m` | No |

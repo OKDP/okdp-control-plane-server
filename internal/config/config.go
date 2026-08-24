@@ -11,7 +11,6 @@ type Config struct {
 	PlatformNamespace string
 	AllowedOrigins    string
 	LogLevel          string
-	KuboCDNamespace   string
 	ContextName       string
 	ContextNamespace  string // empty: the namespace the server runs in
 	// The platform Context, the one package templates also read. Empty means it
@@ -46,7 +45,6 @@ func Load() (*Config, error) {
 		PlatformNamespace: getEnv("PLATFORM_NAMESPACE", "okdp-system"),
 		AllowedOrigins:    getEnv("ALLOWED_ORIGINS", "http://localhost:4200"),
 		LogLevel:          getEnv("LOG_LEVEL", "info"),
-		KuboCDNamespace:   getEnv("KUBOCD_NAMESPACE", "kubocd-system"),
 		ContextName:       getEnv("CONTEXT_NAME", "platform"),
 		ContextNamespace:  getEnv("CONTEXT_NAMESPACE", ""),
 		ReleaseInterval:   getEnv("RELEASE_INTERVAL", "30m"),

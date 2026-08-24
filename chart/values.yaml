@@ -9,7 +9,6 @@ image:
 # Rendered as environment variables (see internal/config/config.go).
 configuration:
   platformNamespace: okdp-system
-  kubocdNamespace: kubocd-system
   # The platform Context, read by the server and written for its service
   # catalog. Empty namespace: the namespace the server runs in.
   contextName: platform
