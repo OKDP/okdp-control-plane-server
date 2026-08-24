@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/okdp/okdp-control-plane-server/internal/models"
@@ -297,12 +298,21 @@ func (h *ServiceHandler) StreamServices(c *gin.Context) {
 	}
 	defer watcher.Stop()
 
+	keepalive := time.NewTicker(30 * time.Second)
+	defer keepalive.Stop()
+
 	c.Writer.Flush()
 
 	for {
 		select {
 		case <-c.Request.Context().Done():
 			return
+		case <-keepalive.C:
+			// A comment line keeps proxies from cutting an idle stream.
+			if _, err := c.Writer.WriteString(": keepalive\n\n"); err != nil {
+				return
+			}
+			c.Writer.Flush()
 		case event, ok := <-watcher.ResultChan():
 			if !ok {
 				return
