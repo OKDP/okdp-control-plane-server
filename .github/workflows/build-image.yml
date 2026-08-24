@@ -1,14 +1,28 @@
 name: build-image
 
 # Build the image and publish it to the OKDP registry on quay.io.
-# Triggered when a release is published (cut by release-please), so the
-# semver tag is pushed once per release and never overwritten by
+# Called from the release-please workflow with the released version, so
+# the semver tag is pushed once per release and never overwritten by
 # intermediate commits. Manual runs use the current manifest version.
 
 on:
-  release:
-    types: [published]
+  workflow_call:
+    inputs:
+      version:
+        description: Version to tag the image with
+        required: true
+        type: string
+    secrets:
+      REGISTRY_USERNAME:
+        required: true
+      REGISTRY_ROBOT_TOKEN:
+        required: true
   workflow_dispatch:
+    inputs:
+      version:
+        description: Version to tag the image with (defaults to the manifest version)
+        required: false
+        type: string
 
 jobs:
   build-push:
@@ -19,8 +33,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - id: vars
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
-          VERSION=$(jq -r '.["."] // "0.1.0"' .release-please-manifest.json)
+          VERSION="${INPUT_VERSION:-$(jq -r '.["."] // "0.1.0"' .release-please-manifest.json)}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
