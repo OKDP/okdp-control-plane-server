@@ -75,7 +75,8 @@ and `Release` model the server builds on.
 - A **kubeconfig** with permission to manage namespaces and to read/write KuboCD `Context` and `Release` resources (in-cluster, the chart wires the ServiceAccount RBAC)
 - [Go](https://go.dev/) >= 1.25 (only to build the image or run the server locally)
 
-Known-good baseline: chart `0.7.1` with image `0.7.1` and Go `1.25`, on a Kind cluster. This is the version set validated by the maintainers.
+Known-good baseline: chart and image `0.7.1` <!-- x-release-please-version -->
+with Go `1.25`, on a Kind cluster. This is the version set validated by the maintainers.
 
 ### Toolchain tested
 
@@ -119,10 +120,12 @@ spec:
 
 Install the chart from the OKDP registry:
 
+<!-- x-release-please-start-version -->
 ```sh
 helm install okdp-control-plane-server oci://quay.io/okdp/charts/okdp-control-plane-server --version 0.7.1 \
   -n okdp-system --create-namespace
 ```
+<!-- x-release-please-end -->
 
 > This chart name is published on Quay once the rename lands upstream. Until
 > then, install from `chart/` in this checkout.
@@ -216,7 +219,9 @@ Images are published to [`quay.io/okdp`](https://quay.io/organization/okdp).
 
 | Image | Tag format | Example |
 |-------|-----------|---------|
+<!-- x-release-please-start-version -->
 | `quay.io/okdp/images/okdp-control-plane-server` | `<version>` (matches the chart `appVersion`) | `quay.io/okdp/images/okdp-control-plane-server:0.7.1` |
+<!-- x-release-please-end -->
 
 > See the [available tags on quay.io](https://quay.io/repository/okdp/images/okdp-control-plane-server?tab=tags) for all published versions.
 
