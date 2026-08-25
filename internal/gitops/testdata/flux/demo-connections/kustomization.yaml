@@ -1,0 +1,18 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: okdp-releases
+configMapGenerator:
+  - name: conn-demo-lake
+    files:
+      - values.yaml=lake.yaml
+    options:
+      disableNameSuffixHash: true
+      labels:
+        reconcile.fluxcd.io/watch: Enabled
+  - name: conn-demo-warehouse
+    files:
+      - values.yaml=warehouse.yaml
+    options:
+      disableNameSuffixHash: true
+      labels:
+        reconcile.fluxcd.io/watch: Enabled

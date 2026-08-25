@@ -1,0 +1,38 @@
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: OCIRepository
+metadata:
+  name: demo-hive
+  namespace: okdp-releases
+spec:
+  interval: 10m
+  url: oci://quay.io/okdp/platform-charts/hive-metastore
+  ref:
+    tag: "1.0"
+  layerSelector:
+    mediaType: application/vnd.cncf.helm.chart.content.v1.tar+gzip
+    operation: copy
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: demo-hive
+  namespace: okdp-releases
+  labels:
+    okdp.io/project: demo
+    okdp.io/instance: demo-hive
+    okdp.io/service: hive-metastore
+spec:
+  interval: 10m
+  releaseName: demo-hive
+  targetNamespace: demo
+  storageNamespace: demo
+  chartRef:
+    kind: OCIRepository
+    name: demo-hive
+  valuesFrom:
+    - kind: ConfigMap
+      name: okdp-platform-values
+      valuesKey: values.yaml
+    - kind: ConfigMap
+      name: values-demo-hive
+      valuesKey: values.yaml
