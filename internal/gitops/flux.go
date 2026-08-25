@@ -43,7 +43,9 @@ func NewDefaultFluxRenderer() *DefaultFluxRenderer {
 
 // PlatformValuesName, ConnectionValuesName and InstanceValuesName are the
 // names of the values ConfigMaps, in layering order.
-func ConnectionValuesName(project, name string) string { return fmt.Sprintf("conn-%s-%s", project, name) }
+func ConnectionValuesName(project, name string) string {
+	return fmt.Sprintf("conn-%s-%s", project, name)
+}
 func InstanceValuesName(project, instance string) string {
 	return fmt.Sprintf("values-%s-%s", project, instance)
 }
