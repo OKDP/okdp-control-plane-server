@@ -56,7 +56,8 @@
           "type": "yaml",
           "path": "chart/Chart.yaml",
           "jsonpath": "$.appVersion"
-        }
+        },
+        "README.md"
       ],
       "include-component-in-tag": false
     }
