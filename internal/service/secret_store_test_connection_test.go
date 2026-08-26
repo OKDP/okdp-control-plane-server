@@ -181,6 +181,39 @@ func TestTestConnectionKubernetesRejectsPlainOK(t *testing.T) {
 	}
 }
 
+// A mount path goes straight into the URL, so one carrying a query or a parent
+// segment silently probes something else: "x?y=1" reaches /v1/auth/x with no
+// /login at all, and ".." walks back out of /auth. Nested mounts stay legal.
+func TestTestConnectionKubernetesRejectsAMountPathThatRetargetsTheURL(t *testing.T) {
+	called := make(chan struct{}, 1)
+	vault := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		select {
+		case called <- struct{}{}:
+		default:
+		}
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer vault.Close()
+
+	svc := &DefaultSecretStoreService{}
+	for _, mount := range []string{"x?y=1", "a/../../../v1/sys/seal", "x#y", "a b", "../auth"} {
+		err := svc.TestConnection(context.Background(), kubernetesRequest(vault.URL, "demo-role", mount))
+		if err == nil || !strings.Contains(err.Error(), "invalid mount path") {
+			t.Fatalf("mount path %q was accepted: %v", mount, err)
+		}
+	}
+	select {
+	case <-called:
+		t.Fatal("a rejected mount path still reached the server")
+	default:
+	}
+
+	// A nested mount is how Vault is actually deployed, so it must still pass.
+	if err := svc.TestConnection(context.Background(), kubernetesRequest(vault.URL, "demo-role", "k8s/prod")); err != nil {
+		t.Fatalf("a nested mount path was rejected: %v", err)
+	}
+}
+
 // The mount path must reach the URL: without the fallback the request would go
 // to /v1/auth//login, which no Vault serves.
 func TestTestConnectionKubernetesDefaultsTheMountPath(t *testing.T) {

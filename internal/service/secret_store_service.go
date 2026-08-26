@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -188,8 +189,15 @@ func vaultHTTPClient(caBundle string) (*http.Client, error) {
 	}
 
 	return &http.Client{
-		Timeout:   10 * time.Second,
-		Transport: &http.Transport{TLSClientConfig: tlsConfig},
+		Timeout: 10 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: tlsConfig,
+			// Each caller builds its own client for a single request and drops
+			// it. Pooling would leave an idle TLS connection to Vault open for
+			// the pool's lifetime with nothing left to reuse it, one per
+			// connection test.
+			DisableKeepAlives: true,
+		},
 		// Go strips Authorization on a cross-host redirect but not
 		// X-Vault-Token, so following one would hand the caller's token to
 		// whatever host the Location names. A Vault API never redirects.
@@ -198,6 +206,13 @@ func vaultHTTPClient(caBundle string) (*http.Client, error) {
 		},
 	}, nil
 }
+
+// Vault mounts can be nested, so a slash between segments is legitimate, but
+// nothing that lets the path re-target the request is. Pasted into a URL
+// unchecked, "x?y=1" turned the probe into a request for /v1/auth/x with a
+// query and no /login at all, and a segment of ".." walked back out of /auth.
+// Both made the check report on an endpoint nobody asked about.
+var vaultMountPathPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)*$`)
 
 // validateVaultKubernetesMount reaches the Vault server and checks the auth
 // mount answers. Logging in needs a ServiceAccount token this process does not
@@ -208,6 +223,9 @@ func vaultHTTPClient(caBundle string) (*http.Client, error) {
 func validateVaultKubernetesMount(ctx context.Context, server, mountPath, caBundle string) error {
 	if mountPath == "" {
 		mountPath = "kubernetes"
+	}
+	if !vaultMountPathPattern.MatchString(mountPath) {
+		return fmt.Errorf("invalid mount path %q", mountPath)
 	}
 
 	client, err := vaultHTTPClient(caBundle)
