@@ -190,6 +190,12 @@ func vaultHTTPClient(caBundle string) (*http.Client, error) {
 	return &http.Client{
 		Timeout:   10 * time.Second,
 		Transport: &http.Transport{TLSClientConfig: tlsConfig},
+		// Go strips Authorization on a cross-host redirect but not
+		// X-Vault-Token, so following one would hand the caller's token to
+		// whatever host the Location names. A Vault API never redirects.
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
 	}, nil
 }
 
@@ -231,6 +237,16 @@ func validateVaultKubernetesMount(ctx context.Context, server, mountPath, caBund
 		// Vault answered but is unwell. Reporting success here would send the
 		// caller looking for the cause in the external-secrets logs instead.
 		return fmt.Errorf("vault returned status %d", resp.StatusCode)
+	case resp.StatusCode >= 300 && resp.StatusCode < 400:
+		// Redirects are not followed, so the token never leaves for the
+		// Location host. A Vault API does not redirect either: this is some
+		// other server, and accepting it would be the false success the
+		// check exists to remove.
+		return fmt.Errorf("vault returned a redirect (%d), check the server URL", resp.StatusCode)
+	case resp.StatusCode == http.StatusOK:
+		// The login endpoint rejects an empty body; a 200 means something else
+		// is answering on this path.
+		return fmt.Errorf("the auth mount answered %d to an empty login, this does not look like vault", resp.StatusCode)
 	}
 	return nil
 }

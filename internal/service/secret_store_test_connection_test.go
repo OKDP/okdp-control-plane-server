@@ -115,3 +115,61 @@ func TestTestConnectionKubernetesRequiresRole(t *testing.T) {
 		t.Fatalf("a missing role was accepted: %v", err)
 	}
 }
+
+// A server that redirects is not Vault, and the caller's token must not travel
+// to whatever host the Location names.
+func TestTestConnectionKubernetesRejectsRedirect(t *testing.T) {
+	vault := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Location", "https://elsewhere.example.com/")
+		w.WriteHeader(http.StatusFound)
+	}))
+	defer vault.Close()
+
+	svc := &DefaultSecretStoreService{}
+	err := svc.TestConnection(context.Background(), kubernetesRequest(vault.URL, "demo-role", "kubernetes"))
+	if err == nil || !strings.Contains(err.Error(), "redirect") {
+		t.Fatalf("a redirect was accepted: %v", err)
+	}
+}
+
+// The login endpoint rejects an empty body, so a 200 means an ingress default
+// backend or a login page is answering instead of Vault.
+func TestTestConnectionKubernetesRejectsPlainOK(t *testing.T) {
+	vault := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer vault.Close()
+
+	svc := &DefaultSecretStoreService{}
+	err := svc.TestConnection(context.Background(), kubernetesRequest(vault.URL, "demo-role", "kubernetes"))
+	if err == nil || !strings.Contains(err.Error(), "does not look like vault") {
+		t.Fatalf("a non-vault server was accepted: %v", err)
+	}
+}
+
+// The mount path must reach the URL: without the fallback the request would go
+// to /v1/auth//login, which no Vault serves.
+func TestTestConnectionKubernetesDefaultsTheMountPath(t *testing.T) {
+	paths := make(chan string, 1)
+	vault := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case paths <- r.URL.Path:
+		default:
+		}
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer vault.Close()
+
+	svc := &DefaultSecretStoreService{}
+	if err := svc.TestConnection(context.Background(), kubernetesRequest(vault.URL, "demo-role", "")); err != nil {
+		t.Fatalf("an empty mount path was rejected: %v", err)
+	}
+	select {
+	case path := <-paths:
+		if path != "/v1/auth/kubernetes/login" {
+			t.Fatalf("called %s, want the kubernetes fallback", path)
+		}
+	default:
+		t.Fatal("the vault server was never called")
+	}
+}
