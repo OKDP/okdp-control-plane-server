@@ -29,10 +29,11 @@ func TestValidateVaultTokenUsesGet(t *testing.T) {
 	// The handler runs on the server's goroutine, so the method travels back
 	// through a channel: reading a shared variable across the two would be a
 	// data race the memory model does not forbid from surfacing.
-	methods := make(chan string, 1)
+	type call struct{ method, token, path string }
+	calls := make(chan call, 1)
 	vault := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		select {
-		case methods <- r.Method:
+		case calls <- call{r.Method, r.Header.Get("X-Vault-Token"), r.URL.Path}:
 		default:
 		}
 		if r.Method != http.MethodGet {
@@ -49,9 +50,17 @@ func TestValidateVaultTokenUsesGet(t *testing.T) {
 	}
 
 	select {
-	case method := <-methods:
-		if method != http.MethodGet {
-			t.Fatalf("lookup-self was called with %s, want GET", method)
+	case got := <-calls:
+		if got.method != http.MethodGet {
+			t.Fatalf("lookup-self was called with %s, want GET", got.method)
+		}
+		// The whole point of the check is the token: without this header it
+		// degrades to a ping that answers "successful" for any token at all.
+		if got.token != "app-token" {
+			t.Fatalf("X-Vault-Token carried %q, want the caller's token", got.token)
+		}
+		if got.path != "/v1/auth/token/lookup-self" {
+			t.Fatalf("called %s, want /v1/auth/token/lookup-self", got.path)
 		}
 	default:
 		t.Fatal("lookup-self was never called")
