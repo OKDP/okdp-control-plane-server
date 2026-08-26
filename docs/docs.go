@@ -3957,7 +3957,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "serviceAccount": {
-                    "description": "ServiceAccount names the account the store authenticates as under\nKubernetes auth. Empty keeps the namespace default account, which every\nworkload already shares, so a project can give its store its own identity.",
+                    "description": "ServiceAccount names the account the store authenticates as under\nKubernetes auth, so a project can give its store its own identity\ninstead of the default account every workload in the namespace shares.\n\nA pointer, because on update three intents must stay apart: absent keeps\nthe account already in use, an empty string asks for the default account\nback, and a name selects that account. A plain string merges the first\ntwo, which leaves no way to return to the default once a name is set.",
                     "type": "string"
                 },
                 "token": {

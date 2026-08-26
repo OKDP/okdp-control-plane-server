@@ -101,10 +101,33 @@ func (s *DefaultSecretStoreService) UpdateSecretStore(ctx context.Context, names
 
 	credSecretName := name + "-credentials"
 
-	if req.Auth.Type == "token" && req.Auth.Config.Token != "" {
-		secretData := map[string][]byte{"token": []byte(req.Auth.Config.Token)}
-		if err := s.repo.CreateOrUpdateSecret(ctx, namespace, credSecretName, secretData); err != nil {
-			return nil, fmt.Errorf("failed to update credentials secret: %w", err)
+	// What the store authenticates with today. An omitted token can only mean
+	// "keep the stored one" when there is a stored one.
+	existingVault := existing.Spec.Provider.Vault
+	usedTokenAuth := existingVault != nil && existingVault.Auth.TokenSecretRef != nil
+
+	switch req.Auth.Type {
+	case "token":
+		if req.Auth.Config.Token != "" {
+			secretData := map[string][]byte{"token": []byte(req.Auth.Config.Token)}
+			if err := s.repo.CreateOrUpdateSecret(ctx, namespace, credSecretName, secretData); err != nil {
+				return nil, fmt.Errorf("failed to update credentials secret: %w", err)
+			}
+		} else if !usedTokenAuth {
+			// The CR would reference a Secret that was never written, so the
+			// store could never sync while the API reported success.
+			return nil, fmt.Errorf("auth.config.token is required when switching to token auth")
+		}
+	case "kubernetes":
+		// The CR is rebuilt from the request, so a caller that omits the
+		// account would silently repoint the store at default and break the
+		// Vault role binding. Absent means "leave it", like the token above,
+		// while an empty string is an explicit ask for the default account.
+		if req.Auth.Config.ServiceAccount == nil && existingVault != nil && existingVault.Auth.Kubernetes != nil {
+			if ref := existingVault.Auth.Kubernetes.ServiceAccountRef; ref != nil {
+				current := ref.Name
+				req.Auth.Config.ServiceAccount = &current
+			}
 		}
 	}
 
@@ -114,22 +137,21 @@ func (s *DefaultSecretStoreService) UpdateSecretStore(ctx context.Context, names
 		}
 	}
 
-	// The CR is rebuilt from the request, so a caller that omits the account
-	// would silently repoint the store at default and break the Vault role
-	// binding. An absent field means "leave it", like the token above.
-	if req.Auth.Type == "kubernetes" && req.Auth.Config.ServiceAccount == "" {
-		if k8s := existing.Spec.Provider.Vault; k8s != nil && k8s.Auth.Kubernetes != nil {
-			if ref := k8s.Auth.Kubernetes.ServiceAccountRef; ref != nil {
-				req.Auth.Config.ServiceAccount = ref.Name
-			}
-		}
-	}
-
 	store := buildSecretStoreCRD(namespace, req, credSecretName)
 	store.ResourceVersion = existing.ResourceVersion
 
 	if err := s.repo.Update(ctx, namespace, store); err != nil {
 		return nil, err
+	}
+
+	// Dropped only once the stored CR no longer points at it, so a failed
+	// update never destroys a credential the store still uses. Left behind, the
+	// Vault token would outlive the store's use of it: still valid in Vault,
+	// no longer shown anywhere in the console.
+	if usedTokenAuth && req.Auth.Type != "token" {
+		if err := s.repo.DeleteSecret(ctx, namespace, credSecretName); err != nil && !apierrors.IsNotFound(err) {
+			logrus.WithError(err).Warnf("Failed to delete unused credentials secret %s", credSecretName)
+		}
 	}
 
 	updated, err := s.repo.Get(ctx, namespace, name)
@@ -324,9 +346,9 @@ func buildSecretStoreCRD(namespace string, req models.SecretStoreRequest, credSe
 		// Vault matches the bound_service_account_names of the role against this
 		// account, so pinning it to default forced every role onto the identity
 		// the whole namespace already shares.
-		serviceAccount := req.Auth.Config.ServiceAccount
-		if serviceAccount == "" {
-			serviceAccount = "default"
+		serviceAccount := "default"
+		if req.Auth.Config.ServiceAccount != nil && *req.Auth.Config.ServiceAccount != "" {
+			serviceAccount = *req.Auth.Config.ServiceAccount
 		}
 		store.Spec.Provider.Vault.Auth.Kubernetes = &crd.ESOKubernetesAuth{
 			MountPath: mountPath,

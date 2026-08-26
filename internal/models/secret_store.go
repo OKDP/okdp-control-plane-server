@@ -29,9 +29,14 @@ type SecretAuthConfig struct {
 	MountPath string `json:"mountPath,omitempty"`
 	Role      string `json:"role,omitempty"`
 	// ServiceAccount names the account the store authenticates as under
-	// Kubernetes auth. Empty keeps the namespace default account, which every
-	// workload already shares, so a project can give its store its own identity.
-	ServiceAccount string `json:"serviceAccount,omitempty"`
+	// Kubernetes auth, so a project can give its store its own identity
+	// instead of the default account every workload in the namespace shares.
+	//
+	// A pointer, because on update three intents must stay apart: absent keeps
+	// the account already in use, an empty string asks for the default account
+	// back, and a name selects that account. A plain string merges the first
+	// two, which leaves no way to return to the default once a name is set.
+	ServiceAccount *string `json:"serviceAccount,omitempty"`
 }
 
 // SecretStoreResponse is the API response model for a secret store

@@ -1,13 +1,18 @@
 package service
 
 import (
+	"context"
 	"testing"
 
 	"github.com/okdp/okdp-control-plane-server/internal/models"
 	"github.com/okdp/okdp-control-plane-server/internal/repository/crd"
+	"github.com/okdp/okdp-control-plane-server/internal/service/mocks"
+	"github.com/stretchr/testify/mock"
 )
 
-func kubernetesAuth(serviceAccount string) *models.SecretStoreAuth {
+func serviceAccountPtr(name string) *string { return &name }
+
+func kubernetesAuth(serviceAccount *string) *models.SecretStoreAuth {
 	return &models.SecretStoreAuth{
 		Type: "kubernetes",
 		Config: models.SecretAuthConfig{
@@ -40,16 +45,19 @@ func kubernetesRef(t *testing.T, auth *models.SecretStoreAuth) *crd.ESOServiceAc
 // a project must be able to give its store an identity of its own rather than
 // the default account every workload in the namespace already shares.
 func TestKubernetesAuthUsesTheChosenServiceAccount(t *testing.T) {
-	if got := kubernetesRef(t, kubernetesAuth("vault-reader")).Name; got != "vault-reader" {
+	if got := kubernetesRef(t, kubernetesAuth(serviceAccountPtr("vault-reader"))).Name; got != "vault-reader" {
 		t.Fatalf("service account is %q, want vault-reader", got)
 	}
 }
 
-// Leaving it empty must keep the previous behaviour, so stores created before
-// the field existed keep working untouched.
+// Omitting it must keep the previous behaviour, so stores created before the
+// field existed keep working untouched.
 func TestKubernetesAuthFallsBackToDefault(t *testing.T) {
-	if got := kubernetesRef(t, kubernetesAuth("")).Name; got != "default" {
+	if got := kubernetesRef(t, kubernetesAuth(nil)).Name; got != "default" {
 		t.Fatalf("service account is %q, want default", got)
+	}
+	if got := kubernetesRef(t, kubernetesAuth(serviceAccountPtr(""))).Name; got != "default" {
+		t.Fatalf("an emptied account gives %q, want default", got)
 	}
 }
 
@@ -60,7 +68,7 @@ func TestResponseReportsTheServiceAccount(t *testing.T) {
 		Name:     "store",
 		Provider: "vault",
 		Vault:    &models.VaultConfig{Server: "https://vault.example.com", Path: "secret", Version: "v2"},
-		Auth:     kubernetesAuth("vault-reader"),
+		Auth:     kubernetesAuth(serviceAccountPtr("vault-reader")),
 	}, "")
 
 	svc := &DefaultSecretStoreService{}
@@ -72,4 +80,165 @@ func TestResponseReportsTheServiceAccount(t *testing.T) {
 	if got := *resp.Auth.Config.ServiceAccount; got != "vault-reader" {
 		t.Fatalf("response reports %q, want vault-reader", got)
 	}
+}
+
+// storedStore is a SecretStore as the cluster already holds it, used as the
+// starting point of the update tests below.
+func storedStore(auth crd.ESOVaultAuth) *crd.ESOSecretStore {
+	store := &crd.ESOSecretStore{}
+	store.Name = "store"
+	store.Namespace = "demo"
+	store.ResourceVersion = "42"
+	store.Spec.Provider.Vault = &crd.ESOVaultProvider{
+		Server:  "https://vault.example.com",
+		Path:    "secret",
+		Version: "v2",
+		Auth:    auth,
+	}
+	return store
+}
+
+func kubernetesStored(serviceAccount string) *crd.ESOSecretStore {
+	return storedStore(crd.ESOVaultAuth{Kubernetes: &crd.ESOKubernetesAuth{
+		MountPath:         "kubernetes",
+		Role:              "demo-role",
+		ServiceAccountRef: &crd.ESOServiceAccountRef{Name: serviceAccount},
+	}})
+}
+
+func tokenStored() *crd.ESOSecretStore {
+	return storedStore(crd.ESOVaultAuth{TokenSecretRef: &crd.ESOTokenSecretRef{
+		Name: "store-credentials",
+		Key:  "token",
+	}})
+}
+
+func updateRequest(auth *models.SecretStoreAuth) models.SecretStoreRequest {
+	return models.SecretStoreRequest{
+		Name:     "store",
+		Provider: "vault",
+		Vault:    &models.VaultConfig{Server: "https://vault.example.com", Path: "secret", Version: "v2"},
+		Auth:     auth,
+	}
+}
+
+// updated runs an update against a store the cluster already holds and returns
+// the CR handed to the repository, which is what actually reaches the cluster.
+func updated(t *testing.T, stored *crd.ESOSecretStore, req models.SecretStoreRequest, arrange func(*mocks.SecretStoreRepository)) (*crd.ESOSecretStore, error) {
+	t.Helper()
+	repo := &mocks.SecretStoreRepository{}
+	repo.On("Get", mock.Anything, "demo", "store").Return(stored, nil)
+
+	var sent *crd.ESOSecretStore
+	repo.On("Update", mock.Anything, "demo", mock.Anything).Run(func(args mock.Arguments) {
+		sent = args.Get(2).(*crd.ESOSecretStore)
+	}).Return(nil).Maybe()
+	if arrange != nil {
+		arrange(repo)
+	}
+
+	svc := &DefaultSecretStoreService{repo: repo}
+	_, err := svc.UpdateSecretStore(context.Background(), "demo", "store", req)
+	return sent, err
+}
+
+// The regression this guards: the CR is rebuilt from the request, so a caller
+// that says nothing about the account would repoint the store at default and
+// break the Vault role binding without touching the field.
+func TestUpdateKeepsTheServiceAccountWhenTheFieldIsAbsent(t *testing.T) {
+	sent, err := updated(t, kubernetesStored("vault-reader"), updateRequest(kubernetesAuth(nil)), nil)
+	if err != nil {
+		t.Fatalf("update failed: %v", err)
+	}
+	if got := sent.Spec.Provider.Vault.Auth.Kubernetes.ServiceAccountRef.Name; got != "vault-reader" {
+		t.Fatalf("account became %q, want vault-reader kept", got)
+	}
+}
+
+// The other half of the same rule: keeping an absent field must not make the
+// default account unreachable, or a store given an identity could never give
+// it back.
+func TestUpdateReturnsToDefaultWhenTheFieldIsEmptied(t *testing.T) {
+	sent, err := updated(t, kubernetesStored("vault-reader"), updateRequest(kubernetesAuth(serviceAccountPtr(""))), nil)
+	if err != nil {
+		t.Fatalf("update failed: %v", err)
+	}
+	if got := sent.Spec.Provider.Vault.Auth.Kubernetes.ServiceAccountRef.Name; got != "default" {
+		t.Fatalf("account stayed %q, want default", got)
+	}
+}
+
+func TestUpdateSetsANewServiceAccount(t *testing.T) {
+	sent, err := updated(t, kubernetesStored("vault-reader"), updateRequest(kubernetesAuth(serviceAccountPtr("autre"))), nil)
+	if err != nil {
+		t.Fatalf("update failed: %v", err)
+	}
+	if got := sent.Spec.Provider.Vault.Auth.Kubernetes.ServiceAccountRef.Name; got != "autre" {
+		t.Fatalf("account is %q, want autre", got)
+	}
+}
+
+// Switching to token auth without a token would write a CR referencing a Secret
+// that was never created: the store can never sync, and the API used to answer
+// success all the same.
+func TestUpdateRefusesTokenAuthWithoutAToken(t *testing.T) {
+	_, err := updated(t, kubernetesStored("vault-reader"), updateRequest(&models.SecretStoreAuth{
+		Type:   "token",
+		Config: models.SecretAuthConfig{},
+	}), nil)
+	if err == nil {
+		t.Fatal("switching to token auth with no token was accepted")
+	}
+}
+
+// A store that already authenticates by token keeps it, so an edit that only
+// renames the store does not force the operator to paste the token again.
+func TestUpdateKeepsTheStoredTokenWhenTheFieldIsAbsent(t *testing.T) {
+	repoCalls := &mocks.SecretStoreRepository{}
+	_, err := updated(t, tokenStored(), updateRequest(&models.SecretStoreAuth{
+		Type:   "token",
+		Config: models.SecretAuthConfig{},
+	}), func(r *mocks.SecretStoreRepository) { repoCalls = r })
+	if err != nil {
+		t.Fatalf("update failed: %v", err)
+	}
+	repoCalls.AssertNotCalled(t, "CreateOrUpdateSecret", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+// Leaving token auth strands the credentials Secret: the CR no longer points at
+// it, nothing in the console shows it, and the token stays valid in Vault.
+func TestUpdateDropsTheTokenSecretWhenLeavingTokenAuth(t *testing.T) {
+	var deleted string
+	sent, err := updated(t, tokenStored(), updateRequest(kubernetesAuth(serviceAccountPtr("vault-reader"))),
+		func(r *mocks.SecretStoreRepository) {
+			r.On("DeleteSecret", mock.Anything, "demo", mock.Anything).Run(func(args mock.Arguments) {
+				deleted = args.String(2)
+			}).Return(nil)
+		})
+	if err != nil {
+		t.Fatalf("update failed: %v", err)
+	}
+	if sent.Spec.Provider.Vault.Auth.Kubernetes == nil {
+		t.Fatal("the store did not switch to kubernetes auth")
+	}
+	if deleted != "store-credentials" {
+		t.Fatalf("deleted secret is %q, want store-credentials", deleted)
+	}
+}
+
+// A store that stays on token auth must keep its Secret, or every edit would
+// break the store it just saved.
+func TestUpdateKeepsTheTokenSecretWhenStayingOnTokenAuth(t *testing.T) {
+	repoCalls := &mocks.SecretStoreRepository{}
+	_, err := updated(t, tokenStored(), updateRequest(&models.SecretStoreAuth{
+		Type:   "token",
+		Config: models.SecretAuthConfig{Token: "s.nouveau"},
+	}), func(r *mocks.SecretStoreRepository) {
+		repoCalls = r
+		r.On("CreateOrUpdateSecret", mock.Anything, "demo", "store-credentials", mock.Anything).Return(nil)
+	})
+	if err != nil {
+		t.Fatalf("update failed: %v", err)
+	}
+	repoCalls.AssertNotCalled(t, "DeleteSecret", mock.Anything, mock.Anything, mock.Anything)
 }
