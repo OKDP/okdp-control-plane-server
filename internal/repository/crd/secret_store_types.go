@@ -95,6 +95,11 @@ func (in *ESOProvider) DeepCopyInto(out *ESOProvider) {
 		in, out := &in.Vault, &out.Vault
 		*out = new(ESOVaultProvider)
 		**out = **in
+		// CABundle is a slice, so the struct copy above only duplicates its
+		// header and both copies would write through to the same bytes.
+		if (*in).CABundle != nil {
+			(*out).CABundle = append([]byte(nil), (*in).CABundle...)
+		}
 		(*in).Auth.DeepCopyInto(&(*out).Auth)
 	}
 }
