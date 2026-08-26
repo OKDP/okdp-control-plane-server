@@ -23,18 +23,49 @@ func kubernetesRequest(server, role, mountPath string) models.SecretStoreRequest
 }
 
 // The check used to return nil for kubernetes auth before any request, so a
-// server that does not exist still reported "Connection successful" while the
-// store failed on reconcile.
+// server that does not answer still reported "Connection successful" while the
+// store failed on reconcile. The listener is closed up front so the refusal is
+// immediate and owes nothing to DNS.
 func TestTestConnectionKubernetesRejectsUnreachableServer(t *testing.T) {
-	svc := &DefaultSecretStoreService{}
-	req := kubernetesRequest("https://this-host-does-not-exist.invalid:8200", "demo-role", "kubernetes")
+	closed := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	address := closed.URL
+	closed.Close()
 
-	err := svc.TestConnection(context.Background(), req)
+	svc := &DefaultSecretStoreService{}
+	err := svc.TestConnection(context.Background(), kubernetesRequest(address, "demo-role", "kubernetes"))
 	if err == nil {
 		t.Fatal("an unreachable vault server reported success")
 	}
 	if !strings.Contains(err.Error(), "connection failed") {
 		t.Fatalf("error does not name the connection failure: %v", err)
+	}
+}
+
+// A reachable but unwell Vault is actionable, so a 5xx must not pass for a
+// working mount.
+func TestTestConnectionKubernetesRejectsServerError(t *testing.T) {
+	vault := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer vault.Close()
+
+	svc := &DefaultSecretStoreService{}
+	err := svc.TestConnection(context.Background(), kubernetesRequest(vault.URL, "demo-role", "kubernetes"))
+	if err == nil || !strings.Contains(err.Error(), "500") {
+		t.Fatalf("a failing vault was accepted: %v", err)
+	}
+}
+
+// An auth type the server cannot honour must say so, instead of falling through
+// to the token path and asking for a token the caller never meant to supply.
+func TestTestConnectionRejectsUnsupportedAuthType(t *testing.T) {
+	svc := &DefaultSecretStoreService{}
+	req := kubernetesRequest("https://vault.example.com", "demo-role", "kubernetes")
+	req.Auth.Type = "appRole"
+
+	err := svc.TestConnection(context.Background(), req)
+	if err == nil || !strings.Contains(err.Error(), "unsupported auth type") {
+		t.Fatalf("an unsupported auth type was not named: %v", err)
 	}
 }
 

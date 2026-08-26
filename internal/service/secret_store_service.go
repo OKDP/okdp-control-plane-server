@@ -158,18 +158,20 @@ func (s *DefaultSecretStoreService) TestConnection(ctx context.Context, req mode
 		return fmt.Errorf("auth configuration is required")
 	}
 
-	if req.Auth.Type == "kubernetes" {
+	switch req.Auth.Type {
+	case "kubernetes":
 		if req.Auth.Config.Role == "" {
 			return fmt.Errorf("auth.config.role is required for kubernetes auth")
 		}
 		return validateVaultKubernetesMount(ctx, req.Vault.Server, req.Auth.Config.MountPath, req.Vault.CABundle)
+	case "token":
+		if req.Auth.Config.Token == "" {
+			return fmt.Errorf("auth.config.token is required for token auth")
+		}
+		return validateVaultToken(ctx, req.Vault.Server, req.Auth.Config.Token, req.Vault.CABundle)
+	default:
+		return fmt.Errorf("unsupported auth type %q, must be 'token' or 'kubernetes'", req.Auth.Type)
 	}
-
-	if req.Auth.Config.Token == "" {
-		return fmt.Errorf("auth.config.token is required for token auth")
-	}
-
-	return validateVaultToken(ctx, req.Vault.Server, req.Auth.Config.Token, req.Vault.CABundle)
 }
 
 // vaultHTTPClient builds the client the connection checks share, honouring a
@@ -222,8 +224,13 @@ func validateVaultKubernetesMount(ctx context.Context, server, mountPath, caBund
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusNotFound {
+	switch {
+	case resp.StatusCode == http.StatusNotFound:
 		return fmt.Errorf("no kubernetes auth mount at %q on the vault server", mountPath)
+	case resp.StatusCode >= 500:
+		// Vault answered but is unwell. Reporting success here would send the
+		// caller looking for the cause in the external-secrets logs instead.
+		return fmt.Errorf("vault returned status %d", resp.StatusCode)
 	}
 	return nil
 }
@@ -237,7 +244,7 @@ func validateVaultToken(ctx context.Context, server, token, caBundle string) err
 		return err
 	}
 
-	url := server + "/v1/auth/token/lookup-self"
+	url := strings.TrimSuffix(server, "/") + "/v1/auth/token/lookup-self"
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
 	if err != nil {
 		return fmt.Errorf("failed to build request: %w", err)
