@@ -9,19 +9,39 @@ image:
 # Rendered as environment variables (see internal/config/config.go).
 configuration:
   platformNamespace: okdp-system
-  # The platform Context, read by the server and written for its service
-  # catalog. Empty namespace: the namespace the server runs in.
-  contextName: platform
-  contextNamespace: ""
   # Single origin, set verbatim in the Access-Control-Allow-Origin header.
   allowedOrigins: https://okdp-ui.example.com
   logLevel: info
-  releaseInterval: 30m
-  releaseTimeout: 10m
   # Comma-separated registry hosts to reach over plain HTTP (dev sandboxes
   # with a local registry). Leave empty in any real deployment.
   insecureOciRegistries: ""
 
+# The deployments Git repository: the only desired-state store. The server
+# commits instances, connections, projects and the catalog there, and the
+# GitOps engine reconciles them.
+gitops:
+  # Required. https://…, ssh://… or git@host:org/repo.git
+  repoURL: ""
+  branch: main
+  # Directory of the repository holding the layout (platform/, projects/…),
+  # empty for the root.
+  path: ""
+  # flux or argocd: which objects carry the render/sync status.
+  engine: flux
+  # Namespace of the Flux HelmReleases and values ConfigMaps, including
+  # okdp-platform-values.
+  releasesNamespace: okdp-releases
+  # Namespace of the Argo CD Applications (engine: argocd).
+  argocdNamespace: argocd
+  # Name of a Secret, in the release namespace, with write access to the
+  # repository. Flux GitRepository keys: username + password (a token as
+  # password) or bearerToken for HTTPS; identity + known_hosts for SSH.
+  credentialsSecret: ""
+  # Accept any SSH host key. Sandboxes only.
+  sshInsecureIgnoreHostKey: false
+  author:
+    name: OKDP control plane
+    email: okdp-control-plane@okdp.io
 
 service:
   type: ClusterIP

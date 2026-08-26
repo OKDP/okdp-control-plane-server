@@ -57,5 +57,24 @@ spec:
             httpGet:
               path: /health
               port: http
+          volumeMounts:
+            # The local clone of the deployments repository: a cache only,
+            # Git is the store.
+            - name: gitops-clone
+              mountPath: /var/cache/okdp/gitops
+            {{- if .Values.gitops.credentialsSecret }}
+            - name: gitops-credentials
+              mountPath: /etc/okdp/gitops-credentials
+              readOnly: true
+            {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: gitops-clone
+          emptyDir: {}
+        {{- if .Values.gitops.credentialsSecret }}
+        - name: gitops-credentials
+          secret:
+            secretName: {{ .Values.gitops.credentialsSecret }}
+            defaultMode: 0400
+        {{- end }}

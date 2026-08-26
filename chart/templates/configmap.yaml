@@ -7,12 +7,22 @@ metadata:
 data:
   PORT: {{ .Values.service.port | quote }}
   PLATFORM_NAMESPACE: {{ .Values.configuration.platformNamespace | quote }}
-  CONTEXT_NAME: {{ .Values.configuration.contextName | quote }}
-  CONTEXT_NAMESPACE: {{ .Values.configuration.contextNamespace | quote }}
   ALLOWED_ORIGINS: {{ .Values.configuration.allowedOrigins | quote }}
   LOG_LEVEL: {{ .Values.configuration.logLevel | quote }}
-  RELEASE_INTERVAL: {{ .Values.configuration.releaseInterval | quote }}
-  RELEASE_TIMEOUT: {{ .Values.configuration.releaseTimeout | quote }}
+  GITOPS_REPO_URL: {{ required "gitops.repoURL is required: the deployments repository is the only desired-state store" .Values.gitops.repoURL | quote }}
+  GITOPS_BRANCH: {{ .Values.gitops.branch | quote }}
+  GITOPS_PATH: {{ .Values.gitops.path | quote }}
+  GITOPS_ENGINE: {{ .Values.gitops.engine | quote }}
+  GITOPS_RELEASES_NAMESPACE: {{ .Values.gitops.releasesNamespace | quote }}
+  ARGOCD_NAMESPACE: {{ .Values.gitops.argocdNamespace | quote }}
+  GITOPS_AUTHOR_NAME: {{ .Values.gitops.author.name | quote }}
+  GITOPS_AUTHOR_EMAIL: {{ .Values.gitops.author.email | quote }}
+  GITOPS_CREDENTIALS_DIR: /etc/okdp/gitops-credentials
+  GITOPS_CLONE_DIR: /var/cache/okdp/gitops
+  {{- if .Values.gitops.sshInsecureIgnoreHostKey }}
+  # Sandboxes only: any SSH host key is accepted.
+  GITOPS_SSH_INSECURE_IGNORE_HOST_KEY: "true"
+  {{- end }}
   {{- if .Values.configuration.insecureOciRegistries }}
   # Development sandboxes only: registry hosts reached over plain HTTP.
   INSECURE_OCI_REGISTRIES: {{ .Values.configuration.insecureOciRegistries | quote }}
