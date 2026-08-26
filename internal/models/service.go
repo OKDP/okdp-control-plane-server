@@ -3,7 +3,7 @@ package models
 // --- Platform Services (core OKDP, full lifecycle management) ---
 
 // PlatformService is a managed service available in the OKDP data platform,
-// read from the Context under serviceCatalog.categories[].services. Category
+// read from platform/catalog.yaml under categories[].services. Category
 // is the title of the section the service sits in.
 type PlatformService struct {
 	Name           string   `json:"name"`
@@ -23,8 +23,8 @@ type PlatformService struct {
 	ExposesUI *bool `json:"exposesUI,omitempty"`
 }
 
-// MenuCategory describes a console navigation section, read from the Context
-// (spec.context.serviceCatalog.categories). Key and Label both carry the
+// MenuCategory describes a console navigation section, read from
+// platform/catalog.yaml (categories). Key and Label both carry the
 // section title, Order its position in the list, so the console renders an
 // ordered, labeled menu driven by the catalog.
 type MenuCategory struct {
@@ -54,35 +54,56 @@ type ServiceUpdateRequest struct {
 	Parameters map[string]any `json:"parameters,omitempty"`
 }
 
-// ServiceInstance represents a deployed platform service (KuboCD Release) for a project.
-// StatusMessage carries a human-readable explanation when Status is not "Ready"
-// (typically the latest K8s Warning event in the target namespace, e.g. a Helm
-// upgrade failure or an invalid parameter rejected by the API server).
+// ServiceInstance is a service instance of a project: its declaration in the
+// deployments Git repository, and what the cluster reports about it.
+//
+// Status is one of Pending (committed to Git, not yet picked up by the GitOps
+// engine), Installing, Updating, Ready or Error. StatusMessage explains a
+// status other than Ready (the engine's condition message, or the latest
+// Kubernetes Warning event of the instance).
 type ServiceInstance struct {
-	Name            string         `json:"name"`
-	ReleaseName     string         `json:"releaseName"`
-	Service         string         `json:"service"`
-	ServiceTag      string         `json:"serviceTag"`
-	Status          string         `json:"status"`
-	StatusMessage   string         `json:"statusMessage,omitempty"`
-	TargetNamespace string         `json:"targetNamespace"`
-	URL             string         `json:"url,omitempty"`
-	Roles           []string       `json:"roles,omitempty"`
-	Parameters      map[string]any `json:"parameters,omitempty"`
-	// Connections is what the release actually resolved, published by the
-	// controller. Without it the console can only show what a service asked
-	// for, never what it runs against.
+	Name            string `json:"name"`
+	ReleaseName     string `json:"releaseName"`
+	Service         string `json:"service"`
+	ServiceTag      string `json:"serviceTag"`
+	Status          string `json:"status"`
+	StatusMessage   string `json:"statusMessage,omitempty"`
+	TargetNamespace string `json:"targetNamespace"`
+	URL             string `json:"url,omitempty"`
+	// Roles is no longer filled: KuboCD package roles have no successor.
+	Roles      []string       `json:"roles,omitempty"`
+	Parameters map[string]any `json:"parameters,omitempty"`
+	// Usage is the rendered Markdown the chart publishes in its instance
+	// descriptor (the former package usage).
+	Usage string `json:"usage,omitempty"`
+	// Connections lists what the instance is wired to: the external
+	// connections its declaration layers in, and the connections of other
+	// instances its parameters name.
 	Connections []ServiceConnection `json:"connections,omitempty"`
 	CreatedAt   string              `json:"createdAt,omitempty"`
+	// Revision is the Git commit holding the change, set on the responses of
+	// a deployment or an update only.
+	Revision string `json:"revision,omitempty"`
 }
+
+// Kinds of ServiceConnection.
+const (
+	// ConnectionKindExternal is a connection declared in the project
+	// (projects/<p>/connections/<name>.yaml).
+	ConnectionKindExternal = "Connection"
+	// ConnectionKindInternal is a connection provided by another instance of
+	// the project (its descriptor's outputs).
+	ConnectionKindInternal = "Instance"
+)
 
 // ServiceConnection is one connection a deployed service is bound to.
 type ServiceConnection struct {
 	Name      string `json:"name"`
 	Namespace string `json:"namespace,omitempty"`
-	// Kind separates a Connection from a ClusterConnection, which may share a
-	// name, and tells the console which page to link to.
+	// Kind is Connection (external, declared in the project) or Instance
+	// (provided by another instance), and tells the console which page to
+	// link to.
 	Kind string `json:"kind"`
-	// Resolved is false while the release is still waiting for it.
+	// Resolved is false while the connection does not exist.
 	Resolved bool `json:"resolved"`
 }

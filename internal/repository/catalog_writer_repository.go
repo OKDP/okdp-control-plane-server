@@ -4,25 +4,18 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/okdp/okdp-control-plane-server/internal/auth"
+	"github.com/okdp/okdp-control-plane-server/internal/gitops"
 	"github.com/okdp/okdp-control-plane-server/internal/models"
 	"github.com/sirupsen/logrus"
-
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/client-go/dynamic"
-	"k8s.io/client-go/util/retry"
 )
 
-// ContextWriterRepository manages the platform service catalog on the platform
-// Context (spec.context.serviceCatalog.categories[].services). A service is
-// stored in the section whose title equals its Category, created on the fly
-// when it does not exist yet.
-//
-// Per-project configuration is not its business: KuboCD resolves an optional
-// Context by name in the namespace of each Release, through
-// Config.defaultNamespaceContexts.
-type ContextWriterRepository interface {
-	// AddPlatformService appends a service to its section of the default Context's catalog.
+// CatalogWriterRepository manages the platform service catalog, the file
+// platform/catalog.yaml of the deployments repository
+// (categories[].services). A service is stored in the section whose title
+// equals its Category, created on the fly when it does not exist yet.
+type CatalogWriterRepository interface {
+	// AddPlatformService appends a service to its section of the catalog.
 	AddPlatformService(ctx context.Context, svc models.PlatformService) error
 	// UpdatePlatformService replaces the service matching name, moving it when its Category changed.
 	UpdatePlatformService(ctx context.Context, name string, svc models.PlatformService) error
@@ -30,47 +23,36 @@ type ContextWriterRepository interface {
 	RemovePlatformService(ctx context.Context, name string) error
 }
 
-type k8sContextWriterRepository struct {
-	client           dynamic.Interface
-	defaultName      string
-	defaultNamespace string
+type gitCatalogWriterRepository struct {
+	deployments *gitops.Deployments
 }
 
-func NewContextWriterRepository(client dynamic.Interface, defaultName, defaultNamespace string) ContextWriterRepository {
-	return &k8sContextWriterRepository{
-		client:           client,
-		defaultName:      defaultName,
-		defaultNamespace: defaultNamespace,
-	}
+// NewCatalogWriterRepository writes the catalog through the Git writer.
+func NewCatalogWriterRepository(deployments *gitops.Deployments) CatalogWriterRepository {
+	return &gitCatalogWriterRepository{deployments: deployments}
 }
 
-// mutateCategories performs a read-modify-write on the default Context's
-// serviceCatalog.categories list, retrying on resource-version conflicts so
+// mutateCategories performs a read-modify-write on the catalog's categories.
+// The Git writer replays it on the latest revision when the branch moved, so
 // concurrent edits don't clobber each other.
-func (r *k8sContextWriterRepository) mutateCategories(ctx context.Context, fn func(categories []interface{}) ([]interface{}, error)) error {
-	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		cur, err := r.client.Resource(contextGVR).Namespace(r.defaultNamespace).Get(ctx, r.defaultName, metav1.GetOptions{})
-		if err != nil {
-			return fmt.Errorf("failed to read default context %s/%s: %w", r.defaultNamespace, r.defaultName, err)
-		}
-
-		categories, _, err := unstructured.NestedSlice(cur.Object, "spec", "context", "serviceCatalog", "categories")
-		if err != nil {
-			return fmt.Errorf("failed to read serviceCatalog.categories: %w", err)
-		}
-
+func (r *gitCatalogWriterRepository) mutateCategories(ctx context.Context, target string, fn func(categories []interface{}) ([]interface{}, error)) error {
+	_, err := r.deployments.UpdateCatalog(ctx, auth.ActorName(ctx), target, func(doc map[string]interface{}) error {
+		body := unwrapCatalog(doc)
+		categories, _ := body["categories"].([]interface{})
 		updated, err := fn(categories)
 		if err != nil {
 			return err
 		}
-
-		if err := unstructured.SetNestedSlice(cur.Object, updated, "spec", "context", "serviceCatalog", "categories"); err != nil {
-			return fmt.Errorf("failed to set serviceCatalog.categories: %w", err)
+		if updated == nil {
+			updated = []interface{}{}
 		}
-
-		_, err = r.client.Resource(contextGVR).Namespace(r.defaultNamespace).Update(ctx, cur, metav1.UpdateOptions{})
-		return err
+		body["categories"] = updated
+		return nil
 	})
+	if err != nil {
+		return fmt.Errorf("failed to write %s: %w", gitops.CatalogPath, err)
+	}
+	return nil
 }
 
 // categoryServices returns the services list of a section, always as a slice.
@@ -119,8 +101,8 @@ func appendServiceToCategory(categories []interface{}, title string, svc map[str
 	})
 }
 
-func (r *k8sContextWriterRepository) AddPlatformService(ctx context.Context, svc models.PlatformService) error {
-	err := r.mutateCategories(ctx, func(categories []interface{}) ([]interface{}, error) {
+func (r *gitCatalogWriterRepository) AddPlatformService(ctx context.Context, svc models.PlatformService) error {
+	err := r.mutateCategories(ctx, svc.Name, func(categories []interface{}) ([]interface{}, error) {
 		return appendServiceToCategory(categories, svc.Category, platformServiceToMap(svc)), nil
 	})
 	if err == nil {
@@ -129,8 +111,8 @@ func (r *k8sContextWriterRepository) AddPlatformService(ctx context.Context, svc
 	return err
 }
 
-func (r *k8sContextWriterRepository) UpdatePlatformService(ctx context.Context, name string, svc models.PlatformService) error {
-	err := r.mutateCategories(ctx, func(categories []interface{}) ([]interface{}, error) {
+func (r *gitCatalogWriterRepository) UpdatePlatformService(ctx context.Context, name string, svc models.PlatformService) error {
+	err := r.mutateCategories(ctx, name, func(categories []interface{}) ([]interface{}, error) {
 		if !removeServiceFromCategories(categories, name) {
 			return categories, nil
 		}
@@ -142,8 +124,8 @@ func (r *k8sContextWriterRepository) UpdatePlatformService(ctx context.Context, 
 	return err
 }
 
-func (r *k8sContextWriterRepository) RemovePlatformService(ctx context.Context, name string) error {
-	err := r.mutateCategories(ctx, func(categories []interface{}) ([]interface{}, error) {
+func (r *gitCatalogWriterRepository) RemovePlatformService(ctx context.Context, name string) error {
+	err := r.mutateCategories(ctx, name, func(categories []interface{}) ([]interface{}, error) {
 		removeServiceFromCategories(categories, name)
 		return categories, nil
 	})

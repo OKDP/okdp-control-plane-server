@@ -4,32 +4,11 @@ import (
 	"context"
 	"testing"
 
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
-	dynamicfake "k8s.io/client-go/dynamic/fake"
-
 	"github.com/okdp/okdp-control-plane-server/internal/repository/provisioning"
 )
 
-// platformContextWith builds the platform Context around the given context body.
-func platformContextWith(t *testing.T, body map[string]interface{}) *dynamicfake.FakeDynamicClient {
-	t.Helper()
-	scheme := runtime.NewScheme()
-	listKinds := map[schema.GroupVersionResource]string{contextGVR: "ContextList"}
-
-	platform := &unstructured.Unstructured{Object: map[string]interface{}{
-		"apiVersion": "kubocd.kubotal.io/v1alpha1",
-		"kind":       "Context",
-		"metadata":   map[string]interface{}{"name": "platform", "namespace": "okdp-system"},
-		"spec":       map[string]interface{}{"context": body},
-	}}
-
-	return dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, listKinds, platform)
-}
-
 // The provisioning provider and the kubauth namespace must agree whichever
-// vocabulary the Context uses, otherwise the deleted services keep their
+// vocabulary the platform values use, otherwise the deleted services keep their
 // OidcClient forever.
 func TestProvisioningReadsBothVocabularies(t *testing.T) {
 	cases := []struct {
@@ -71,7 +50,7 @@ func TestProvisioningReadsBothVocabularies(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			repo := NewContextRepository(platformContextWith(t, tc.body), "platform", "okdp-system")
+			repo := newContextWith(t, tc.body)
 
 			provider, err := repo.GetIdentityProvisioningProvider(context.Background())
 			if err != nil {

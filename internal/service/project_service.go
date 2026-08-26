@@ -2,9 +2,13 @@ package service
 
 import (
 	"context"
+	"fmt"
 
+	"github.com/okdp/okdp-control-plane-server/internal/auth"
+	"github.com/okdp/okdp-control-plane-server/internal/gitops"
 	"github.com/okdp/okdp-control-plane-server/internal/models"
 	"github.com/okdp/okdp-control-plane-server/internal/repository"
+	"github.com/sirupsen/logrus"
 	"k8s.io/apimachinery/pkg/watch"
 )
 
@@ -20,12 +24,14 @@ type ProjectService interface {
 
 // DefaultProjectService is the default implementation of ProjectService
 type DefaultProjectService struct {
-	repo repository.ProjectRepository
+	repo        repository.ProjectRepository
+	deployments *gitops.Deployments
 }
 
-// NewDefaultProjectService creates a new DefaultProjectService
-func NewDefaultProjectService(repo repository.ProjectRepository) *DefaultProjectService {
-	return &DefaultProjectService{repo: repo}
+// NewDefaultProjectService creates a new DefaultProjectService. deployments
+// may be nil, in which case projects exist in the cluster only.
+func NewDefaultProjectService(repo repository.ProjectRepository, deployments *gitops.Deployments) *DefaultProjectService {
+	return &DefaultProjectService{repo: repo, deployments: deployments}
 }
 
 // ListProjects returns all projects
@@ -38,25 +44,47 @@ func (s *DefaultProjectService) GetProject(ctx context.Context, name string) (*m
 	return s.repo.Get(ctx, name)
 }
 
-// CreateProject creates a new project, backed by a Kubernetes Namespace.
-//
-// No Context is created for the project. KuboCD resolves an optional Context by
-// name in the namespace of each Release, through Config.defaultNamespaceContexts,
-// so a project that overrides nothing needs no object at all. A project that
-// does override something declares its own Context, and it survives.
+// CreateProject creates a new project: its Namespace, which the charts
+// deploy into, and its projects/<p>/project.yaml in the deployments
+// repository. The Namespace goes first because it is what answers "already
+// exists"; it is removed again when the commit fails.
 func (s *DefaultProjectService) CreateProject(ctx context.Context, project *models.Project) error {
-	return s.repo.Create(ctx, project)
+	if err := s.repo.Create(ctx, project); err != nil {
+		return err
+	}
+	if s.deployments == nil {
+		return nil
+	}
+	if _, err := s.deployments.PutProject(ctx, auth.ActorName(ctx), gitops.Project{Name: project.Name, Description: project.Description}); err != nil {
+		if rollbackErr := s.repo.Delete(ctx, project.Name); rollbackErr != nil {
+			logrus.WithError(rollbackErr).WithField("project", project.Name).Warn("Could not remove the namespace of a project Git refused")
+		}
+		return fmt.Errorf("failed to declare the project in the deployments repository: %w", err)
+	}
+	return nil
 }
 
 // UpdateProject updates a project's mutable metadata (its description) on the
-// backing Namespace.
+// backing Namespace and in project.yaml.
 func (s *DefaultProjectService) UpdateProject(ctx context.Context, project *models.Project) (*models.Project, error) {
-	return s.repo.Update(ctx, project)
+	updated, err := s.repo.Update(ctx, project)
+	if err != nil || s.deployments == nil {
+		return updated, err
+	}
+	if _, err := s.deployments.PutProject(ctx, auth.ActorName(ctx), gitops.Project{Name: updated.Name, Description: updated.Description}); err != nil {
+		return nil, fmt.Errorf("failed to update the project in the deployments repository: %w", err)
+	}
+	return updated, nil
 }
 
-// DeleteProject deletes a project, that is its Namespace. A Context the project
-// may have declared lives in that namespace and goes with it.
+// DeleteProject deletes a project: its declarations in Git first, so the
+// GitOps engine uninstalls its releases, then its Namespace.
 func (s *DefaultProjectService) DeleteProject(ctx context.Context, name string) error {
+	if s.deployments != nil {
+		if _, err := s.deployments.DeleteProject(ctx, auth.ActorName(ctx), name); err != nil {
+			return fmt.Errorf("failed to remove the project from the deployments repository: %w", err)
+		}
+	}
 	return s.repo.Delete(ctx, name)
 }
 

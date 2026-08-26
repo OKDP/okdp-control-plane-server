@@ -14,7 +14,7 @@ import (
 // Only the three getters the capability service reads are implemented; the
 // embedded interface makes any other call panic rather than pass silently.
 type stubContextRepo struct {
-	repository.ContextRepository
+	repository.PlatformRepository
 	provider     string
 	provisioning string
 }

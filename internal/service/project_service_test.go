@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/okdp/okdp-control-plane-server/internal/gitops"
 	"github.com/okdp/okdp-control-plane-server/internal/models"
 	"github.com/okdp/okdp-control-plane-server/internal/service/mocks"
 	"github.com/stretchr/testify/assert"
@@ -12,7 +13,7 @@ import (
 
 func TestListProjects(t *testing.T) {
 	mockRepo := new(mocks.ProjectRepository)
-	service := NewDefaultProjectService(mockRepo)
+	service := NewDefaultProjectService(mockRepo, nil)
 
 	ctx := context.Background()
 	expectedProjects := []models.Project{
@@ -31,7 +32,7 @@ func TestListProjects(t *testing.T) {
 
 func TestGetProject(t *testing.T) {
 	mockRepo := new(mocks.ProjectRepository)
-	service := NewDefaultProjectService(mockRepo)
+	service := NewDefaultProjectService(mockRepo, nil)
 
 	ctx := context.Background()
 	expectedProject := &models.Project{Name: "proj1", Description: "desc1"}
@@ -47,7 +48,7 @@ func TestGetProject(t *testing.T) {
 
 func TestCreateProject(t *testing.T) {
 	mockRepo := new(mocks.ProjectRepository)
-	service := NewDefaultProjectService(mockRepo)
+	service := NewDefaultProjectService(mockRepo, nil)
 
 	ctx := context.Background()
 	newProject := &models.Project{Name: "proj1", Description: "desc1"}
@@ -62,7 +63,7 @@ func TestCreateProject(t *testing.T) {
 
 func TestDeleteProject(t *testing.T) {
 	mockRepo := new(mocks.ProjectRepository)
-	service := NewDefaultProjectService(mockRepo)
+	service := NewDefaultProjectService(mockRepo, nil)
 
 	ctx := context.Background()
 	projectToDelete := "proj1"
@@ -78,7 +79,7 @@ func TestDeleteProject(t *testing.T) {
 
 func TestDeleteProject_RepoError(t *testing.T) {
 	mockRepo := new(mocks.ProjectRepository)
-	service := NewDefaultProjectService(mockRepo)
+	service := NewDefaultProjectService(mockRepo, nil)
 
 	ctx := context.Background()
 	projectToDelete := "proj1"
@@ -89,4 +90,23 @@ func TestDeleteProject_RepoError(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Equal(t, "ns delete error", err.Error())
+}
+
+// A project is declared in Git too: projects/<p>/project.yaml, and deleting
+// it removes everything it declared, so the engine uninstalls its releases.
+func TestProjectsAreDeclaredInGit(t *testing.T) {
+	mockRepo := new(mocks.ProjectRepository)
+	store := gitops.NewMemoryStore(nil)
+	service := NewDefaultProjectService(mockRepo, gitops.NewDeployments(store, nil))
+	ctx := context.Background()
+	project := &models.Project{Name: "demo", Description: "Demo project"}
+
+	mockRepo.On("Create", ctx, project).Return(nil)
+	assert.NoError(t, service.CreateProject(ctx, project))
+	assert.Equal(t, "name: demo\ndescription: Demo project\n", store.Files()["projects/demo/project.yaml"])
+
+	mockRepo.On("Delete", ctx, "demo").Return(nil)
+	assert.NoError(t, service.DeleteProject(ctx, "demo"))
+	assert.NotContains(t, store.Files(), "projects/demo/project.yaml")
+	mockRepo.AssertExpectations(t)
 }

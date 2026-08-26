@@ -4,13 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/okdp/okdp-control-plane-server/internal/gitops"
 	"github.com/okdp/okdp-control-plane-server/internal/models"
-
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
-	dynamicfake "k8s.io/client-go/dynamic/fake"
 )
 
 func TestPlatformServiceToMap(t *testing.T) {
@@ -67,27 +62,26 @@ func TestPlatformServiceToMap(t *testing.T) {
 	})
 }
 
-// newWriterWith builds a fake dynamic client holding a Context whose
-// serviceCatalog.categories is the given list, and a writer bound to it.
-func newWriterWith(t *testing.T, categories []interface{}) (*k8sContextWriterRepository, func() []interface{}) {
+// newWriterWith builds a catalog in Git whose categories are the given list,
+// and a writer bound to it.
+func newWriterWith(t *testing.T, categories []interface{}) (CatalogWriterRepository, func() []interface{}) {
 	t.Helper()
-	obj := &unstructured.Unstructured{Object: map[string]interface{}{
-		"apiVersion": "kubocd.kubotal.io/v1alpha1",
-		"kind":       "Context",
-		"metadata":   map[string]interface{}{"name": "platform", "namespace": "okdp-system"},
-		"spec": map[string]interface{}{"context": map[string]interface{}{
-			"serviceCatalog": map[string]interface{}{"categories": categories},
-		}},
-	}}
-	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
-		runtime.NewScheme(), map[schema.GroupVersionResource]string{contextGVR: "ContextList"}, obj)
-	w := NewContextWriterRepository(client, "platform", "okdp-system").(*k8sContextWriterRepository)
+	raw, err := gitops.MarshalYAML(map[string]interface{}{"defaultRepository": "quay.io/okdp/platform-charts", "categories": categories})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := gitops.NewMemoryStore(map[string]string{gitops.CatalogPath: string(raw)})
+	d := gitops.NewDeployments(store, nil)
+	w := NewCatalogWriterRepository(d)
 	read := func() []interface{} {
-		cur, err := client.Resource(contextGVR).Namespace("okdp-system").Get(context.Background(), "platform", metav1.GetOptions{})
+		doc, err := d.ReadCatalog(context.Background())
 		if err != nil {
 			t.Fatalf("read back: %v", err)
 		}
-		cats, _, _ := unstructured.NestedSlice(cur.Object, "spec", "context", "serviceCatalog", "categories")
+		if doc["defaultRepository"] != "quay.io/okdp/platform-charts" {
+			t.Fatalf("the writer lost the rest of the catalog: %v", doc)
+		}
+		cats, _ := doc["categories"].([]interface{})
 		return cats
 	}
 	return w, read

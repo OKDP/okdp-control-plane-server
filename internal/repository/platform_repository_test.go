@@ -2,39 +2,44 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
+	"github.com/okdp/okdp-control-plane-server/internal/gitops"
 	"github.com/okdp/okdp-control-plane-server/internal/models"
 
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
-	dynamicfake "k8s.io/client-go/dynamic/fake"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
 )
 
-// newContextWith builds a fake dynamic client holding a single KuboCD Context
-// whose spec.context carries the given body.
-func newContextWith(t *testing.T, body map[string]interface{}) ContextRepository {
+// newContextWith builds a platform repository whose global.okdp is the given
+// body, served by the okdp-platform-values ConfigMap; a serviceCatalog key
+// becomes platform/catalog.yaml in Git instead, where the catalog now lives.
+func newContextWith(t *testing.T, body map[string]interface{}) PlatformRepository {
 	t.Helper()
-	obj := &unstructured.Unstructured{
-		Object: map[string]interface{}{
-			"apiVersion": "kubocd.kubotal.io/v1alpha1",
-			"kind":       "Context",
-			"metadata": map[string]interface{}{
-				"name":      "default",
-				"namespace": "kubocd-system",
-			},
-			"spec": map[string]interface{}{
-				"context": body,
-			},
-		},
+	values := map[string]interface{}{}
+	files := map[string]string{}
+	for k, v := range body {
+		if k == "serviceCatalog" {
+			catalog, err := gitops.MarshalYAML(v)
+			if err != nil {
+				t.Fatal(err)
+			}
+			files[gitops.CatalogPath] = string(catalog)
+			continue
+		}
+		values[k] = v
 	}
-	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
-		runtime.NewScheme(),
-		map[schema.GroupVersionResource]string{contextGVR: "ContextList"},
-		obj,
-	)
-	return NewContextRepository(client, "default", "kubocd-system")
+	raw, err := gitops.MarshalYAML(map[string]interface{}{"global": map[string]interface{}{"okdp": values}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := fake.NewSimpleClientset(&corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: gitops.PlatformValuesConfigMap, Namespace: gitops.ReleasesNamespace},
+		Data:       map[string]string{gitops.ValuesKey: string(raw)},
+	})
+	return NewPlatformRepository(client, gitops.ReleasesNamespace, gitops.NewDeployments(gitops.NewMemoryStore(files), nil))
 }
 
 func TestGetMenuCategories(t *testing.T) {
@@ -63,7 +68,9 @@ func TestGetMenuCategories(t *testing.T) {
 	}
 }
 
-func TestGetMenuCategoriesAbsentReturnsNil(t *testing.T) {
+// A catalog without categories lists as [] in JSON, not null: the console
+// iterates the answer.
+func TestGetMenuCategoriesAndServicesAbsentAreEmpty(t *testing.T) {
 	repo := newContextWith(t, map[string]interface{}{"serviceCatalog": map[string]interface{}{
 		"defaultRepository": "quay.io/okdp/platform-packages",
 	}})
@@ -72,8 +79,18 @@ func TestGetMenuCategoriesAbsentReturnsNil(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cats != nil {
-		t.Errorf("expected nil categories when serviceCatalog.categories is absent, got %+v", cats)
+	services, err := repo.GetPlatformServices(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for name, list := range map[string]any{"categories": cats, "services": services} {
+		data, err := json.Marshal(list)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(data) != "[]" {
+			t.Errorf("%s marshal to %s, want []", name, data)
+		}
 	}
 }
 
@@ -176,7 +193,7 @@ func TestGetOidcInsecureSkipVerify(t *testing.T) {
 	// Absent means the certificate is checked: the safe reading of silence.
 	repo := newContextWith(t, map[string]interface{}{"oidc": map[string]interface{}{"issuerUri": "https://idp"}})
 	if insecure, err := repo.GetOidcInsecureSkipVerify(context.Background()); err != nil || insecure {
-		t.Errorf("insecure = %v (err %v), want false when the Context is silent", insecure, err)
+		t.Errorf("insecure = %v (err %v), want false when the platform values are silent", insecure, err)
 	}
 
 	repo = newContextWith(t, map[string]interface{}{"oidc": map[string]interface{}{"insecureSkipVerify": true}})

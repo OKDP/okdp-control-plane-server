@@ -26,14 +26,14 @@ type CapabilityService interface {
 }
 
 type DefaultCapabilityService struct {
-	contextRepo repository.ContextRepository
+	contextRepo repository.PlatformRepository
 	// Reports whether the kubauth CRDs are served. The identity routes rest on
 	// the same answer, so advertising the capability without it would offer a
 	// section whose every call comes back 501.
 	identityCRDsInstalled func(ctx context.Context) bool
 }
 
-func NewDefaultCapabilityService(contextRepo repository.ContextRepository, identityCRDsInstalled func(ctx context.Context) bool) *DefaultCapabilityService {
+func NewDefaultCapabilityService(contextRepo repository.PlatformRepository, identityCRDsInstalled func(ctx context.Context) bool) *DefaultCapabilityService {
 	return &DefaultCapabilityService{contextRepo: contextRepo, identityCRDsInstalled: identityCRDsInstalled}
 }
 

@@ -1,0 +1,94 @@
+package service
+
+import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
+	"context"
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+func chartArchive(t *testing.T, files map[string]string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	for name, body := range files {
+		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o644, Size: int64(len(body))}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte(body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tw.Close()
+	gz.Close()
+	return buf.Bytes()
+}
+
+func TestValuesSchemaFromChartArchivePicksTheChartsOwn(t *testing.T) {
+	archive := chartArchive(t, map[string]string{
+		"trino/Chart.yaml":                    "name: trino\n",
+		"trino/charts/opa/values.schema.json": `{"title": "subchart"}`,
+		"trino/values.schema.json":            `{"title": "trino"}`,
+	})
+	schema, err := valuesSchemaFromChartArchive(bytes.NewReader(archive))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if schema["title"] != "trino" {
+		t.Fatalf("got the schema titled %v", schema["title"])
+	}
+
+	_, err = valuesSchemaFromChartArchive(bytes.NewReader(chartArchive(t, map[string]string{"x/Chart.yaml": "name: x\n"})))
+	if err == nil || !strings.Contains(err.Error(), "no values.schema.json") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+// A minimal OCI distribution endpoint serving one chart, to exercise the pull
+// the way a registry answers it.
+func TestOCIChartSchemaFetcherPullsFromARegistry(t *testing.T) {
+	chart := chartArchive(t, map[string]string{"hive/values.schema.json": `{"type": "object", "title": "hive"}`})
+	config := []byte("{}")
+	digest := func(b []byte) string { return fmt.Sprintf("sha256:%x", sha256.Sum256(b)) }
+	manifest, _ := json.Marshal(map[string]any{
+		"schemaVersion": 2,
+		"mediaType":     "application/vnd.oci.image.manifest.v1+json",
+		"config":        map[string]any{"mediaType": "application/vnd.cncf.helm.config.v1+json", "digest": digest(config), "size": len(config)},
+		"layers":        []any{map[string]any{"mediaType": helmChartContentMediaType, "digest": digest(chart), "size": len(chart)}},
+	})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v2/okdp/charts/hive/manifests/1.0.0", "/v2/okdp/charts/hive/manifests/" + digest(manifest):
+			w.Header().Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
+			w.Header().Set("Docker-Content-Digest", digest(manifest))
+			w.Header().Set("Content-Length", fmt.Sprint(len(manifest)))
+			if r.Method != http.MethodHead {
+				w.Write(manifest)
+			}
+		case "/v2/okdp/charts/hive/blobs/" + digest(chart):
+			w.Header().Set("Content-Length", fmt.Sprint(len(chart)))
+			w.Write(chart)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	host := strings.TrimPrefix(server.URL, "http://")
+	schema, err := NewOCIChartSchemaFetcher().FetchValuesSchema(context.Background(), host+"/okdp/charts/hive", "1.0.0", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if schema["title"] != "hive" {
+		t.Fatalf("schema = %v", schema)
+	}
+}
