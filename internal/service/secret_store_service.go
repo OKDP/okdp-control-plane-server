@@ -235,9 +235,13 @@ func validateVaultKubernetesMount(ctx context.Context, server, mountPath, caBund
 	return nil
 }
 
-// validateVaultToken calls POST /v1/auth/token/lookup-self to verify that
-// the token is valid and has the correct permissions. sys/health only checks
-// network connectivity -- a bad token still gets "Ready" from ESO.
+// validateVaultToken calls GET /v1/auth/token/lookup-self to verify that the
+// token is valid. sys/health only checks network connectivity -- a bad token
+// still gets "Ready" from ESO.
+//
+// Vault's default policy grants "read" on this path, which maps to GET. A POST
+// needs the "update" capability, which no least-privilege token carries, so
+// only a root token would pass.
 func validateVaultToken(ctx context.Context, server, token, caBundle string) error {
 	client, err := vaultHTTPClient(caBundle)
 	if err != nil {
@@ -245,7 +249,7 @@ func validateVaultToken(ctx context.Context, server, token, caBundle string) err
 	}
 
 	url := strings.TrimSuffix(server, "/") + "/v1/auth/token/lookup-self"
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return fmt.Errorf("failed to build request: %w", err)
 	}
