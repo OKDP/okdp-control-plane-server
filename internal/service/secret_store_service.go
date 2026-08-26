@@ -230,9 +230,21 @@ func validateVaultKubernetesMount(ctx context.Context, server, mountPath, caBund
 	}
 	defer resp.Body.Close()
 
+	// An allowlist, not a list of known failures. Naming only the bad codes
+	// meant every unnamed one fell through to success, which is the shape of
+	// answer this check exists to stop trusting.
 	switch {
-	case resp.StatusCode == http.StatusNotFound:
-		return fmt.Errorf("no kubernetes auth mount at %q on the vault server", mountPath)
+	case resp.StatusCode == http.StatusBadRequest:
+		// The one answer that proves a live login handler: it read the body and
+		// complained about the missing role and jwt.
+		return nil
+	case resp.StatusCode == http.StatusForbidden, resp.StatusCode == http.StatusNotFound:
+		// Vault answers 403, not 404, for a path that does not exist, so an
+		// unauthenticated caller cannot map the server. Measured against Vault
+		// 1.x: an existing mount gives 400, an absent one 403. Both codes mean
+		// the same thing here, and matching only 404 made this branch dead
+		// code while an absent mount was reported as a working one.
+		return fmt.Errorf("no kubernetes auth mount at %q on the vault server (it answered %d)", mountPath, resp.StatusCode)
 	case resp.StatusCode >= 500:
 		// Vault answered but is unwell. Reporting success here would send the
 		// caller looking for the cause in the external-secrets logs instead.
@@ -240,15 +252,11 @@ func validateVaultKubernetesMount(ctx context.Context, server, mountPath, caBund
 	case resp.StatusCode >= 300 && resp.StatusCode < 400:
 		// Redirects are not followed, so the token never leaves for the
 		// Location host. A Vault API does not redirect either: this is some
-		// other server, and accepting it would be the false success the
-		// check exists to remove.
+		// other server.
 		return fmt.Errorf("vault returned a redirect (%d), check the server URL", resp.StatusCode)
-	case resp.StatusCode == http.StatusOK:
-		// The login endpoint rejects an empty body; a 200 means something else
-		// is answering on this path.
-		return fmt.Errorf("the auth mount answered %d to an empty login, this does not look like vault", resp.StatusCode)
+	default:
+		return fmt.Errorf("the auth mount answered %d to an empty login, this does not look like a vault kubernetes mount", resp.StatusCode)
 	}
-	return nil
 }
 
 // validateVaultToken calls GET /v1/auth/token/lookup-self to verify that the

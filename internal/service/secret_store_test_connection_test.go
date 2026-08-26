@@ -69,26 +69,60 @@ func TestTestConnectionRejectsUnsupportedAuthType(t *testing.T) {
 	}
 }
 
-// A mount that was never enabled has no handler, so Vault answers 404. Reporting
-// success there sends the user to hunt through the external-secrets logs for
-// the real cause.
+// A mount that was never enabled must be named, instead of sending the user to
+// hunt through the external-secrets logs for the real cause.
+//
+// Vault answers 403 here, not 404: it hides which paths exist from an
+// unauthenticated caller. Measured against the running server, an enabled mount
+// gives 400 and an absent one 403. The first version of this test served 404
+// from its stub, which is the assumption the code made too, so both agreed with
+// each other and neither agreed with Vault.
 func TestTestConnectionKubernetesRejectsMissingMount(t *testing.T) {
-	vault := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/auth/kubernetes/login" {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		w.WriteHeader(http.StatusBadRequest)
-	}))
-	defer vault.Close()
+	for _, code := range []int{http.StatusForbidden, http.StatusNotFound} {
+		vault := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/v1/auth/kubernetes/login" {
+				w.WriteHeader(code)
+				return
+			}
+			w.WriteHeader(http.StatusBadRequest)
+		}))
 
-	svc := &DefaultSecretStoreService{}
-	err := svc.TestConnection(context.Background(), kubernetesRequest(vault.URL, "demo-role", "absent"))
-	if err == nil {
-		t.Fatal("a mount that does not exist reported success")
+		svc := &DefaultSecretStoreService{}
+		err := svc.TestConnection(context.Background(), kubernetesRequest(vault.URL, "demo-role", "absent"))
+		vault.Close()
+
+		if err == nil {
+			t.Fatalf("a mount answering %d reported success", code)
+		}
+		if !strings.Contains(err.Error(), "absent") {
+			t.Fatalf("error for %d does not name the mount: %v", code, err)
+		}
 	}
-	if !strings.Contains(err.Error(), "absent") {
-		t.Fatalf("error does not name the mount: %v", err)
+}
+
+// Everything outside the allowlist must be refused. Each of these used to fall
+// past the named failures and return success: 401 and 403 from a proxy in
+// front of Vault, 405 from a server that serves the path but not POST, 429
+// from a rate limiter, and a 2xx that is not the 200 the old switch named.
+func TestTestConnectionKubernetesRejectsEveryOtherAnswer(t *testing.T) {
+	for _, code := range []int{
+		http.StatusUnauthorized,
+		http.StatusMethodNotAllowed,
+		http.StatusTooManyRequests,
+		http.StatusCreated,
+		http.StatusNoContent,
+	} {
+		vault := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(code)
+		}))
+
+		svc := &DefaultSecretStoreService{}
+		err := svc.TestConnection(context.Background(), kubernetesRequest(vault.URL, "demo-role", "kubernetes"))
+		vault.Close()
+
+		if err == nil {
+			t.Fatalf("status %d was accepted as a working mount", code)
+		}
 	}
 }
 
@@ -142,7 +176,7 @@ func TestTestConnectionKubernetesRejectsPlainOK(t *testing.T) {
 
 	svc := &DefaultSecretStoreService{}
 	err := svc.TestConnection(context.Background(), kubernetesRequest(vault.URL, "demo-role", "kubernetes"))
-	if err == nil || !strings.Contains(err.Error(), "does not look like vault") {
+	if err == nil || !strings.Contains(err.Error(), "does not look like") {
 		t.Fatalf("a non-vault server was accepted: %v", err)
 	}
 }
