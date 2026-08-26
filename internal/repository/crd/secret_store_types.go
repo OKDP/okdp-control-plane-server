@@ -27,10 +27,13 @@ type ESOProvider struct {
 
 // ESOVaultProvider configures the Vault backend
 type ESOVaultProvider struct {
-	Server   string       `json:"server"`
-	Path     string       `json:"path"`
-	Version  string       `json:"version"`
-	CABundle string       `json:"caBundle,omitempty"`
+	Server  string `json:"server"`
+	Path    string `json:"path"`
+	Version string `json:"version"`
+	// The CRD declares caBundle as `format: byte`, so the API server only accepts
+	// base64. A []byte marshals that way on its own; a string would ship raw PEM
+	// and every store carrying a private CA would be rejected on create.
+	CABundle []byte       `json:"caBundle,omitempty"`
 	Auth     ESOVaultAuth `json:"auth"`
 }
 

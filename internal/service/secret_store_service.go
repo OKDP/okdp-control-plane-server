@@ -297,7 +297,7 @@ func buildSecretStoreCRD(namespace string, req models.SecretStoreRequest, credSe
 					Server:   req.Vault.Server,
 					Path:     req.Vault.Path,
 					Version:  req.Vault.Version,
-					CABundle: req.Vault.CABundle,
+					CABundle: []byte(req.Vault.CABundle),
 				},
 			},
 		},
@@ -356,7 +356,7 @@ func (s *DefaultSecretStoreService) toResponse(store *crd.ESOSecretStore, namesp
 			Server:   v.Server,
 			Path:     v.Path,
 			Version:  v.Version,
-			CABundle: v.CABundle,
+			CABundle: string(v.CABundle),
 		}
 
 		authResp := &models.SecretStoreAuthResponse{
