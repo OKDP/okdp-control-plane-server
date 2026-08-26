@@ -28,6 +28,10 @@ type SecretAuthConfig struct {
 	Token     string `json:"token,omitempty"`
 	MountPath string `json:"mountPath,omitempty"`
 	Role      string `json:"role,omitempty"`
+	// ServiceAccount the store authenticates as under kubernetes auth. Empty
+	// keeps the namespace default account, which every workload already uses,
+	// so a project can give its store an identity of its own instead.
+	ServiceAccount string `json:"serviceAccount,omitempty"`
 }
 
 // SecretStoreResponse is the API response model for a secret store
@@ -54,6 +58,8 @@ type SecretStoreAuthResponse struct {
 type SecretAuthConfigSafe struct {
 	MountPath *string `json:"mountPath"`
 	Role      *string `json:"role"`
+	// Nil for token auth, which has no service account to report.
+	ServiceAccount *string `json:"serviceAccount,omitempty"`
 }
 
 // SecretStoreStatusResponse is the detailed status of a secret store

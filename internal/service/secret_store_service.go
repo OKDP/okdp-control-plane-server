@@ -310,11 +310,18 @@ func buildSecretStoreCRD(namespace string, req models.SecretStoreRequest, credSe
 		if mountPath == "" {
 			mountPath = "kubernetes"
 		}
+		// Vault matches the bound_service_account_names of the role against this
+		// account, so pinning it to default forced every role onto the identity
+		// the whole namespace already shares.
+		serviceAccount := req.Auth.Config.ServiceAccount
+		if serviceAccount == "" {
+			serviceAccount = "default"
+		}
 		store.Spec.Provider.Vault.Auth.Kubernetes = &crd.ESOKubernetesAuth{
 			MountPath: mountPath,
 			Role:      req.Auth.Config.Role,
 			ServiceAccountRef: &crd.ESOServiceAccountRef{
-				Name: "default",
+				Name: serviceAccount,
 			},
 		}
 	}
@@ -366,6 +373,12 @@ func (s *DefaultSecretStoreService) toResponse(store *crd.ESOSecretStore, namesp
 			authResp.Config.MountPath = &mp
 			role := v.Auth.Kubernetes.Role
 			authResp.Config.Role = &role
+			// Read back the account the store authenticates as, otherwise a
+			// caller cannot tell which identity the Vault role must bind.
+			if ref := v.Auth.Kubernetes.ServiceAccountRef; ref != nil {
+				sa := ref.Name
+				authResp.Config.ServiceAccount = &sa
+			}
 		}
 		resp.Auth = authResp
 	}
