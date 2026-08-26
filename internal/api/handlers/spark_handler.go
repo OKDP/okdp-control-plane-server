@@ -354,12 +354,16 @@ func (h *SparkHandler) GetSparkAppLogs(c *gin.Context) {
 
 		lines := make(chan string)
 		scanErr := make(chan error, 1)
+		// Captured here: gin returns the *gin.Context to its pool as soon as
+		// the handler returns and overwrites Request, so reading it from the
+		// goroutine races and would watch another request's cancellation.
+		streamCtx := c.Request.Context()
 		go func() {
 			scanner := newLogStreamScanner(stream)
 			for scanner.Scan() {
 				select {
 				case lines <- scanner.Text():
-				case <-c.Request.Context().Done():
+				case <-streamCtx.Done():
 					close(lines)
 					return
 				}
