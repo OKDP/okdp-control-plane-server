@@ -594,6 +594,12 @@ definitions:
         type: string
       role:
         type: string
+      serviceAccount:
+        description: |-
+          ServiceAccount names the account the store authenticates as under
+          Kubernetes auth. Empty keeps the namespace default account, which every
+          workload already shares, so a project can give its store its own identity.
+        type: string
       token:
         type: string
     type: object
@@ -602,6 +608,9 @@ definitions:
       mountPath:
         type: string
       role:
+        type: string
+      serviceAccount:
+        description: Nil for token auth, which has no service account to report.
         type: string
     type: object
   models.SecretStoreAuth:
@@ -1733,6 +1742,34 @@ paths:
       summary: Test a connection from the platform
       tags:
       - connections
+  /api/projects/{name}/metrics:
+    get:
+      description: One call returns the aggregated CPU/memory usage and limits of
+        each deployed instance, keyed by instance name.
+      parameters:
+      - description: Project name
+        in: path
+        name: name
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              $ref: '#/definitions/models.ServiceMetrics'
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get live resource usage for every instance of a project
+      tags:
+      - services
   /api/projects/{name}/services:
     get:
       description: Get all deployed service instances for a project
