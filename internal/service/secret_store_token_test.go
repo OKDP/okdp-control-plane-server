@@ -26,9 +26,15 @@ func tokenRequest(server, token string) models.SecretStoreRequest {
 // GET. A POST needs "update", a capability no least-privilege token carries, so
 // checking with POST accepted only root tokens.
 func TestValidateVaultTokenUsesGet(t *testing.T) {
-	var method string
+	// The handler runs on the server's goroutine, so the method travels back
+	// through a channel: reading a shared variable across the two would be a
+	// data race the memory model does not forbid from surfacing.
+	methodes := make(chan string, 1)
 	vault := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		method = r.Method
+		select {
+		case methodes <- r.Method:
+		default:
+		}
 		if r.Method != http.MethodGet {
 			w.WriteHeader(http.StatusForbidden)
 			return
@@ -41,8 +47,14 @@ func TestValidateVaultTokenUsesGet(t *testing.T) {
 	if err := svc.TestConnection(context.Background(), tokenRequest(vault.URL, "app-token")); err != nil {
 		t.Fatalf("a least-privilege token was rejected: %v", err)
 	}
-	if method != http.MethodGet {
-		t.Fatalf("lookup-self was called with %s, want GET", method)
+
+	select {
+	case method := <-methodes:
+		if method != http.MethodGet {
+			t.Fatalf("lookup-self was called with %s, want GET", method)
+		}
+	default:
+		t.Fatal("lookup-self was never called")
 	}
 }
 
