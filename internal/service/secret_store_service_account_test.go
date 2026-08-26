@@ -52,3 +52,24 @@ func TestKubernetesAuthFallsBackToDefault(t *testing.T) {
 		t.Fatalf("service account is %q, want default", got)
 	}
 }
+
+// Reading the account back matters as much as writing it: without it the
+// console shows an empty field and the next save silently repoints the store.
+func TestResponseReportsTheServiceAccount(t *testing.T) {
+	store := buildSecretStoreCRD("demo", models.SecretStoreRequest{
+		Name:     "store",
+		Provider: "vault",
+		Vault:    &models.VaultConfig{Server: "https://vault.example.com", Path: "secret", Version: "v2"},
+		Auth:     kubernetesAuth("vault-reader"),
+	}, "")
+
+	svc := &DefaultSecretStoreService{}
+	resp := svc.toResponse(store, "demo")
+
+	if resp.Auth == nil || resp.Auth.Config.ServiceAccount == nil {
+		t.Fatal("the response carries no service account")
+	}
+	if got := *resp.Auth.Config.ServiceAccount; got != "vault-reader" {
+		t.Fatalf("response reports %q, want vault-reader", got)
+	}
+}

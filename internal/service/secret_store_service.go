@@ -114,6 +114,17 @@ func (s *DefaultSecretStoreService) UpdateSecretStore(ctx context.Context, names
 		}
 	}
 
+	// The CR is rebuilt from the request, so a caller that omits the account
+	// would silently repoint the store at default and break the Vault role
+	// binding. An absent field means "leave it", like the token above.
+	if req.Auth.Type == "kubernetes" && req.Auth.Config.ServiceAccount == "" {
+		if k8s := existing.Spec.Provider.Vault; k8s != nil && k8s.Auth.Kubernetes != nil {
+			if ref := k8s.Auth.Kubernetes.ServiceAccountRef; ref != nil {
+				req.Auth.Config.ServiceAccount = ref.Name
+			}
+		}
+	}
+
 	store := buildSecretStoreCRD(namespace, req, credSecretName)
 	store.ResourceVersion = existing.ResourceVersion
 
