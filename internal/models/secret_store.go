@@ -28,9 +28,9 @@ type SecretAuthConfig struct {
 	Token     string `json:"token,omitempty"`
 	MountPath string `json:"mountPath,omitempty"`
 	Role      string `json:"role,omitempty"`
-	// ServiceAccount the store authenticates as under kubernetes auth. Empty
-	// keeps the namespace default account, which every workload already uses,
-	// so a project can give its store an identity of its own instead.
+	// ServiceAccount names the account the store authenticates as under
+	// Kubernetes auth. Empty keeps the namespace default account, which every
+	// workload already shares, so a project can give its store its own identity.
 	ServiceAccount string `json:"serviceAccount,omitempty"`
 }
 
