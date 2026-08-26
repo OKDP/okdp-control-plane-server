@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/okdp/okdp-control-plane-server/internal/models"
@@ -158,7 +159,10 @@ func (s *DefaultSecretStoreService) TestConnection(ctx context.Context, req mode
 	}
 
 	if req.Auth.Type == "kubernetes" {
-		return nil
+		if req.Auth.Config.Role == "" {
+			return fmt.Errorf("auth.config.role is required for kubernetes auth")
+		}
+		return validateVaultKubernetesMount(ctx, req.Vault.Server, req.Auth.Config.MountPath, req.Vault.CABundle)
 	}
 
 	if req.Auth.Config.Token == "" {
@@ -168,23 +172,69 @@ func (s *DefaultSecretStoreService) TestConnection(ctx context.Context, req mode
 	return validateVaultToken(ctx, req.Vault.Server, req.Auth.Config.Token, req.Vault.CABundle)
 }
 
-// validateVaultToken calls POST /v1/auth/token/lookup-self to verify that
-// the token is valid and has the correct permissions. sys/health only checks
-// network connectivity -- a bad token still gets "Ready" from ESO.
-func validateVaultToken(ctx context.Context, server, token, caBundle string) error {
+// vaultHTTPClient builds the client the connection checks share, honouring a
+// caller-supplied CA bundle so a Vault behind a private CA can be reached.
+func vaultHTTPClient(caBundle string) (*http.Client, error) {
 	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
 
 	if caBundle != "" {
 		pool := x509.NewCertPool()
 		if !pool.AppendCertsFromPEM([]byte(caBundle)) {
-			return fmt.Errorf("invalid CA bundle")
+			return nil, fmt.Errorf("invalid CA bundle")
 		}
 		tlsConfig.RootCAs = pool
 	}
 
-	client := &http.Client{
+	return &http.Client{
 		Timeout:   10 * time.Second,
 		Transport: &http.Transport{TLSClientConfig: tlsConfig},
+	}, nil
+}
+
+// validateVaultKubernetesMount reaches the Vault server and checks the auth
+// mount answers. Logging in needs a ServiceAccount token this process does not
+// hold, so the check stops short of a real login: it proves the server is
+// reachable and the mount exists, the two failures the caller can act on.
+// Returning nil without any request, as this used to, reported success for an
+// unreachable server and a mount that was never created.
+func validateVaultKubernetesMount(ctx context.Context, server, mountPath, caBundle string) error {
+	if mountPath == "" {
+		mountPath = "kubernetes"
+	}
+
+	client, err := vaultHTTPClient(caBundle)
+	if err != nil {
+		return err
+	}
+
+	// An empty login body: an existing mount rejects it for the missing role and
+	// jwt, a mount that does not exist has no handler to reject anything.
+	url := strings.TrimSuffix(server, "/") + "/v1/auth/" + mountPath + "/login"
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader("{}"))
+	if err != nil {
+		return fmt.Errorf("failed to build request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("connection failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return fmt.Errorf("no kubernetes auth mount at %q on the vault server", mountPath)
+	}
+	return nil
+}
+
+// validateVaultToken calls POST /v1/auth/token/lookup-self to verify that
+// the token is valid and has the correct permissions. sys/health only checks
+// network connectivity -- a bad token still gets "Ready" from ESO.
+func validateVaultToken(ctx context.Context, server, token, caBundle string) error {
+	client, err := vaultHTTPClient(caBundle)
+	if err != nil {
+		return err
 	}
 
 	url := server + "/v1/auth/token/lookup-self"
