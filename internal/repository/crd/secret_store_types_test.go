@@ -63,3 +63,20 @@ func TestVaultProviderOmitsEmptyCABundle(t *testing.T) {
 		t.Fatalf("empty caBundle was emitted: %s", out)
 	}
 }
+
+// DeepCopy must hand back an independent object. CABundle being a slice, the
+// struct copy alone would leave both copies writing through the same bytes.
+func TestDeepCopyDoesNotShareTheCABundle(t *testing.T) {
+	original := &ESOProvider{Vault: &ESOVaultProvider{
+		Server:   "https://vault.example.com",
+		CABundle: []byte(testPEM),
+	}}
+
+	clone := &ESOProvider{}
+	original.DeepCopyInto(clone)
+	clone.Vault.CABundle[0] = 'X'
+
+	if original.Vault.CABundle[0] == 'X' {
+		t.Fatal("writing to the copy changed the original, the backing array is shared")
+	}
+}
