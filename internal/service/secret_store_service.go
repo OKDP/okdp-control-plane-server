@@ -116,7 +116,7 @@ func (s *DefaultSecretStoreService) UpdateSecretStore(ctx context.Context, names
 		} else if !usedTokenAuth {
 			// The CR would reference a Secret that was never written, so the
 			// store could never sync while the API reported success.
-			return nil, fmt.Errorf("auth.config.token is required when switching to token auth")
+			return nil, invalid("auth.config.token is required when switching to token auth")
 		}
 	case "kubernetes":
 		// The CR is rebuilt from the request, so a caller that omits the
@@ -277,35 +277,35 @@ func (s *DefaultSecretStoreService) GetSecretStoreStatus(ctx context.Context, na
 
 func validateRequest(req models.SecretStoreRequest) error {
 	if req.Name == "" {
-		return fmt.Errorf("name is required")
+		return invalid("name is required")
 	}
 	if req.Provider != "vault" {
-		return fmt.Errorf("unsupported provider %q, only 'vault' is supported", req.Provider)
+		return invalid("unsupported provider %q, only 'vault' is supported", req.Provider)
 	}
 	if req.Vault == nil {
-		return fmt.Errorf("vault configuration is required")
+		return invalid("vault configuration is required")
 	}
 	if req.Vault.Server == "" {
-		return fmt.Errorf("vault.server is required")
+		return invalid("vault.server is required")
 	}
 	if req.Vault.Path == "" {
-		return fmt.Errorf("vault.path is required")
+		return invalid("vault.path is required")
 	}
 	if req.Vault.Version != "v1" && req.Vault.Version != "v2" {
-		return fmt.Errorf("vault.version must be 'v1' or 'v2'")
+		return invalid("vault.version must be 'v1' or 'v2'")
 	}
 	if req.Auth == nil {
-		return fmt.Errorf("auth configuration is required")
+		return invalid("auth configuration is required")
 	}
 	switch req.Auth.Type {
 	case "token":
 		// Token can be empty on update (preserves existing)
 	case "kubernetes":
 		if req.Auth.Config.Role == "" {
-			return fmt.Errorf("auth.config.role is required for kubernetes auth")
+			return invalid("auth.config.role is required for kubernetes auth")
 		}
 	default:
-		return fmt.Errorf("unsupported auth type %q, must be 'token' or 'kubernetes'", req.Auth.Type)
+		return invalid("unsupported auth type %q, must be 'token' or 'kubernetes'", req.Auth.Type)
 	}
 	return nil
 }

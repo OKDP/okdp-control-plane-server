@@ -80,6 +80,12 @@ func (h *SecretStoreHandler) CreateSecretStore(c *gin.Context) {
 			})
 			return
 		}
+		// A missing field is the caller's to fix. Reported as 500, as it was,
+		// the console can only say the server broke.
+		if service.IsValidationError(err) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
 		logrus.WithError(err).Error("Failed to create secret store")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -117,6 +123,10 @@ func (h *SecretStoreHandler) UpdateSecretStore(c *gin.Context) {
 			c.JSON(http.StatusNotFound, gin.H{
 				"error": fmt.Sprintf("Secret store '%s' not found in project '%s'", storeName, namespace),
 			})
+			return
+		}
+		if service.IsValidationError(err) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
 		logrus.WithError(err).Error("Failed to update secret store")

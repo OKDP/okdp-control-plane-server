@@ -242,3 +242,34 @@ func TestUpdateKeepsTheTokenSecretWhenStayingOnTokenAuth(t *testing.T) {
 	}
 	repoCalls.AssertNotCalled(t, "DeleteSecret", mock.Anything, mock.Anything, mock.Anything)
 }
+
+// A refusal caused by the request must reach the handler as a ValidationError,
+// which is what turns it into a 400. Reported as a plain error it became a 500,
+// so a console could only tell the user the server had broken when the fix was
+// to fill in a field.
+func TestUpdateRefusalsAreReportedAsBadRequests(t *testing.T) {
+	cases := map[string]models.SecretStoreRequest{
+		"no token on the switch to token auth": updateRequest(&models.SecretStoreAuth{
+			Type:   "token",
+			Config: models.SecretAuthConfig{},
+		}),
+		"no role on kubernetes auth": updateRequest(&models.SecretStoreAuth{
+			Type:   "kubernetes",
+			Config: models.SecretAuthConfig{MountPath: "kubernetes"},
+		}),
+		"unsupported auth type": updateRequest(&models.SecretStoreAuth{
+			Type:   "appRole",
+			Config: models.SecretAuthConfig{},
+		}),
+	}
+
+	for name, req := range cases {
+		_, err := updated(t, kubernetesStored("vault-reader"), req, nil)
+		if err == nil {
+			t.Fatalf("%s: accepted", name)
+		}
+		if !IsValidationError(err) {
+			t.Fatalf("%s: refused as a server fault, not a bad request: %v", name, err)
+		}
+	}
+}
