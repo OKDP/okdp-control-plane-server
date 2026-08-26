@@ -29,10 +29,10 @@ func TestValidateVaultTokenUsesGet(t *testing.T) {
 	// The handler runs on the server's goroutine, so the method travels back
 	// through a channel: reading a shared variable across the two would be a
 	// data race the memory model does not forbid from surfacing.
-	methodes := make(chan string, 1)
+	methods := make(chan string, 1)
 	vault := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		select {
-		case methodes <- r.Method:
+		case methods <- r.Method:
 		default:
 		}
 		if r.Method != http.MethodGet {
@@ -49,7 +49,7 @@ func TestValidateVaultTokenUsesGet(t *testing.T) {
 	}
 
 	select {
-	case method := <-methodes:
+	case method := <-methods:
 		if method != http.MethodGet {
 			t.Fatalf("lookup-self was called with %s, want GET", method)
 		}
