@@ -141,7 +141,9 @@ func notFoundMessage(vault *crd.ESOVaultProvider, key string) string {
 // answered. The values are read to learn the names and never leave this
 // function.
 func readVaultKey(ctx context.Context, vault *crd.ESOVaultProvider, key, token string) ([]string, int, error) {
-	client, err := vaultHTTPClient(vault.CABundle)
+	// Converted explicitly: the CRD field is a string today and becomes a
+	// []byte with the base64 fix, and this reads the same either way.
+	client, err := vaultHTTPClient(string(vault.CABundle))
 	if err != nil {
 		return nil, 0, err
 	}
