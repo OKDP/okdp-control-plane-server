@@ -23,6 +23,17 @@ configuration:
   # with a local registry). Leave empty in any real deployment.
   insecureOciRegistries: ""
 
+  # The OIDC provider that authenticates API callers. Left empty, the server
+  # reads it from the platform Context (identity.oidc, or the older
+  # oidc.issuerUri). Set them when the Context publishes neither: without a
+  # provider named somewhere, every API request is refused with 401.
+  #
+  # These must name the same provider and the same client as the console, or
+  # tokens the console obtains will be refused.
+  oidc:
+    authority: ""
+    clientId: ""
+
 
 service:
   type: ClusterIP

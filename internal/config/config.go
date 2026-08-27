@@ -23,6 +23,15 @@ type Config struct {
 	// InsecureOCIRegistries lists registry hosts reached over plain HTTP
 	// a development-sandbox affordance for local registries without TLS.
 	InsecureOCIRegistries []string
+	// OidcAuthority and OidcClientID name the provider that authenticates API
+	// callers, and the client its tokens must be issued for.
+	//
+	// Both are read from the platform Context first. These are the fallback for
+	// a Context that does not publish them, and they carry the same names as
+	// the console's own variables on purpose: the two must name one provider,
+	// and a chart that sets them side by side makes that visible.
+	OidcAuthority string
+	OidcClientID  string
 }
 
 const defaultSidecarPrefixes = "istio-proxy,istio-init,dynatrace-,linkerd-proxy,envoy,vault-agent"
@@ -37,6 +46,8 @@ func Load() (*Config, error) {
 		KuboCDNamespace:   getEnv("KUBOCD_NAMESPACE", "kubocd-system"),
 		ContextName:       getEnv("CONTEXT_NAME", "platform"),
 		ContextNamespace:  getEnv("CONTEXT_NAMESPACE", ""),
+		OidcAuthority:     getEnv("OIDC_AUTHORITY", ""),
+		OidcClientID:      getEnv("OIDC_CLIENT_ID", ""),
 		ReleaseInterval:   getEnv("RELEASE_INTERVAL", "30m"),
 		ReleaseTimeout:    getEnv("RELEASE_TIMEOUT", "10m"),
 	}

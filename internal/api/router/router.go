@@ -7,11 +7,12 @@ import (
 
 	"github.com/okdp/okdp-control-plane-server/internal/api/handlers"
 	"github.com/okdp/okdp-control-plane-server/internal/api/middleware"
+	"github.com/okdp/okdp-control-plane-server/internal/auth"
 	"github.com/okdp/okdp-control-plane-server/internal/config"
 )
 
 // SetupRouter initializes the Gin router and defines routes
-func SetupRouter(cfg *config.Config, capabilitiesHandler *handlers.CapabilitiesHandler, projectHandler *handlers.ProjectHandler, identityHandler *handlers.IdentityHandler, secretStoreHandler *handlers.SecretStoreHandler, externalSecretHandler *handlers.ExternalSecretHandler, serviceHandler *handlers.ServiceHandler, sparkHandler *handlers.SparkHandler, connectionHandler *handlers.ConnectionHandler) *gin.Engine {
+func SetupRouter(cfg *config.Config, verifier *auth.Verifier, capabilitiesHandler *handlers.CapabilitiesHandler, projectHandler *handlers.ProjectHandler, identityHandler *handlers.IdentityHandler, secretStoreHandler *handlers.SecretStoreHandler, externalSecretHandler *handlers.ExternalSecretHandler, serviceHandler *handlers.ServiceHandler, sparkHandler *handlers.SparkHandler, connectionHandler *handlers.ConnectionHandler) *gin.Engine {
 	r := gin.New() // Use New() to skip default logger/recovery (we add them manually)
 
 	// Middleware
@@ -27,8 +28,14 @@ func SetupRouter(cfg *config.Config, capabilitiesHandler *handlers.CapabilitiesH
 		c.JSON(200, gin.H{"status": "ok"})
 	})
 
-	// API Routes
-	api := r.Group("/api")
+	// API Routes.
+	//
+	// Authentication is carried by the group, not by each route: a route added
+	// later is protected because it belongs to /api, not because whoever added
+	// it thought to guard it. /health and /swagger sit outside the group and
+	// stay open, the first for the kubelet probes, the second because it serves
+	// the API description and no data.
+	api := r.Group("/api", middleware.RequireAuth(verifier))
 	{
 		// Platform capabilities (UI feature discovery)
 		api.GET("/capabilities", capabilitiesHandler.GetCapabilities)

@@ -9,6 +9,7 @@ import (
 
 	"github.com/okdp/okdp-control-plane-server/internal/api/handlers"
 	"github.com/okdp/okdp-control-plane-server/internal/api/router"
+	"github.com/okdp/okdp-control-plane-server/internal/auth"
 	"github.com/okdp/okdp-control-plane-server/internal/config"
 	"github.com/okdp/okdp-control-plane-server/internal/repository"
 	"github.com/okdp/okdp-control-plane-server/internal/repository/provisioning"
@@ -138,7 +139,15 @@ func main() {
 	// nothing pointing back here.
 	checkIdentityConfiguration(context.Background(), contextRepo, identityRepo)
 
-	r := router.SetupRouter(cfg, capabilitiesHandler, projectHandler, identityHandler, secretStoreHandler, externalSecretHandler, serviceHandler, sparkHandler, connectionHandler)
+	// One verifier for the process: it caches the provider's discovery document
+	// and its key set, and rebuilds only when the platform publishes another
+	// issuer.
+	verifier := auth.NewVerifier(contextRepo, auth.Fallback{
+		Authority: cfg.OidcAuthority,
+		ClientID:  cfg.OidcClientID,
+	})
+
+	r := router.SetupRouter(cfg, verifier, capabilitiesHandler, projectHandler, identityHandler, secretStoreHandler, externalSecretHandler, serviceHandler, sparkHandler, connectionHandler)
 
 	// Start Server
 	//

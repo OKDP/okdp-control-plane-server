@@ -14,6 +14,16 @@ data:
   LOG_LEVEL: {{ .Values.configuration.logLevel | quote }}
   RELEASE_INTERVAL: {{ .Values.configuration.releaseInterval | quote }}
   RELEASE_TIMEOUT: {{ .Values.configuration.releaseTimeout | quote }}
+  # The provider that authenticates API callers, and the client its tokens must
+  # be issued for. Read from the platform Context first; these apply to a
+  # Context that publishes neither, and carry the same names as the console's
+  # own variables because the two must name one provider.
+  {{- if .Values.configuration.oidc.authority }}
+  OIDC_AUTHORITY: {{ .Values.configuration.oidc.authority | quote }}
+  {{- end }}
+  {{- if .Values.configuration.oidc.clientId }}
+  OIDC_CLIENT_ID: {{ .Values.configuration.oidc.clientId | quote }}
+  {{- end }}
   {{- if .Values.configuration.insecureOciRegistries }}
   # Development sandboxes only: registry hosts reached over plain HTTP.
   INSECURE_OCI_REGISTRIES: {{ .Values.configuration.insecureOciRegistries | quote }}

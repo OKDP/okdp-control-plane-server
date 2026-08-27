@@ -55,6 +55,11 @@ type ContextRepository interface {
 	// Context does not publish one).
 	GetIdentityOidcConfig(ctx context.Context) (*models.IdentityOidcConfig, error)
 
+	// GetOidcIssuerURI returns the issuer published by the older, flat oidc
+	// block (spec.context.oidc.issuerUri), "" when absent. Platforms written
+	// before identity.oidc existed carry it there and nowhere else.
+	GetOidcIssuerURI(ctx context.Context) (string, error)
+
 	// GetIdentityProvisioningProvider returns the OIDC client provisioning backend
 	// (from spec.context.identity.provisioning.provider, "" when unset, meaning none).
 	GetIdentityProvisioningProvider(ctx context.Context) (string, error)
@@ -311,6 +316,19 @@ func (r *k8sContextRepository) GetIdentityOidcConfig(ctx context.Context) (*mode
 		ClientID:  clientID,
 		Scope:     scope,
 	}, nil
+}
+
+// GetOidcIssuerURI reads the flat oidc block. Two layouts describe the same
+// provider: identity.oidc.authority on a Context written today, oidc.issuerUri
+// on one written before it existed. Reading both means a running platform does
+// not have to be edited before its API can be authenticated.
+func (r *k8sContextRepository) GetOidcIssuerURI(ctx context.Context) (string, error) {
+	u, err := r.getContext(ctx)
+	if err != nil {
+		return "", err
+	}
+	issuer, _, _ := unstructured.NestedString(u.Object, "spec", "context", "oidc", "issuerUri")
+	return issuer, nil
 }
 
 // GetIdentityProvisioningProvider names the backend that makes and unmakes the
