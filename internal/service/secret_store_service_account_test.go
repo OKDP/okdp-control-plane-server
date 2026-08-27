@@ -273,3 +273,56 @@ func TestUpdateRefusalsAreReportedAsBadRequests(t *testing.T) {
 		}
 	}
 }
+
+// validateRequest lets the token be empty because an update reads that as
+// "keep the stored one". A create has nothing to keep: the store was written
+// with an empty Secret, could never authenticate, and the API answered 201.
+func TestCreateRefusesTokenAuthWithoutAToken(t *testing.T) {
+	repo := &mocks.SecretStoreRepository{}
+	repo.On("CreateOrUpdateSecret", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	repo.On("Create", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	repo.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(tokenStored(), nil).Maybe()
+	svc := &DefaultSecretStoreService{repo: repo}
+
+	_, err := svc.CreateSecretStore(context.Background(), "demo", models.SecretStoreRequest{
+		Name:     "store",
+		Provider: "vault",
+		Vault:    &models.VaultConfig{Server: "https://vault.example.com", Path: "secret", Version: "v2"},
+		Auth:     &models.SecretStoreAuth{Type: "token", Config: models.SecretAuthConfig{}},
+	})
+	if err == nil {
+		t.Fatal("a token store was created with no token")
+	}
+	if !IsValidationError(err) {
+		t.Fatalf("refused as a platform failure rather than a rejected input: %v", err)
+	}
+	repo.AssertNotCalled(t, "Create", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// A mistyped ServiceAccount reached the API server, came back as a schema
+// rejection the handler could not tell from a platform failure, and answered
+// 500 where the fix was to correct a name.
+func TestKubernetesAuthRefusesAnInvalidServiceAccount(t *testing.T) {
+	for _, sa := range []string{"Mon_Compte", "compte invalide", "-debut", "MAJUSCULE"} {
+		err := validateRequest(models.SecretStoreRequest{
+			Name:     "store",
+			Provider: "vault",
+			Vault:    &models.VaultConfig{Server: "https://vault.example.com", Path: "secret", Version: "v2"},
+			Auth:     kubernetesAuth(serviceAccountPtr(sa)),
+		})
+		if !IsValidationError(err) {
+			t.Fatalf("service account %q was accepted or misreported: %v", sa, err)
+		}
+	}
+	// A valid one, and an emptied one asking for the default, both pass.
+	for _, sa := range []*string{serviceAccountPtr("vault-reader"), serviceAccountPtr(""), nil} {
+		if err := validateRequest(models.SecretStoreRequest{
+			Name:     "store",
+			Provider: "vault",
+			Vault:    &models.VaultConfig{Server: "https://vault.example.com", Path: "secret", Version: "v2"},
+			Auth:     kubernetesAuth(sa),
+		}); err != nil {
+			t.Fatalf("a legitimate service account was rejected: %v", err)
+		}
+	}
+}

@@ -14,6 +14,7 @@ import (
 	"github.com/sirupsen/logrus"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 type SecretStoreService interface {
@@ -61,6 +62,13 @@ func (s *DefaultSecretStoreService) CreateSecretStore(ctx context.Context, names
 	credSecretName := req.Name + "-credentials"
 
 	if req.Auth.Type == "token" {
+		// validateRequest lets the token be empty because an update reads that
+		// as "keep the stored one". On a create there is nothing to keep: an
+		// empty token writes an empty Secret and the store can never
+		// authenticate, while the API answers 201.
+		if req.Auth.Config.Token == "" {
+			return nil, invalid("auth.config.token is required for token auth")
+		}
 		secretData := map[string][]byte{"token": []byte(req.Auth.Config.Token)}
 		if err := s.repo.CreateOrUpdateSecret(ctx, namespace, credSecretName, secretData); err != nil {
 			return nil, fmt.Errorf("failed to create credentials secret: %w", err)
@@ -303,6 +311,14 @@ func validateRequest(req models.SecretStoreRequest) error {
 	case "kubernetes":
 		if req.Auth.Config.Role == "" {
 			return invalid("auth.config.role is required for kubernetes auth")
+		}
+		// Left to the API server this came back as a schema rejection the
+		// handler could not tell from a platform failure, so a mistyped
+		// account answered 500.
+		if sa := req.Auth.Config.ServiceAccount; sa != nil && *sa != "" {
+			if msgs := validation.IsDNS1123Subdomain(*sa); len(msgs) > 0 {
+				return invalid("auth.config.serviceAccount %q is not a valid ServiceAccount name: %s", *sa, msgs[0])
+			}
 		}
 	default:
 		return invalid("unsupported auth type %q, must be 'token' or 'kubernetes'", req.Auth.Type)
