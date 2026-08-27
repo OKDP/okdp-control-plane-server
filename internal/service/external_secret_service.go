@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/okdp/okdp-control-plane-server/internal/models"
@@ -179,6 +180,13 @@ func validateExternalSecretRequest(req models.ExternalSecretRequest) error {
 		}
 		if d.RemoteRef.Key == "" {
 			return fmt.Errorf("data[%d].remoteRef.key is required", i)
+		}
+		// The same shape the key check enforces. Without it the two paths
+		// disagree on one input: the check refuses "a?b=1" as an invalid path
+		// while the create accepts it and stores an import that can never
+		// resolve.
+		if !vaultKeyPattern.MatchString(strings.Trim(d.RemoteRef.Key, "/")) {
+			return invalid("data[%d].remoteRef.key %q is not a valid path", i, d.RemoteRef.Key)
 		}
 	}
 	return nil
