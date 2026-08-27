@@ -601,3 +601,36 @@ func TestNormalizeRemoteKeyLeavesNothingThatNamesNothing(t *testing.T) {
 		}
 	}
 }
+
+// Reading the absence of a token as "this store uses Kubernetes auth" put a
+// method on screen that the store does not carry, and pointed at a
+// ServiceAccount nobody had configured.
+func TestCheckDoesNotCallAnUnauthenticatedStoreKubernetes(t *testing.T) {
+	store := vaultStore("https://vault.invalid", "v2", nil, nil)
+	svc := checkService(t, store, "")
+
+	_, err := svc.CheckRemoteRef(context.Background(), "demo", models.ExternalSecretCheckRequest{
+		SecretStoreRef: "store",
+		RemoteRef:      models.ExternalSecretRemote{Key: "external-client"},
+	})
+	if err == nil || !IsValidationError(err) {
+		t.Fatalf("a store carrying no vault authentication was not reported as invalid: %v", err)
+	}
+	if strings.Contains(err.Error(), "Kubernetes method") {
+		t.Fatalf("a store with no authentication was described as using kubernetes auth: %v", err)
+	}
+
+	// A store that really does use the Kubernetes method still gets its own
+	// answer, which is unverifiable rather than invalid.
+	k8s := vaultStore("https://vault.invalid", "v2", nil, &crd.ESOKubernetesAuth{Role: "reader", MountPath: "kubernetes"})
+	resp, err := checkService(t, k8s, "").CheckRemoteRef(context.Background(), "demo", models.ExternalSecretCheckRequest{
+		SecretStoreRef: "store",
+		RemoteRef:      models.ExternalSecretRemote{Key: "external-client"},
+	})
+	if err != nil {
+		t.Fatalf("a kubernetes-auth store was rejected: %v", err)
+	}
+	if resp.Verifiable || !strings.Contains(resp.Message, "Kubernetes method") {
+		t.Fatalf("a kubernetes-auth store lost its own answer: %+v", resp)
+	}
+}

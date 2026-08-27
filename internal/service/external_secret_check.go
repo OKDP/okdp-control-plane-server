@@ -111,6 +111,15 @@ func (s *DefaultExternalSecretService) CheckRemoteRef(ctx context.Context, names
 		return nil, invalid("secret store %q is not backed by vault", req.SecretStoreRef)
 	}
 
+	// Neither method is not the Kubernetes case. Reading the absence of a token
+	// as "this store uses Kubernetes auth" named a method the store does not
+	// carry and sent the reader looking for a ServiceAccount that is not there.
+	// The store itself is what is wrong, which is what the other store faults
+	// in this function answer as well.
+	if vault.Auth.TokenSecretRef == nil && vault.Auth.Kubernetes == nil {
+		return nil, invalid("secret store %q carries no vault authentication, neither a token nor the kubernetes method", req.SecretStoreRef)
+	}
+
 	// The Kubernetes auth method logs in as the store's ServiceAccount, an
 	// identity the control plane cannot borrow without the right to mint tokens
 	// for any account in the project. Saying so is the honest answer; reporting
