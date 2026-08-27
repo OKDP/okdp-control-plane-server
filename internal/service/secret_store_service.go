@@ -233,8 +233,9 @@ func validateVaultKubernetesMount(ctx context.Context, server, mountPath, caBund
 		return err
 	}
 
-	// An empty login body: an existing mount rejects it for the missing role and
-	// jwt, a mount that does not exist has no handler to reject anything.
+	// A login payload holding no credentials, sent as the empty JSON object the
+	// endpoint expects: an existing mount rejects it for the missing role and jwt,
+	// while a mount that does not exist has no handler to reject anything.
 	url := strings.TrimSuffix(server, "/") + "/v1/auth/" + mountPath + "/login"
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader("{}"))
 	if err != nil {
