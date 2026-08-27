@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/okdp/okdp-control-plane-server/internal/models"
@@ -188,7 +187,7 @@ func validateExternalSecretRequest(req models.ExternalSecretRequest) error {
 		// The same rule the key check applies: only a segment that walks out of
 		// the mount is refused. Vault accepts the rest, and a key literally
 		// named "avec espace" was measured syncing on the running cluster.
-		remoteKey := strings.Trim(strings.TrimSpace(d.RemoteRef.Key), "/")
+		remoteKey := normalizeRemoteKey(d.RemoteRef.Key)
 		if remoteKey == "" {
 			return invalid("data[%d].remoteRef.key %q names no key", i, d.RemoteRef.Key)
 		}
@@ -205,7 +204,10 @@ func buildExternalSecretCRD(namespace string, req models.ExternalSecretRequest) 
 		data = append(data, crd.ESOExternalSecretData{
 			SecretKey: d.SecretKey,
 			RemoteRef: crd.ESORemoteRef{
-				Key:      d.RemoteRef.Key,
+				// Stored in the same reading the check validated, or the two
+				// answer about different keys and external-secrets looks up one
+				// nobody confirmed.
+				Key:      normalizeRemoteKey(d.RemoteRef.Key),
 				Property: d.RemoteRef.Property,
 			},
 		})

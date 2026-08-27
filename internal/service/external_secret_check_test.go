@@ -515,3 +515,28 @@ func TestCreateRefusesAKeyThatNamesNothing(t *testing.T) {
 		}
 	}
 }
+
+// The check and the CR must read a key the same way. They did not: the check
+// answered about "foo" while the import stored " foo ", so external-secrets
+// looked up a key nobody had confirmed.
+func TestTheStoredKeyIsTheOneThatWasChecked(t *testing.T) {
+	for _, raw := range []string{" external-client ", "/external-client", "external-client/", "  /external-client/  "} {
+		req := models.ExternalSecretRequest{
+			Name:            "my-import",
+			SecretStoreRef:  "store",
+			RefreshInterval: "1m",
+			Target:          models.ExternalSecretTarget{Name: "my-secret"},
+			Data: []models.ExternalSecretDataEntry{
+				{SecretKey: "pwd", RemoteRef: models.ExternalSecretRemote{Key: raw}},
+			},
+		}
+		if err := validateExternalSecretRequest(req); err != nil {
+			t.Fatalf("key %q was rejected: %v", raw, err)
+		}
+		es := buildExternalSecretCRD("demo", req)
+		stored := es.Spec.Data[0].RemoteRef.Key
+		if stored != "external-client" {
+			t.Fatalf("key %q was stored as %q, not as the checked form", raw, stored)
+		}
+	}
+}

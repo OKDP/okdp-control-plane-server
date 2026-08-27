@@ -33,6 +33,15 @@ func countProperties(n int) string {
 // client that percent-encodes the path. Measured against the running cluster: a
 // key literally named "avec espace" syncs, so banning the character would have
 // blocked an import that works today.
+// normalizeRemoteKey is the single reading of a remote key, shared by the
+// check, the validation and the CR that is written. Without one, the check
+// answered about "foo" while the import stored " foo " and external-secrets
+// looked up a key nobody had confirmed.
+func normalizeRemoteKey(key string) string {
+	// Spaces first, or " / " keeps its slash and still names nothing.
+	return strings.Trim(strings.TrimSpace(key), "/")
+}
+
 func hasTraversal(p string) bool {
 	for _, seg := range strings.Split(p, "/") {
 		if seg == "." || seg == ".." {
@@ -76,9 +85,7 @@ func (s *DefaultExternalSecretService) CheckRemoteRef(ctx context.Context, names
 	if req.RemoteRef.Key == "" {
 		return nil, invalid("remoteRef.key is required")
 	}
-	// Spaces are stripped before the slashes, or " / " keeps its slash and
-	// still names nothing.
-	key := strings.Trim(strings.TrimSpace(req.RemoteRef.Key), "/")
+	key := normalizeRemoteKey(req.RemoteRef.Key)
 	// Checked after the trim, not before: "/" and "//" clear the emptiness
 	// guard above and then read the mount root instead of a key.
 	if strings.TrimSpace(key) == "" {
