@@ -10,6 +10,7 @@ import (
 	"github.com/okdp/okdp-control-plane-server/internal/repository/crd"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 type ExternalSecretService interface {
@@ -158,26 +159,48 @@ func (s *DefaultExternalSecretService) GetExternalSecretStatus(ctx context.Conte
 
 func validateExternalSecretRequest(req models.ExternalSecretRequest) error {
 	if req.Name == "" {
-		return fmt.Errorf("name is required")
+		return invalid("name is required")
+	}
+	if msgs := validation.IsDNS1123Subdomain(req.Name); len(msgs) > 0 {
+		return invalid("name %q is not a valid Kubernetes name: %s", req.Name, msgs[0])
 	}
 	if req.SecretStoreRef == "" {
-		return fmt.Errorf("secretStoreRef is required")
+		return invalid("secretStoreRef is required")
 	}
 	if req.Target.Name == "" {
-		return fmt.Errorf("target.name is required")
+		return invalid("target.name is required")
+	}
+	if msgs := validation.IsDNS1123Subdomain(req.Target.Name); len(msgs) > 0 {
+		return invalid("target.name %q is not a valid Secret name: %s", req.Target.Name, msgs[0])
 	}
 	if req.RefreshInterval == "" {
-		return fmt.Errorf("refreshInterval is required")
+		return invalid("refreshInterval is required")
+	}
+	// Checked here rather than left to the ESO admission webhook, which answers
+	// with a raw Go parser message the caller cannot act on, under a status the
+	// handler cannot tell apart from a platform failure.
+	if _, err := time.ParseDuration(req.RefreshInterval); err != nil {
+		return invalid("refreshInterval %q is not a duration, expected a value such as 1m, 30s or 1h", req.RefreshInterval)
 	}
 	if len(req.Data) == 0 {
-		return fmt.Errorf("at least one data mapping is required")
+		return invalid("at least one data mapping is required")
 	}
+	seen := make(map[string]int, len(req.Data))
 	for i, d := range req.Data {
 		if d.SecretKey == "" {
-			return fmt.Errorf("data[%d].secretKey is required", i)
+			return invalid("data[%d].secretKey is required", i)
 		}
+		if msgs := validation.IsConfigMapKey(d.SecretKey); len(msgs) > 0 {
+			return invalid("data[%d].secretKey %q is not a valid Secret key: %s", i, d.SecretKey, msgs[0])
+		}
+		// Two mappings writing the same key would silently keep one value and
+		// drop the other, with nothing in the resulting Secret to say which.
+		if first, dup := seen[d.SecretKey]; dup {
+			return invalid("data[%d].secretKey %q is already mapped by data[%d]", i, d.SecretKey, first)
+		}
+		seen[d.SecretKey] = i
 		if d.RemoteRef.Key == "" {
-			return fmt.Errorf("data[%d].remoteRef.key is required", i)
+			return invalid("data[%d].remoteRef.key is required", i)
 		}
 	}
 	return nil
