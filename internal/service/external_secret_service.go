@@ -188,7 +188,11 @@ func validateExternalSecretRequest(req models.ExternalSecretRequest) error {
 		// The same rule the key check applies: only a segment that walks out of
 		// the mount is refused. Vault accepts the rest, and a key literally
 		// named "avec espace" was measured syncing on the running cluster.
-		if hasTraversal(strings.Trim(d.RemoteRef.Key, "/")) {
+		remoteKey := strings.Trim(strings.TrimSpace(d.RemoteRef.Key), "/")
+		if remoteKey == "" {
+			return invalid("data[%d].remoteRef.key %q names no key", i, d.RemoteRef.Key)
+		}
+		if hasTraversal(remoteKey) {
 			return invalid("data[%d].remoteRef.key %q walks out of the store's mount", i, d.RemoteRef.Key)
 		}
 	}

@@ -302,8 +302,14 @@ func TestCheckDoesNotCallANestedPropertyAbsent(t *testing.T) {
 	svc := checkService(t, vaultStore(vault.URL, "v2", &crd.ESOTokenSecretRef{Name: "store-credentials", Key: "token"}, nil), "s.token")
 
 	resp := checkRef(t, svc, "external-client", "database.password")
-	if !resp.Found {
-		t.Fatalf("a nested property was reported as absent: %+v", resp)
+	if resp.Found {
+		t.Fatalf("a path this check cannot follow was reported as resolved: %+v", resp)
+	}
+	if resp.Verifiable {
+		t.Fatalf("a property that was never evaluated produced a verdict: %+v", resp)
+	}
+	if !strings.Contains(resp.Message, "found") {
+		t.Fatalf("the key itself was not confirmed: %s", resp.Message)
 	}
 
 	// A flat secret with a property that cannot be a path is still absent.
@@ -469,6 +475,43 @@ func TestCreateRefusesTheSameKeysTheCheckRefuses(t *testing.T) {
 	for _, key := range []string{"avec espace", "a?b=1", "a#b", "team/app/db"} {
 		if err := validateExternalSecretRequest(build(key)); err != nil {
 			t.Fatalf("create refused key %q, which Vault accepts: %v", key, err)
+		}
+	}
+}
+
+// "/" and "//" clear the emptiness guard and, once trimmed, read the mount root
+// rather than a key. Vault answers with a listing or a 404 for the mount, and
+// either was reported as a verdict on a key the caller never named.
+func TestCheckRefusesAKeyThatNamesNothing(t *testing.T) {
+	vault := kvV2Server(t, map[string]map[string]string{"external-client": {"db_password": "x"}})
+	defer vault.Close()
+	svc := checkService(t, vaultStore(vault.URL, "v2", &crd.ESOTokenSecretRef{Name: "store-credentials", Key: "token"}, nil), "s.token")
+
+	for _, key := range []string{"/", "//", "   ", " / "} {
+		_, err := svc.CheckRemoteRef(context.Background(), "demo", models.ExternalSecretCheckRequest{
+			SecretStoreRef: "store",
+			RemoteRef:      models.ExternalSecretRemote{Key: key},
+		})
+		if err == nil || !IsValidationError(err) {
+			t.Fatalf("key %q was accepted: %v", key, err)
+		}
+	}
+}
+
+// The create must refuse the same, or an import naming no key reaches the CR.
+func TestCreateRefusesAKeyThatNamesNothing(t *testing.T) {
+	for _, key := range []string{"/", "//", "   "} {
+		err := validateExternalSecretRequest(models.ExternalSecretRequest{
+			Name:            "my-import",
+			SecretStoreRef:  "store",
+			RefreshInterval: "1m",
+			Target:          models.ExternalSecretTarget{Name: "my-secret"},
+			Data: []models.ExternalSecretDataEntry{
+				{SecretKey: "pwd", RemoteRef: models.ExternalSecretRemote{Key: key}},
+			},
+		})
+		if err == nil || !IsValidationError(err) {
+			t.Fatalf("create accepted key %q: %v", key, err)
 		}
 	}
 }

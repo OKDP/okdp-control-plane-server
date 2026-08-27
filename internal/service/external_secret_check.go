@@ -76,7 +76,14 @@ func (s *DefaultExternalSecretService) CheckRemoteRef(ctx context.Context, names
 	if req.RemoteRef.Key == "" {
 		return nil, invalid("remoteRef.key is required")
 	}
-	key := strings.Trim(req.RemoteRef.Key, "/")
+	// Spaces are stripped before the slashes, or " / " keeps its slash and
+	// still names nothing.
+	key := strings.Trim(strings.TrimSpace(req.RemoteRef.Key), "/")
+	// Checked after the trim, not before: "/" and "//" clear the emptiness
+	// guard above and then read the mount root instead of a key.
+	if strings.TrimSpace(key) == "" {
+		return nil, invalid("remoteRef.key %q names no key", req.RemoteRef.Key)
+	}
 	if hasTraversal(key) {
 		return nil, invalid("remoteRef.key %q walks out of the store's mount", req.RemoteRef.Key)
 	}
@@ -158,9 +165,12 @@ func (s *DefaultExternalSecretService) CheckRemoteRef(ctx context.Context, names
 		// Only first-level names are enumerated here, so calling the property
 		// absent would paint a working import red.
 		if nested || strings.Contains(req.RemoteRef.Property, ".") {
+			// Not Found:true: the path may well lead nowhere, and claiming it
+			// resolves would be the green this check exists to remove. The key
+			// is confirmed, the property is not, and the answer says so.
 			return &models.ExternalSecretCheckResponse{
-				Verifiable: true, Found: true, Properties: properties,
-				Message: fmt.Sprintf("key %q found. Property %q is not one of its top-level names; external-secrets resolves it as a path, which this check does not follow",
+				Verifiable: false, Properties: properties,
+				Message: fmt.Sprintf("key %q found, but property %q is not one of its top-level names. external-secrets resolves it as a gjson path into the stored value, which this check does not follow",
 					key, req.RemoteRef.Property),
 			}, nil
 		}
