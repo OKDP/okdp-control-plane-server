@@ -8,13 +8,13 @@ import (
 	"github.com/okdp/okdp-control-plane-server/internal/repository/provisioning"
 )
 
-// Identity providers accepted in the Context (identity.provider).
+// Identity providers accepted in the platform values (global.okdp.identity.provider).
 const (
 	IdentityProviderExternal = "external"
 	IdentityProviderKubauth  = "kubauth"
 )
 
-// CapabilityService derives the platform capabilities from the Context, at
+// CapabilityService derives the platform capabilities from the platform values, at
 // request time so configuration changes apply without restarting the server.
 type CapabilityService interface {
 	// GetCapabilities returns the capabilities advertised to the UI.

@@ -11,10 +11,9 @@ definitions:
     properties:
       crdAvailable:
         description: |-
-          CRDAvailable reports whether the KuboCD connection CRDs are installed.
-          While they are not, external connections cannot be persisted and the
-          console says so instead of failing on save. Internal connections are
-          derived from deployed services and stay available either way.
+          CRDAvailable reports whether external connections can be persisted,
+          which is whenever a deployments repository is configured (always, in a
+          running server). The name is kept for API compatibility.
         type: boolean
       types:
         items:
@@ -25,15 +24,15 @@ definitions:
     properties:
       effective:
         description: |-
-          Effective reports that the release actually resolved this connection, as
-          opposed to merely waiting for it.
+          Effective reports that the connection exists (declared, or published by
+          a deployed instance), as opposed to merely being named.
         type: boolean
       releaseName:
         type: string
       service:
         description: |-
           Service is the instance name as the console displays it, ReleaseName the
-          underlying KuboCD Release.
+          Helm release (<project>-<instance>).
         type: string
       status:
         type: string
@@ -75,7 +74,7 @@ definitions:
       secret:
         description: |-
           Secret says where the value is stored: in the credentials Secret rather
-          than in the Connection spec. It says nothing about how it is typed in.
+          than in the connection file. It says nothing about how it is typed in.
         type: boolean
       showWhen:
         allOf:
@@ -229,10 +228,10 @@ definitions:
         type: string
       name:
         description: |-
-          Name IS the KuboCD Contract this descriptor produces. One descriptor, one
-          contract, deliberately: an entry form that produced a differently named
-          contract would mean nothing a package asks for could be found by its own
-          name.
+          Name IS the contract this descriptor produces (x-okdp-connection-ref).
+          One descriptor, one contract, deliberately: an entry form that produced a
+          differently named contract would mean nothing a chart asks for could be
+          found by its own name.
         type: string
     type: object
   models.CredentialsSecretRef:
@@ -385,7 +384,7 @@ definitions:
         - $ref: '#/definitions/models.IdentityOidcConfig'
         description: |-
           Oidc is the OIDC client the console UI should authenticate with,
-          resolved from the Context (identity.oidc). Absent when the platform
+          resolved from the platform values (global.okdp.identity.oidc). Absent when the platform
           does not publish it: the UI falls back to its build-time configuration.
       provider:
         description: |-
@@ -426,8 +425,8 @@ definitions:
         type: string
       managed:
         description: |-
-          Managed reports that the entry comes from a Connection the KuboCD release
-          controller owns, rather than being derived from the deployed service.
+          Managed reports that the entry is published by a deployed instance (its
+          descriptor's outputs), not declared by hand. Always true here.
         type: boolean
       name:
         type: string
@@ -499,10 +498,8 @@ definitions:
         type: string
       default:
         description: |-
-          Default is the template the package falls back to when the deployer picks
-          nothing. KuboCD forbids a literal here, so it is always rendered against
-          the Context: this is how an Environment says "here, the database is that
-          one" without the deployer naming it. The console must therefore leave the
+          Default is the connection the chart falls back to when the deployer picks
+          nothing (the property's schema default). The console must leave the
           parameter out rather than send an empty string, which would win over it.
         type: string
       description:
@@ -514,9 +511,8 @@ definitions:
         type: boolean
       parameter:
         description: |-
-          Parameter is the package parameter carrying the chosen connection name,
-          derived from the input's namedConnection template. Empty when the input
-          binds some other way, in which case the console offers no choice.
+          Parameter is the chart parameter carrying the chosen connection name
+          (the property marked x-okdp-connection-ref).
         type: string
     type: object
   models.PlatformService:
@@ -723,24 +719,25 @@ definitions:
     properties:
       kind:
         description: |-
-          Kind separates a Connection from a ClusterConnection, which may share a
-          name, and tells the console which page to link to.
+          Kind is Connection (external, declared in the project) or Instance
+          (provided by another instance), and tells the console which page to
+          link to.
         type: string
       name:
         type: string
       namespace:
         type: string
       resolved:
-        description: Resolved is false while the release is still waiting for it.
+        description: Resolved is false while the connection does not exist.
         type: boolean
     type: object
   models.ServiceInstance:
     properties:
       connections:
         description: |-
-          Connections is what the release actually resolved, published by the
-          controller. Without it the console can only show what a service asked
-          for, never what it runs against.
+          Connections lists what the instance is wired to: the external
+          connections its declaration layers in, and the connections of other
+          instances its parameters name.
         items:
           $ref: '#/definitions/models.ServiceConnection'
         type: array
@@ -753,7 +750,13 @@ definitions:
         type: object
       releaseName:
         type: string
+      revision:
+        description: |-
+          Revision is the Git commit holding the change, set on the responses of
+          a deployment or an update only.
+        type: string
       roles:
+        description: 'Roles is no longer filled: KuboCD package roles have no successor.'
         items:
           type: string
         type: array
@@ -768,6 +771,11 @@ definitions:
       targetNamespace:
         type: string
       url:
+        type: string
+      usage:
+        description: |-
+          Usage is the rendered Markdown the chart publishes in its instance
+          descriptor (the former package usage).
         type: string
     type: object
   models.ServiceMetrics:
@@ -1036,8 +1044,9 @@ paths:
       - capabilities
   /api/contracts:
     get:
-      description: Descriptors of every contract, used to build the creation form,
-        plus whether connections can currently be persisted
+      description: 'Descriptors of every contract, used to build the creation form,
+        plus whether connections can currently be persisted (crdAvailable: true when
+        the deployments repository is configured)'
       produces:
       - application/json
       responses:
@@ -1095,8 +1104,8 @@ paths:
     post:
       consumes:
       - application/json
-      description: Expose a new managed service in the catalog (writes the default
-        KuboCD Context)
+      description: Expose a new managed service in the catalog (commits platform/catalog.yaml
+        to the deployments repository)
       parameters:
       - description: Catalog service
         in: body
@@ -1134,8 +1143,8 @@ paths:
       - platform-services
   /api/platform-services/{serviceName}:
     delete:
-      description: Remove an exposed service from the catalog (writes the default
-        KuboCD Context)
+      description: Remove an exposed service from the catalog (commits platform/catalog.yaml
+        to the deployments repository)
       parameters:
       - description: Service name
         in: path
@@ -1215,7 +1224,7 @@ paths:
         name: serviceName
         required: true
         type: string
-      - description: Package version tag (defaults to Context CR tag)
+      - description: Package version tag (defaults to the catalog default version)
         in: query
         name: tag
         type: string
@@ -1241,7 +1250,7 @@ paths:
         name: serviceName
         required: true
         type: string
-      - description: Package version tag (defaults to Context CR tag)
+      - description: Package version tag (defaults to the catalog default version)
         in: query
         name: tag
         type: string
@@ -1270,7 +1279,8 @@ paths:
       - platform-services
   /api/platform-services/{serviceName}/versions:
     get:
-      description: Returns the list of versions declared in the KuboCD Context CR
+      description: Returns the chart versions published in the OCI registry, and the
+        catalog default
       parameters:
       - description: Service name
         in: path
@@ -1296,7 +1306,7 @@ paths:
   /api/profile-images:
     get:
       description: Returns the list of available container images per profile type
-        from the KuboCD Context
+        from the platform values (global.okdp.jupyter.profiles)
       produces:
       - application/json
       responses:
@@ -1482,8 +1492,9 @@ paths:
       - projects
   /api/projects/{name}/connections:
     get:
-      description: Connections declared in the project namespace. Connections owned
-        by a deployed release are excluded. They are returned by the internal endpoint.
+      description: Connections declared in the project (projects/<p>/connections/<name>.yaml
+        in the deployments repository). Connections published by deployed instances
+        are returned by the internal endpoint.
       parameters:
       - description: Project name (= Kubernetes namespace)
         in: path
@@ -1511,8 +1522,9 @@ paths:
     post:
       consumes:
       - application/json
-      description: Stores the credential fields in a Kubernetes Secret and creates
-        the Connection CRD referencing it
+      description: Stores the credential fields in a Kubernetes Secret of the project
+        namespace and commits the connection file referencing it (secretRef) to the
+        deployments repository
       parameters:
       - description: Project name (= Kubernetes namespace)
         in: path
@@ -1555,7 +1567,9 @@ paths:
       - connections
   /api/projects/{name}/connections/{connName}:
     delete:
-      description: Removes the Connection CRD and the Secret holding its credentials
+      description: Removes the connection file from the deployments repository and
+        the Secret the console wrote for it. 400 while an instance still layers the
+        connection in.
       parameters:
       - description: Project name (= Kubernetes namespace)
         in: path
@@ -1662,8 +1676,9 @@ paths:
       - connections
   /api/projects/{name}/connections/internal:
     get:
-      description: Connections provided by the services already deployed in the project,
-        that the project's other services can consume
+      description: Connections provided by the services already deployed in the project
+        (the outputs of their instance descriptor), that the project's other services
+        can consume
       parameters:
       - description: Project name (= Kubernetes namespace)
         in: path
@@ -1805,7 +1820,10 @@ paths:
     post:
       consumes:
       - application/json
-      description: Deploy a managed platform service into a project
+      description: 'Deploy a managed platform service into a project: commits the
+        instance files to the deployments Git repository. The answer carries the commit
+        (revision) and the status Pending until the GitOps engine reconciles it. 400
+        on invalid parameters.'
       parameters:
       - description: Project name
         in: path
@@ -1848,7 +1866,8 @@ paths:
       - services
   /api/projects/{name}/services/{serviceName}:
     delete:
-      description: Remove a deployed service from a project
+      description: 'Remove a deployed service from a project: removes its directory
+        from the deployments Git repository; the GitOps engine uninstalls it.'
       parameters:
       - description: Project name
         in: path
@@ -1950,8 +1969,9 @@ paths:
     patch:
       consumes:
       - application/json
-      description: Merge new parameters and optionally update the package version
-        of a deployed service
+      description: Merge new parameters and optionally update the chart version of
+        a deployed service, committed to values.yaml/instance.yaml in the deployments
+        Git repository. 400 on invalid parameters.
       parameters:
       - description: Project name
         in: path
@@ -2079,7 +2099,9 @@ paths:
       - services
   /api/projects/{name}/services/stream:
     get:
-      description: Stream service status updates using Server-Sent Events (SSE)
+      description: 'Stream service status updates using Server-Sent Events (SSE):
+        instance descriptors, GitOps engine objects and the console''s own commits.
+        Each message is {type: ADDED|MODIFIED|DELETED, object: ServiceInstance}.'
       parameters:
       - description: Project name
         in: path
@@ -2931,8 +2953,8 @@ paths:
       - spark-apps
   /api/spark-config:
     get:
-      description: Returns Spark operator configuration from the KuboCD Context (images,
-        defaults, versions)
+      description: Returns Spark operator configuration from the platform values,
+        global.okdp.sparkOperator (images, defaults, versions)
       produces:
       - application/json
       responses:

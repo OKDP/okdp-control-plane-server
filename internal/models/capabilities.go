@@ -2,7 +2,7 @@ package models
 
 // Capabilities describes the optional features the platform is configured
 // with, so the UI can adapt (e.g. hide the Identity section when user
-// management is not available). Derived from the Context at request time.
+// management is not available). Derived from the platform values at request time.
 type Capabilities struct {
 	Identity         IdentityCapability         `json:"identity"`
 	OidcProvisioning OidcProvisioningCapability `json:"oidcProvisioning"`
@@ -17,7 +17,7 @@ type IdentityCapability struct {
 	// API (/api/v1/identity) is available.
 	UserManagement bool `json:"userManagement"`
 	// Oidc is the OIDC client the console UI should authenticate with,
-	// resolved from the Context (identity.oidc). Absent when the platform
+	// resolved from the platform values (global.okdp.identity.oidc). Absent when the platform
 	// does not publish it: the UI falls back to its build-time configuration.
 	Oidc *IdentityOidcConfig `json:"oidc,omitempty"`
 }

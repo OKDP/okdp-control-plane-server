@@ -65,10 +65,10 @@ func (g GitOpsConfig) Validate() error {
 }
 
 type OIDCConfig struct {
-	// It overrides the issuer the platform Context declares. Empty is the
-	// normal case: the Context is where that setting lives.
+	// It overrides the issuer the platform values declare. Empty is the
+	// normal case: the platform values are where that setting lives.
 	Issuer string
-	// ClientID overrides the client id the platform Context declares.
+	// ClientID overrides the client id the platform values declare.
 	ClientID string
 	// Disabled leaves the API open to anyone who can reach the port.
 	Disabled bool

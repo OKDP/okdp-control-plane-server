@@ -32,7 +32,7 @@ type PackageSchemaService interface {
 	ListVersionsForServices(ctx context.Context, services []models.PlatformService) map[string][]string
 	// ListPackageTags returns the tags published in the OCI registry for a service's
 	// package, even if the service is not (yet) in the catalog. repositoryOverride
-	// takes precedence over the Context's global package repository when non-empty.
+	// takes precedence over the catalog's default chart repository when non-empty.
 	ListPackageTags(ctx context.Context, serviceName, repositoryOverride string) ([]string, error)
 }
 
@@ -115,7 +115,7 @@ func (s *DefaultPackageSchemaService) GetServiceVersions(ctx context.Context, se
 	}, nil
 }
 
-// ListPackageTags resolves the package repository from the Context (or the
+// ListPackageTags resolves the chart repository from the catalog (or the
 // per-service override when set) and lists the OCI tags published for the given
 // service's package.
 const tagsCacheTTL = 5 * time.Minute

@@ -410,7 +410,7 @@ func (h *SparkHandler) GetSparkAppLogs(c *gin.Context) {
 
 // GetSparkConfig godoc
 // @Summary      Get Spark operator configuration
-// @Description  Returns Spark operator configuration from the KuboCD Context (images, defaults, versions)
+// @Description  Returns Spark operator configuration from the platform values, global.okdp.sparkOperator (images, defaults, versions)
 // @Tags         spark-apps
 // @Produce      json
 // @Success      200  {object}  models.SparkConfig

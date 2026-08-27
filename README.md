@@ -20,9 +20,9 @@ over REST and Server-Sent Events (SSE).
 
 The OKDP web console is a browser single-page application with no cluster credentials and
 no server-side logic, so it cannot drive Kubernetes on its own. This repository is its
-backend: an API that turns console actions into cluster operations, creating project
-namespaces, deploying and updating data services, serving the service catalog, and
-streaming their status, pods and metrics.
+backend: an API that turns console actions into commits to the platform's deployments
+Git repository (projects, service instances, connections, the service catalog), and reads
+back what the cluster reports, streaming status, pods and metrics.
 
 It is a first-party OKDP component, developed alongside the web console. Cluster credentials
 and business logic stay on the server side, keeping the console a stateless browser client.
@@ -33,18 +33,20 @@ and business logic stay on the server side, keeping the console a stateless brow
 
 - **Docker image** `quay.io/okdp/images/okdp-control-plane-server`: runs the Go control-plane API
   server on a minimal Alpine base, listening on port `8093`.
-- **Helm chart** (`chart/`): deploys the server in-cluster with the RBAC it needs to
-  reach the Kubernetes API and KuboCD.
+- **Helm chart** (`chart/`): deploys the server in-cluster with its Git settings and the
+  read-mostly RBAC it needs on the Kubernetes API.
 
 The image and chart provide the backend for the OKDP web console, so the platform is
-driven through the console instead of raw `kubectl` and KuboCD manifests.
+driven through the console instead of hand-written GitOps files. Both paths produce the
+same files: a console deployment and a hand-written one are indistinguishable.
 
 Project layout:
 
 - `cmd/server`: entry point.
 - `internal/api`: HTTP handlers and router.
 - `internal/service`: business logic.
-- `internal/repository`: data access (Kubernetes / KuboCD client).
+- `internal/gitops`: the deployments repository (go-git writer, layout, Flux rendering).
+- `internal/repository`: cluster access (platform values, instance descriptors, GitOps engine status).
 - `internal/config`: configuration loaded from environment variables.
 - `chart/`: Helm chart.
 
@@ -56,23 +58,42 @@ Project layout:
   <img src="docs/assets/architecture.svg" alt="OKDP Control Plane Server topology" />
 </p>
 
-> **OKDP deployment context:** the server runs **in-cluster**. It reads the service
-> catalog from a KuboCD `Context` and drives deployments by creating KuboCD `Release`
-> resources. KuboCD is the GitOps engine already used by OKDP, which is why the server
-> integrates with it rather than templating manifests itself. Projects are modeled as
-> plain namespaces, so no extra CRD or operator is introduced. Authentication (OIDC)
-> and TLS are provided by the platform ingress in front of the server, not by this
-> component.
+> **OKDP deployment context:** the server runs **in-cluster**. **Git is the only
+> desired-state store**: the server never creates HelmReleases, Applications or workloads;
+> it commits files to the deployments repository, and a GitOps engine (FluxCD or Argo CD)
+> renders the same OKDP Helm charts with the same values layers. Observed state is read
+> from the cluster: the instance descriptor ConfigMap each chart renders
+> (`<release>-okdp`, label `okdp.io/instance`), the workloads (`app.kubernetes.io/instance`)
+> and the engine's own objects for render/sync errors. There is no database; the local
+> clone is a cache. Authentication (OIDC) is verified on every `/api` call; TLS is
+> provided by the platform ingress.
 
-See the [KuboCD documentation](https://github.com/kubotal/kubocd) for the `Context`
-and `Release` model the server builds on.
+What the server writes (relative to `GITOPS_PATH`):
+
+```
+platform/catalog.yaml                          # console service catalog
+projects/<project>/project.yaml
+projects/<project>/connections/<name>.yaml     # external connection (credentials stay in a Secret)
+projects/<project>/connections/kustomization.yaml   # Flux only, generated
+projects/<project>/services/<instance>/instance.yaml
+projects/<project>/services/<instance>/values.yaml  # the submitted parameters only
+projects/<project>/services/<instance>/helmrelease.yaml   # Flux only, generated
+projects/<project>/services/<instance>/kustomization.yaml # Flux only, generated
+```
+
+Commits read `okdp: <action> <project>/<instance> by <user>`. Writes are serialised and
+replayed on top of the new revision when someone else pushed in between. The reference
+layout, and the script producing the same Flux files by hand, live in
+[okdp-sandbox `gitops/`](https://github.com/OKDP/okdp-sandbox).
 
 ---
 
 ## Requirements
 
-- Kubernetes cluster with [KuboCD](https://github.com/kubotal/kubocd) installed (provides the `Context` and `Release` CRDs the server reads and writes)
-- A **kubeconfig** with permission to manage namespaces and to read/write KuboCD `Context` and `Release` resources (in-cluster, the chart wires the ServiceAccount RBAC)
+- Kubernetes cluster reconciled by [FluxCD](https://fluxcd.io) (helm-controller,
+  source-controller, kustomize-controller) or [Argo CD](https://argo-cd.readthedocs.io),
+  from a deployments Git repository laid out as above
+- Write access to that repository (HTTPS token or SSH key)
 - [Go](https://go.dev/) >= 1.25 (only to build the image or run the server locally)
 
 Known-good baseline: chart and image `0.9.0` <!-- x-release-please-version -->
@@ -94,36 +115,28 @@ with Go `1.25`, on a Kind cluster. This is the version set validated by the main
 
 ## Installation
 
-The server runs in-cluster and needs a Kubernetes cluster with [KuboCD](https://github.com/kubotal/kubocd) installed (the `Context` and `Release` CRDs must exist):
+The server runs in-cluster, next to a GitOps engine reconciling the deployments
+repository. Give it write access through a Secret using the Flux `GitRepository` keys:
 
 ```sh
-kubectl get crd | grep kubocd
-# configs.kubocd.kubotal.io
-# contexts.kubocd.kubotal.io
-# releases.kubocd.kubotal.io
+kubectl create secret generic okdp-gitops-credentials -n okdp-system \
+  --from-literal=username=okdp-console --from-literal=password=<token>
+# or, over SSH: --from-file=identity=./id_ed25519 --from-file=known_hosts=./known_hosts
 ```
 
-The `Release` objects the server creates carry no explicit `spec.contexts`: they
-take the platform configuration from the Contexts the KuboCD `Config` declares,
-through `defaultContexts` and `defaultNamespaceContexts`. A cluster whose Config
-declares neither renders its packages against an empty configuration, so the
-platform `Context` this server reads must also be listed there. For example:
-
-```yaml
-apiVersion: kubocd.kubotal.io/v1alpha1
-kind: Config
-spec:
-  defaultContexts:
-    - name: platform
-      namespace: okdp-system
-```
+The platform values (`global.okdp`) are read from the ConfigMap `okdp-platform-values`
+(key `values.yaml`) that Flux generates in `okdp-releases`, or from
+`platform/platform-values.yaml` in Git when there is none (Argo CD).
 
 Install the chart from the OKDP registry:
 
 <!-- x-release-please-start-version -->
 ```sh
 helm install okdp-control-plane-server oci://quay.io/okdp/charts/okdp-control-plane-server --version 0.9.0 \
-  -n okdp-system --create-namespace
+  -n okdp-system --create-namespace \
+  --set gitops.repoURL=https://git.example.com/okdp/deployments.git \
+  --set gitops.credentialsSecret=okdp-gitops-credentials \
+  --set gitops.engine=flux
 ```
 <!-- x-release-please-end -->
 
@@ -157,14 +170,16 @@ kubectl delete namespace okdp-system
 
 ### Run the server locally
 
-Both options require a `KUBECONFIG` pointing at a Kubernetes cluster with KuboCD
-installed: the server connects to the Kubernetes API at startup.
+Both options require a `KUBECONFIG` pointing at a Kubernetes cluster (the server
+connects to the Kubernetes API at startup) and a deployments repository: any Git URL
+works, a local bare repository included (`git init --bare /tmp/deployments.git`).
 
-**On your machine.** Install Go and the development tools (`kubectl`, `kubocd`, `air`,
+**On your machine.** Install Go and the development tools (`kubectl`, `air`,
 `swag`, `golangci-lint`, `delve`), then:
 
 ```sh
 export KUBECONFIG=<path-to-your-kubeconfig>
+export GITOPS_REPO_URL=file:///tmp/deployments.git
 make dev                 # hot-reload on :8093
 # or, without hot-reload:
 go run ./cmd/server
@@ -201,10 +216,17 @@ its `configuration:` values (see [`chart/values.yaml`](chart/values.yaml)).
 | `PLATFORM_NAMESPACE` | Namespace where the OKDP platform runs | `okdp-system` | No |
 | `ALLOWED_ORIGINS` | Single CORS origin, set verbatim in `Access-Control-Allow-Origin` (the console URL) | `http://localhost:4200` | No |
 | `LOG_LEVEL` | Log verbosity (`debug`, `info`, `warn`, `error`) | `info` | No |
-| `CONTEXT_NAME` | Name of the KuboCD `Context` holding the platform configuration | `platform` | No |
-| `CONTEXT_NAMESPACE` | Namespace of that `Context` | the server's own namespace | No |
-| `RELEASE_INTERVAL` | Reconcile interval set on created KuboCD `Release`s | `30m` | No |
-| `RELEASE_TIMEOUT` | Timeout set on created KuboCD `Release`s | `10m` | No |
+| `GITOPS_REPO_URL` | Deployments repository (`https://…`, `ssh://…`, `git@host:path`, `file://…`) | | **Yes** |
+| `GITOPS_BRANCH` | Branch holding the desired state | `main` | No |
+| `GITOPS_PATH` | Directory of the repository holding the layout | repository root | No |
+| `GITOPS_CREDENTIALS_DIR` | Mounted credentials Secret (`username`/`password`, `bearerToken`, or `identity`/`known_hosts`) | `/etc/okdp/gitops-credentials` | No |
+| `GITOPS_SSH_INSECURE_IGNORE_HOST_KEY` | Accept any SSH host key (sandboxes only) | `false` | No |
+| `GITOPS_AUTHOR_NAME` / `GITOPS_AUTHOR_EMAIL` | Commit author (the acting user is in the message) | `OKDP control plane` / `okdp-control-plane@okdp.io` | No |
+| `GITOPS_CLONE_DIR` | Local clone, a cache (empty: in memory) | in memory | No |
+| `GITOPS_ENGINE` | `flux` or `argocd`: whose objects carry render/sync errors | `flux` | No |
+| `GITOPS_RELEASES_NAMESPACE` | Flux HelmReleases and values ConfigMaps, `okdp-platform-values` included | `okdp-releases` | No |
+| `ARGOCD_NAMESPACE` | Argo CD Applications | `argocd` | No |
+| `INSECURE_OCI_REGISTRIES` | Registry hosts reached over plain HTTP to read chart schemas (sandboxes) | | No |
 | `EXCLUDED_SIDECAR_PREFIXES` | Container name prefixes excluded from pod/metrics views (comma-separated) | `istio-proxy,istio-init,dynatrace-,linkerd-proxy,envoy,vault-agent` | No |
 
 > For the full chart values (image, service, resources, RBAC), see
@@ -254,17 +276,22 @@ origin the console is served from, the browser blocks the response and its conso
 
 ### The service catalog is empty, or `GET /api/platform-services` returns `500`
 
-**Cause:** the catalog is read from a KuboCD `Context` (`CONTEXT_NAME` in
-`CONTEXT_NAMESPACE`, default `default` in `kubocd-system`). A `500` means that Context
-is missing, the two variables point to the wrong one, or KuboCD is not installed. An
-empty but successful catalog means the Context exists yet has no `okdp.services`.
+**Cause:** the catalog is `platform/catalog.yaml` in the deployments repository. A `500`
+means the repository cannot be reached (URL, branch or credentials; the log names the
+fetch error). An empty but successful catalog means the file is missing or has no
+`categories`.
 
-**Fix:** confirm KuboCD is installed and the Context exists:
+**Fix:** check the `GITOPS_*` settings and the credentials Secret, and that the file
+exists on `GITOPS_BRANCH` under `GITOPS_PATH`.
 
-```sh
-kubectl get crd | grep kubocd
-kubectl get context default -n kubocd-system
-```
+### A deployed service stays `Pending`
+
+**Cause:** the instance is committed, but the GitOps engine has not produced its
+HelmRelease (`okdp-releases/<project>-<instance>`) or Application (`<project>-<instance>`)
+yet. Either it has not reconciled the new revision, or it does not watch that path.
+
+**Fix:** check the engine (`flux get kustomizations`, or the ApplicationSet in Argo CD),
+and that `GITOPS_ENGINE` names the engine actually in use.
 
 ---
 

@@ -112,8 +112,8 @@ func SetupRouter(cfg *config.Config, verifier auth.Verifier, capabilitiesHandler
 			externalSecrets.GET("/:esName/status", externalSecretHandler.GetExternalSecretStatus)
 		}
 
-		// Contracts available for creation, and whether the KuboCD connection
-		// CRDs are installed (external connections need them).
+		// Contracts available for creation, and whether connections can be
+		// stored (a deployments repository is configured).
 		api.GET("/contracts", connectionHandler.GetContracts)
 
 		// Connections (scoped per project namespace). "internal" lists what the
@@ -141,7 +141,7 @@ func SetupRouter(cfg *config.Config, verifier auth.Verifier, capabilitiesHandler
 		api.GET("/platform-services/:serviceName/inputs", serviceHandler.GetServiceInputs)
 		api.GET("/profile-images", serviceHandler.GetProfileImages)
 
-		// Deployed services per project (KuboCD Releases)
+		// Deployed services per project (instances in the deployments repository)
 		services := api.Group("/projects/:name/services", requireProject)
 		{
 			services.GET("", serviceHandler.ListServices)
@@ -156,7 +156,7 @@ func SetupRouter(cfg *config.Config, verifier auth.Verifier, capabilitiesHandler
 		}
 		api.GET("/projects/:name/metrics", requireProject, serviceHandler.GetProjectMetrics)
 
-		// Spark config (from Context) + CRD schema
+		// Spark config (from the platform values) + CRD schema
 		api.GET("/spark-config", sparkHandler.GetSparkConfig)
 		api.GET("/spark-app-schema", sparkHandler.GetSparkAppSchema)
 

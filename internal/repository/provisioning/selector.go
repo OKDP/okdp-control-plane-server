@@ -8,7 +8,7 @@ import (
 	"k8s.io/client-go/dynamic"
 )
 
-// Provider names accepted in the Context (identity.provisioning.provider).
+// Provider names accepted in the platform values (global.okdp.identity.provisioning.provider).
 const (
 	ProviderNone     = "none"
 	ProviderKubauth  = "kubauth"
