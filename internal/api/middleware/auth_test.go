@@ -122,6 +122,10 @@ func TestAnUnconfiguredPlatformSaysSoInsteadOfBlamingTheToken(t *testing.T) {
 			t.Fatalf("the message never mentions %s: %q", where, m)
 		}
 	}
+	// And it says which of the two is missing, so the reader edits that one.
+	if !strings.Contains(m, "neither its issuer nor its client id") {
+		t.Fatalf("the message does not name what is missing: %q", m)
+	}
 }
 
 // The exemption is matched on the route pattern, not on where the middleware

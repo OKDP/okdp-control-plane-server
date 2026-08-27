@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -52,7 +53,9 @@ func RequireAuth(verifier *auth.Verifier) gin.HandlerFunc {
 			// is an operator's job, and answering "invalid token" would send
 			// the reader hunting a token that was never the problem.
 			if errors.Is(err, auth.ErrNotConfigured) {
-				unauthorized(c, "This platform names no OIDC provider, so no request can be authenticated. Declare it on the platform Context, under identity.oidc.authority and identity.oidc.clientId or the older oidc.issuerUri, or set OIDC_AUTHORITY and OIDC_CLIENT_ID on the server deployment.")
+				unauthorized(c, fmt.Sprintf(
+					"No request can be authenticated: %s. Declare the provider on the platform Context, under identity.oidc.authority and identity.oidc.clientId or the older oidc.issuerUri, or set OIDC_AUTHORITY and OIDC_CLIENT_ID on the server deployment.",
+					err))
 				return
 			}
 			unauthorized(c, err.Error())

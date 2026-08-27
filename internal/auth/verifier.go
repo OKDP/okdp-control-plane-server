@@ -22,7 +22,7 @@ import (
 // be verified. Kept apart from a rejection: nothing is wrong with the caller,
 // the platform simply has not been told which provider to trust, and the
 // message must send the operator to the Context rather than to the user.
-var ErrNotConfigured = errors.New("the platform publishes no OIDC configuration")
+var ErrNotConfigured = errors.New("this platform names no OIDC provider")
 
 // Identity is what a verified token establishes about its bearer.
 type Identity struct {
@@ -117,13 +117,18 @@ func (v *Verifier) current(ctx context.Context) (*oidc.IDTokenVerifier, string, 
 		return nil, "", err
 	}
 
-	v.mu.Lock()
-	defer v.mu.Unlock()
-
-	if v.verifier != nil && v.issuer == issuer && v.clientID == clientID {
-		return v.verifier, v.clientID, nil
+	if verifier, ok := v.cached(issuer, clientID); ok {
+		return verifier, clientID, nil
 	}
 
+	// Built outside the lock. Reaching the discovery document is network I/O,
+	// and holding the mutex across it would make every request in flight wait
+	// on the slowest one: an identity provider that answers slowly would become
+	// an API that answers to nobody.
+	//
+	// Two requests arriving on a cold verifier both build one. That is a
+	// duplicated round trip on first use, which is the cheaper of the two
+	// mistakes.
 	provider, err := oidc.NewProvider(ctx, issuer)
 	if err != nil {
 		return nil, "", fmt.Errorf("the issuer %q could not be reached: %w", issuer, err)
@@ -131,10 +136,31 @@ func (v *Verifier) current(ctx context.Context) (*oidc.IDTokenVerifier, string, 
 	// SkipClientIDCheck because go-oidc would compare the configured id against
 	// aud alone. Which claim carries it depends on the provider, so the
 	// comparison is done here, over the three places it can appear.
-	v.verifier = provider.Verifier(&oidc.Config{SkipClientIDCheck: true})
+	verifier := provider.Verifier(&oidc.Config{SkipClientIDCheck: true})
+
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	// Another request may have published one for the same issuer while this one
+	// was on the network. Either is correct, and keeping the published one
+	// avoids swapping it under a caller for nothing.
+	if v.verifier != nil && v.issuer == issuer && v.clientID == clientID {
+		return v.verifier, v.clientID, nil
+	}
+	v.verifier = verifier
 	v.issuer = issuer
 	v.clientID = clientID
-	return v.verifier, v.clientID, nil
+	return verifier, clientID, nil
+}
+
+// cached returns the verifier already published for this provider, if it is the
+// one still declared.
+func (v *Verifier) cached(issuer, clientID string) (*oidc.IDTokenVerifier, bool) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.verifier != nil && v.issuer == issuer && v.clientID == clientID {
+		return v.verifier, true
+	}
+	return nil, false
 }
 
 // resolve names the provider, preferring what the platform declares over what
@@ -163,8 +189,15 @@ func (v *Verifier) resolve(ctx context.Context) (issuer, clientID string, err er
 		clientID = strings.TrimSpace(v.fallback.ClientID)
 	}
 
-	if issuer == "" || clientID == "" {
-		return "", "", ErrNotConfigured
+	// Which one is missing is the whole of the answer for whoever has to fix it,
+	// and a single message covering both sends them editing the wrong setting.
+	switch {
+	case issuer == "" && clientID == "":
+		return "", "", fmt.Errorf("%w, neither its issuer nor its client id is declared", ErrNotConfigured)
+	case issuer == "":
+		return "", "", fmt.Errorf("%w, its issuer is not declared", ErrNotConfigured)
+	case clientID == "":
+		return "", "", fmt.Errorf("%w, its client id is not declared", ErrNotConfigured)
 	}
 	return strings.TrimRight(issuer, "/"), clientID, nil
 }

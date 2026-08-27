@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -381,4 +382,86 @@ func TestNothingAnywhereIsAConfigurationFault(t *testing.T) {
 	if !errors.Is(err, ErrNotConfigured) {
 		t.Fatalf("wanted ErrNotConfigured, got %v", err)
 	}
+}
+
+// Which setting is missing is the whole of the answer for whoever has to fix
+// it. One message covering both sends them editing the wrong one.
+func TestTheMissingSettingIsNamed(t *testing.T) {
+	cases := map[string]struct {
+		source   *stubSource
+		fallback Fallback
+		says     string
+	}{
+		"neither": {&stubSource{}, Fallback{}, "neither its issuer nor its client id"},
+		"issuer only missing": {
+			&stubSource{}, Fallback{ClientID: testClientID}, "its issuer is not declared",
+		},
+		"client id only missing": {
+			&stubSource{legacy: "https://issuer.example"}, Fallback{}, "its client id is not declared",
+		},
+	}
+
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := NewVerifier(c.source, c.fallback).Verify(context.Background(), "any.token.here")
+			if !errors.Is(err, ErrNotConfigured) {
+				t.Fatalf("wanted ErrNotConfigured, got %v", err)
+			}
+			if !strings.Contains(err.Error(), c.says) {
+				t.Fatalf("the message does not say what is missing: %v", err)
+			}
+		})
+	}
+}
+
+// The regression this guards. Building the verifier reaches the provider's
+// discovery document, and holding the lock across that made every request in
+// flight wait on the slowest one: an identity provider answering slowly became
+// an API answering to nobody.
+func TestASlowIssuerDoesNotBlockRequestsThatNeedNothingFromIt(t *testing.T) {
+	warm := newFakeIDP(t)
+	src := sourceFor(warm)
+	v := NewVerifier(src, Fallback{})
+
+	c := warm.claims()
+	c["aud"] = testClientID
+	if _, err := v.Verify(context.Background(), warm.mint(t, c)); err != nil {
+		t.Fatalf("could not warm the verifier: %v", err)
+	}
+
+	// A second provider whose discovery never answers until the test says so.
+	release := make(chan struct{})
+	mux := http.NewServeMux()
+	slow := httptest.NewServer(mux)
+	defer slow.Close()
+	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
+		<-release
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+
+	// The platform is repointed at it, so the next call has to build one.
+	src.cfg = &models.IdentityOidcConfig{Authority: slow.URL, ClientID: testClientID}
+	building := make(chan struct{})
+	go func() {
+		close(building)
+		_, _ = v.Verify(context.Background(), "any.token.here")
+	}()
+	<-building
+	time.Sleep(50 * time.Millisecond) // let it reach the network
+
+	// Reading the published verifier must not wait on that request. Under a lock
+	// held across the discovery call, this blocks until the issuer answers.
+	done := make(chan struct{})
+	go func() {
+		v.cached(warm.server.URL, testClientID)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		close(release)
+		t.Fatal("the cache was held hostage by a discovery call in flight")
+	}
+	close(release)
 }

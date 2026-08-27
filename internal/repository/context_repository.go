@@ -327,7 +327,15 @@ func (r *k8sContextRepository) GetOidcIssuerURI(ctx context.Context) (string, er
 	if err != nil {
 		return "", err
 	}
-	issuer, _, _ := unstructured.NestedString(u.Object, "spec", "context", "oidc", "issuerUri")
+	// The error is not discarded here, unlike the reads around it: this value is
+	// what the API trusts to authenticate every caller. An issuerUri that is not
+	// a string would otherwise read as absent, and be reported as a platform
+	// that declares no provider, which sends the reader looking for a setting
+	// that is right there and malformed.
+	issuer, _, err := unstructured.NestedString(u.Object, "spec", "context", "oidc", "issuerUri")
+	if err != nil {
+		return "", fmt.Errorf("the Context field spec.context.oidc.issuerUri is not readable as a string: %w", err)
+	}
 	return issuer, nil
 }
 
