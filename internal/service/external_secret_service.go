@@ -179,8 +179,14 @@ func validateExternalSecretRequest(req models.ExternalSecretRequest) error {
 	// Checked here rather than left to the ESO admission webhook, which answers
 	// with a raw Go parser message the caller cannot act on, under a status the
 	// handler cannot tell apart from a platform failure.
-	if _, err := time.ParseDuration(req.RefreshInterval); err != nil {
+	interval, err := time.ParseDuration(req.RefreshInterval)
+	if err != nil {
 		return invalid("refreshInterval %q is not a duration, expected a value such as 1m, 30s or 1h", req.RefreshInterval)
+	}
+	// ParseDuration accepts a negative duration, which is not a refresh rate.
+	// Zero stays legal: external-secrets reads it as "do not refresh".
+	if interval < 0 {
+		return invalid("refreshInterval %q is negative", req.RefreshInterval)
 	}
 	if len(req.Data) == 0 {
 		return invalid("at least one data mapping is required")
