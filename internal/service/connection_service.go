@@ -193,6 +193,9 @@ func (s *DefaultConnectionService) Create(ctx context.Context, namespace string,
 	}
 
 	public, secrets := splitValues(descriptor, values)
+	if err := s.catalog.ValidatePublic(descriptor.Name, public); err != nil {
+		return nil, invalid("%v", err)
+	}
 	secretName := ""
 	ownSecret := req.ExistingSecret == ""
 
@@ -245,6 +248,9 @@ func (s *DefaultConnectionService) Update(ctx context.Context, namespace, name s
 	}
 
 	public, secrets := splitValues(descriptor, values)
+	if err := s.catalog.ValidatePublic(descriptor.Name, public); err != nil {
+		return nil, invalid("%v", err)
+	}
 	ownedName := name + credentialsSecretSuffix
 	secretName := existing.SecretRef
 

@@ -11,6 +11,7 @@ require (
 	github.com/go-sql-driver/mysql v1.10.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/minio/minio-go/v7 v7.2.1
+	github.com/okdp/okdp-lib v0.1.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 	github.com/sirupsen/logrus v1.9.4
 	github.com/stretchr/testify v1.11.1
@@ -130,3 +131,7 @@ require (
 	sigs.k8s.io/randfill v1.0.0 // indirect
 	sigs.k8s.io/structured-merge-diff/v6 v6.3.0 // indirect
 )
+
+// TODO(no-kubocd): drop once OKDP/okdp-lib v0.1.0 is published. CI and the
+// image build clone it next to this repository.
+replace github.com/okdp/okdp-lib => ../okdp-lib

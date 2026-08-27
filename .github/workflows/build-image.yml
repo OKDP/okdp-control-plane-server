@@ -32,6 +32,10 @@ jobs:
       actions: write   # upload the GitHub Actions build cache
     steps:
       - uses: actions/checkout@v4
+      # go.mod replaces github.com/okdp/okdp-lib with ../okdp-lib during the
+      # no-kubocd migration.
+      - name: Clone okdp-lib next to the repository
+        run: git clone --depth 1 https://github.com/OKDP/okdp-lib.git ../okdp-lib
       - id: vars
         env:
           INPUT_VERSION: ${{ inputs.version }}
@@ -48,6 +52,7 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: .
+          build-contexts: okdp-lib=../okdp-lib
           platforms: linux/amd64,linux/arm64
           push: true
           cache-from: type=gha

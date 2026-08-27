@@ -9,6 +9,10 @@ ARG TARGETARCH
 
 WORKDIR /workspace/okdp-server
 
+# go.mod replaces github.com/okdp/okdp-lib with ../okdp-lib during the
+# no-kubocd migration: build with --build-context okdp-lib=../okdp-lib.
+COPY --from=okdp-lib go.mod ../okdp-lib/
+COPY --from=okdp-lib contracts/ ../okdp-lib/contracts/
 COPY go.* ./
 RUN go mod download
 

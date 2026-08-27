@@ -299,3 +299,21 @@ func TestNormalizeWritesTheDeclaredDefaults(t *testing.T) {
 		t.Fatalf("sslMode: got %v, want the declared default \"prefer\"", values["sslMode"])
 	}
 }
+
+func TestValidatePublicUsesTheContractSchema(t *testing.T) {
+	catalog, err := NewEmbeddedContractCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.ValidatePublic("hive", map[string]any{"thriftUri": "thrift://hms:9083"}); err != nil {
+		t.Errorf("valid hive values rejected: %v", err)
+	}
+	if err := catalog.ValidatePublic("hive", map[string]any{}); err == nil {
+		t.Errorf("a hive connection without thriftUri passed")
+	}
+	if err := catalog.ValidatePublic("database-server", map[string]any{
+		"engine": "postgresql", "driver": "org.postgresql.Driver", "host": "db", "port": 5432.5, "dbName": "x",
+	}); err == nil {
+		t.Errorf("a fractional port passed the integer type")
+	}
+}
