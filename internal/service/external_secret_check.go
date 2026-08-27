@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/okdp/okdp-control-plane-server/internal/models"
 	"github.com/okdp/okdp-control-plane-server/internal/repository/crd"
@@ -28,18 +29,24 @@ func countProperties(n int) string {
 	return fmt.Sprintf("%d properties", n)
 }
 
-// A path segment that walks out of the mount is refused; every other character
-// is not, because Vault accepts them and external-secrets passes the key to a
-// client that percent-encodes the path. Measured against the running cluster: a
-// key literally named "avec espace" syncs, so banning the character would have
-// blocked an import that works today.
 // normalizeRemoteKey is the single reading of a remote key, shared by the
 // check, the validation and the CR that is written. Without one, the check
 // answered about "foo" while the import stored " foo " and external-secrets
 // looked up a key nobody had confirmed.
+//
+// A path segment that walks out of the mount is refused elsewhere; every other
+// character is kept, because Vault accepts them and external-secrets passes the
+// key to a client that percent-encodes the path. Measured against the running
+// cluster: a key literally named "avec espace" syncs, so banning the character
+// would have blocked an import that works today.
 func normalizeRemoteKey(key string) string {
-	// Spaces first, or " / " keeps its slash and still names nothing.
-	return strings.Trim(strings.TrimSpace(key), "/")
+	// Both cut sets at once, and not one Trim after the other: trimming the
+	// spaces first leaves "//  //" as two spaces, trimming the slashes first
+	// leaves "/ foo" with its leading space. Either way the result clears every
+	// emptiness guard and still names nothing.
+	return strings.TrimFunc(key, func(r rune) bool {
+		return r == '/' || unicode.IsSpace(r)
+	})
 }
 
 func hasTraversal(p string) bool {
@@ -88,7 +95,7 @@ func (s *DefaultExternalSecretService) CheckRemoteRef(ctx context.Context, names
 	key := normalizeRemoteKey(req.RemoteRef.Key)
 	// Checked after the trim, not before: "/" and "//" clear the emptiness
 	// guard above and then read the mount root instead of a key.
-	if strings.TrimSpace(key) == "" {
+	if key == "" {
 		return nil, invalid("remoteRef.key %q names no key", req.RemoteRef.Key)
 	}
 	if hasTraversal(key) {
@@ -166,12 +173,7 @@ func (s *DefaultExternalSecretService) CheckRemoteRef(ctx context.Context, names
 				}, nil
 			}
 		}
-		// external-secrets resolves a property with gjson, so "database.password"
-		// reaches into a JSON value or matches a key that literally contains a
-		// dot. Both were measured against the running cluster and both sync.
-		// Only first-level names are enumerated here, so calling the property
-		// absent would paint a working import red.
-		if nested || strings.Contains(req.RemoteRef.Property, ".") {
+		if propertyCouldReachFurther(req.RemoteRef.Property, nested) {
 			// Not Found:true: the path may well lead nowhere, and claiming it
 			// resolves would be the green this check exists to remove. The key
 			// is confirmed, the property is not, and the answer says so.
@@ -207,6 +209,28 @@ func (s *DefaultExternalSecretService) CheckRemoteRef(ctx context.Context, names
 			Message:    fmt.Sprintf("vault answered %d, the key could not be checked", status),
 		}, nil
 	}
+}
+
+// propertyCouldReachFurther reports whether a property could resolve to
+// something other than one of the top-level names the caller has just
+// enumerated.
+//
+// external-secrets resolves a property with gjson. A property made of ordinary
+// characters can only match a top-level name, and every one of those is known
+// at the call site, so its absence is a fact: saying so is what turns a typo
+// into an answer instead of a shrug. Anything that can reach further is not
+// followed here, and calling it absent would paint a working import red:
+//
+//   - a wildcard or an escape names a top-level field that was compared
+//     literally and missed, whatever the values hold;
+//   - a dotted path descends into a value that is itself JSON, so it reaches
+//     somewhere only when the key holds one. Both readings were measured
+//     against the running cluster and both sync.
+func propertyCouldReachFurther(property string, nested bool) bool {
+	if strings.ContainsAny(property, `\*?#@|`) {
+		return true
+	}
+	return nested && strings.Contains(property, ".")
 }
 
 // notFoundMessage names the mistake when it can. A KV v2 mount is read at

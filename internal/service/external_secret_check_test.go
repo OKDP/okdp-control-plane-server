@@ -487,7 +487,10 @@ func TestCheckRefusesAKeyThatNamesNothing(t *testing.T) {
 	defer vault.Close()
 	svc := checkService(t, vaultStore(vault.URL, "v2", &crd.ESOTokenSecretRef{Name: "store-credentials", Key: "token"}, nil), "s.token")
 
-	for _, key := range []string{"/", "//", "   ", " / "} {
+	// "//  //" and "/ /" are the ones that used to slip through: trimming the
+	// spaces first and the slashes second left a key made of spaces, which is
+	// not empty, does not walk out of the mount, and names nothing.
+	for _, key := range []string{"/", "//", "   ", " / ", "//  //", "/ /", " // ", "\t/\n"} {
 		_, err := svc.CheckRemoteRef(context.Background(), "demo", models.ExternalSecretCheckRequest{
 			SecretStoreRef: "store",
 			RemoteRef:      models.ExternalSecretRemote{Key: key},
@@ -500,7 +503,7 @@ func TestCheckRefusesAKeyThatNamesNothing(t *testing.T) {
 
 // The create must refuse the same, or an import naming no key reaches the CR.
 func TestCreateRefusesAKeyThatNamesNothing(t *testing.T) {
-	for _, key := range []string{"/", "//", "   "} {
+	for _, key := range []string{"/", "//", "   ", " / ", "//  //", "/ /", " // "} {
 		err := validateExternalSecretRequest(models.ExternalSecretRequest{
 			Name:            "my-import",
 			SecretStoreRef:  "store",
@@ -520,7 +523,7 @@ func TestCreateRefusesAKeyThatNamesNothing(t *testing.T) {
 // answered about "foo" while the import stored " foo ", so external-secrets
 // looked up a key nobody had confirmed.
 func TestTheStoredKeyIsTheOneThatWasChecked(t *testing.T) {
-	for _, raw := range []string{" external-client ", "/external-client", "external-client/", "  /external-client/  "} {
+	for _, raw := range []string{" external-client ", "/external-client", "external-client/", "  /external-client/  ", "/ external-client /", " / external-client / "} {
 		req := models.ExternalSecretRequest{
 			Name:            "my-import",
 			SecretStoreRef:  "store",
@@ -537,6 +540,64 @@ func TestTheStoredKeyIsTheOneThatWasChecked(t *testing.T) {
 		stored := es.Spec.Data[0].RemoteRef.Key
 		if stored != "external-client" {
 			t.Fatalf("key %q was stored as %q, not as the checked form", raw, stored)
+		}
+	}
+}
+
+// A typo is the mistake this check exists to name, and it must survive the key
+// holding a JSON value somewhere else. Reading the nesting off the values made
+// every unmatched property unverifiable, so "db_pasword" on a key that happens
+// to carry one nested object came back as a shrug instead of an answer.
+func TestCheckTellsATypoFromAPathItCannotFollow(t *testing.T) {
+	nested := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"data":{"database":{"password":"p4ss"},"flat":"x"}}}`))
+	}))
+	defer nested.Close()
+	svc := checkService(t, vaultStore(nested.URL, "v2", &crd.ESOTokenSecretRef{Name: "store-credentials", Key: "token"}, nil), "s.token")
+
+	// No gjson syntax at all: it can only ever match a top-level name, and both
+	// of those are listed here.
+	if resp := checkRef(t, svc, "external-client", "flatt"); !resp.Verifiable || resp.Found {
+		t.Fatalf("a plain typo was not reported as absent: %+v", resp)
+	}
+	// A path into the nested value, which this check does not follow.
+	if resp := checkRef(t, svc, "external-client", "database.password"); resp.Verifiable || resp.Found {
+		t.Fatalf("a path this check cannot follow produced a verdict: %+v", resp)
+	}
+	// A wildcard matches a top-level name that was compared literally.
+	if resp := checkRef(t, svc, "external-client", "fla*"); resp.Verifiable || resp.Found {
+		t.Fatalf("a wildcard produced a verdict: %+v", resp)
+	}
+
+	// Nothing here is JSON, so a dotted path reaches nowhere and its absence is
+	// a fact like any other.
+	flat := kvV2Server(t, map[string]map[string]string{"external-client": {"db_password": "x"}})
+	defer flat.Close()
+	svc = checkService(t, vaultStore(flat.URL, "v2", &crd.ESOTokenSecretRef{Name: "store-credentials", Key: "token"}, nil), "s.token")
+	if resp := checkRef(t, svc, "external-client", "database.password"); !resp.Verifiable || resp.Found {
+		t.Fatalf("a path with nothing to descend into was not reported as absent: %+v", resp)
+	}
+}
+
+// normalizeRemoteKey is read by the check, the validation and the CR, so a form
+// it lets through is a form all three let through.
+func TestNormalizeRemoteKeyLeavesNothingThatNamesNothing(t *testing.T) {
+	for _, raw := range []string{"/", "//", "   ", " / ", "//  //", "/ /", " // ", "\t / \n"} {
+		if got := normalizeRemoteKey(raw); got != "" {
+			t.Fatalf("key %q normalized to %q, which names nothing and is not empty", raw, got)
+		}
+	}
+	for raw, want := range map[string]string{
+		"/ foo":           "foo",
+		" /foo/ ":         "foo",
+		"/ a/b /":         "a/b",
+		"external-client": "external-client",
+		"avec espace":     "avec espace",
+		"a/ b":            "a/ b",
+	} {
+		if got := normalizeRemoteKey(raw); got != want {
+			t.Fatalf("key %q normalized to %q, wanted %q", raw, got, want)
 		}
 	}
 }

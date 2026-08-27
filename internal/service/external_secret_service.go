@@ -180,13 +180,10 @@ func validateExternalSecretRequest(req models.ExternalSecretRequest) error {
 		if d.RemoteRef.Key == "" {
 			return fmt.Errorf("data[%d].remoteRef.key is required", i)
 		}
-		// The same shape the key check enforces. Without it the two paths
-		// disagree on one input: the check refuses "a?b=1" as an invalid path
-		// while the create accepts it and stores an import that can never
-		// resolve.
-		// The same rule the key check applies: only a segment that walks out of
-		// the mount is refused. Vault accepts the rest, and a key literally
-		// named "avec espace" was measured syncing on the running cluster.
+		// The same rule the key check applies, read through the same function:
+		// only a segment that walks out of the mount is refused. Vault accepts
+		// the rest, and a key literally named "avec espace" was measured
+		// syncing on the running cluster.
 		remoteKey := normalizeRemoteKey(d.RemoteRef.Key)
 		if remoteKey == "" {
 			return invalid("data[%d].remoteRef.key %q names no key", i, d.RemoteRef.Key)
