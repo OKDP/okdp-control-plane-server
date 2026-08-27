@@ -103,6 +103,7 @@ func SetupRouter(cfg *config.Config, capabilitiesHandler *handlers.CapabilitiesH
 			externalSecrets.PUT("/:esName", externalSecretHandler.UpdateExternalSecret)
 			externalSecrets.DELETE("/:esName", externalSecretHandler.DeleteExternalSecret)
 			externalSecrets.GET("/:esName/status", externalSecretHandler.GetExternalSecretStatus)
+			externalSecrets.POST("/check", externalSecretHandler.CheckRemoteRef)
 		}
 
 		// Contracts available for creation, and whether the KuboCD connection

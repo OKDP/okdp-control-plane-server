@@ -21,6 +21,7 @@ type ExternalSecretService interface {
 	UpdateExternalSecret(ctx context.Context, namespace, name string, req models.ExternalSecretRequest) (*models.ExternalSecretResponse, error)
 	DeleteExternalSecret(ctx context.Context, namespace, name string) error
 	GetExternalSecretStatus(ctx context.Context, namespace, name string) (*models.ExternalSecretStatusResponse, error)
+	CheckRemoteRef(ctx context.Context, namespace string, req models.ExternalSecretCheckRequest) (*models.ExternalSecretCheckResponse, error)
 }
 
 type DefaultExternalSecretService struct {

@@ -261,6 +261,38 @@ definitions:
       memory:
         type: string
     type: object
+  models.ExternalSecretCheckRequest:
+    properties:
+      remoteRef:
+        $ref: '#/definitions/models.ExternalSecretRemote'
+      secretStoreRef:
+        type: string
+    required:
+    - remoteRef
+    - secretStoreRef
+    type: object
+  models.ExternalSecretCheckResponse:
+    properties:
+      found:
+        description: Found is meaningful only when Verifiable is true.
+        type: boolean
+      message:
+        type: string
+      properties:
+        description: |-
+          Properties carries the NAMES a key holds, never the values. Returning
+          values would turn this check into a way to read any secret the store can
+          reach, from a form that only needs to confirm a path.
+        items:
+          type: string
+        type: array
+      verifiable:
+        description: |-
+          Verifiable says whether the control plane could question Vault at all
+          with this store's credentials. False is not a verdict on the key: it
+          means the answer is unknown, and a caller must not show it as a success.
+        type: boolean
+    type: object
   models.ExternalSecretDataEntry:
     properties:
       remoteRef:
@@ -1733,6 +1765,34 @@ paths:
       summary: Test a connection from the platform
       tags:
       - connections
+  /api/projects/{name}/metrics:
+    get:
+      description: One call returns the aggregated CPU/memory usage and limits of
+        each deployed instance, keyed by instance name.
+      parameters:
+      - description: Project name
+        in: path
+        name: name
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              $ref: '#/definitions/models.ServiceMetrics'
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get live resource usage for every instance of a project
+      tags:
+      - services
   /api/projects/{name}/services:
     get:
       description: Get all deployed service instances for a project
@@ -2609,6 +2669,46 @@ paths:
               type: string
             type: object
       summary: Get external secret status
+      tags:
+      - external-secrets
+  /api/projects/{projectId}/external-secrets/check:
+    post:
+      consumes:
+      - application/json
+      description: Report whether a key can be read through a store, without creating
+        anything
+      parameters:
+      - description: Project name (= Kubernetes namespace)
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Remote reference to check
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.ExternalSecretCheckRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.ExternalSecretCheckResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Check a remote key before importing it
       tags:
       - external-secrets
   /api/projects/{projectId}/secret-stores:

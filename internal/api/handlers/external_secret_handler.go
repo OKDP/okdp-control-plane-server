@@ -202,3 +202,45 @@ func (h *ExternalSecretHandler) GetExternalSecretStatus(c *gin.Context) {
 func isSecretStoreNotFoundError(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "SecretStore") && strings.Contains(err.Error(), "not found")
 }
+
+// CheckRemoteRef godoc
+// @Summary      Check a remote key before importing it
+// @Description  Report whether a key can be read through a store, without creating anything
+// @Tags         external-secrets
+// @Accept       json
+// @Produce      json
+// @Param        name path string true "Project name (= Kubernetes namespace)"
+// @Param        request body models.ExternalSecretCheckRequest true "Remote reference to check"
+// @Success      200  {object}  models.ExternalSecretCheckResponse
+// @Failure      400  {object}  map[string]string
+// @Failure      404  {object}  map[string]string
+// @Router       /api/projects/{projectId}/external-secrets/check [post]
+func (h *ExternalSecretHandler) CheckRemoteRef(c *gin.Context) {
+	namespace := c.Param("name")
+
+	var req models.ExternalSecretCheckRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	result, err := h.service.CheckRemoteRef(c.Request.Context(), namespace, req)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": fmt.Sprintf("Secret store '%s' not found in project '%s'", req.SecretStoreRef, namespace),
+			})
+			return
+		}
+		// Every refusal this endpoint raises is the caller's to fix: it creates
+		// nothing, so there is no schema rejection to translate.
+		if service.IsValidationError(err) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		logrus.WithError(err).Error("Failed to check the remote key")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}

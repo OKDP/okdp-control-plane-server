@@ -1126,6 +1126,47 @@
                 }
             }
         },
+        "/api/projects/{name}/metrics": {
+            "get": {
+                "description": "One call returns the aggregated CPU/memory usage and limits of each deployed instance, keyed by instance name.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "services"
+                ],
+                "summary": "Get live resource usage for every instance of a project",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/models.ServiceMetrics"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/projects/{name}/services": {
             "get": {
                 "description": "Get all deployed service instances for a project",
@@ -2236,6 +2277,65 @@
                     },
                     "500": {
                         "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/projects/{projectId}/external-secrets/check": {
+            "post": {
+                "description": "Report whether a key can be read through a store, without creating anything",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "external-secrets"
+                ],
+                "summary": "Check a remote key before importing it",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project name (= Kubernetes namespace)",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Remote reference to check",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/models.ExternalSecretCheckRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.ExternalSecretCheckResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -3453,6 +3553,44 @@
                 },
                 "memory": {
                     "type": "string"
+                }
+            }
+        },
+        "models.ExternalSecretCheckRequest": {
+            "type": "object",
+            "required": [
+                "remoteRef",
+                "secretStoreRef"
+            ],
+            "properties": {
+                "remoteRef": {
+                    "$ref": "#/definitions/models.ExternalSecretRemote"
+                },
+                "secretStoreRef": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.ExternalSecretCheckResponse": {
+            "type": "object",
+            "properties": {
+                "found": {
+                    "description": "Found is meaningful only when Verifiable is true.",
+                    "type": "boolean"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "properties": {
+                    "description": "Properties carries the NAMES a key holds, never the values. Returning\nvalues would turn this check into a way to read any secret the store can\nreach, from a form that only needs to confirm a path.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "verifiable": {
+                    "description": "Verifiable says whether the control plane could question Vault at all\nwith this store's credentials. False is not a verdict on the key: it\nmeans the answer is unknown, and a caller must not show it as a success.",
+                    "type": "boolean"
                 }
             }
         },

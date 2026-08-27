@@ -53,3 +53,26 @@ type ExternalSecretStatusResponse struct {
 	LastSyncedAt *string                `json:"lastSyncedAt"`
 	LastError    *string                `json:"lastError"`
 }
+
+// ExternalSecretCheckRequest asks whether a remote key can be read through a
+// store, before any import is created.
+type ExternalSecretCheckRequest struct {
+	SecretStoreRef string               `json:"secretStoreRef" binding:"required"`
+	RemoteRef      ExternalSecretRemote `json:"remoteRef" binding:"required"`
+}
+
+// ExternalSecretCheckResponse reports what the control plane could establish
+// about a remote key.
+type ExternalSecretCheckResponse struct {
+	// Verifiable says whether the control plane could question Vault at all
+	// with this store's credentials. False is not a verdict on the key: it
+	// means the answer is unknown, and a caller must not show it as a success.
+	Verifiable bool `json:"verifiable"`
+	// Found is meaningful only when Verifiable is true.
+	Found bool `json:"found"`
+	// Properties carries the NAMES a key holds, never the values. Returning
+	// values would turn this check into a way to read any secret the store can
+	// reach, from a form that only needs to confirm a path.
+	Properties []string `json:"properties,omitempty"`
+	Message    string   `json:"message"`
+}
