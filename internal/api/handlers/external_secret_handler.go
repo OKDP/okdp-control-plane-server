@@ -29,6 +29,15 @@ func (h *ExternalSecretHandler) Available(ctx context.Context) bool {
 	return h.service.Available(ctx)
 }
 
+// isRejectedInput reports whether the failure is the caller's to fix, so the
+// API answers 400 rather than blaming the platform. A rejected field looks the
+// same whether this service caught it or the API server's own schema did, and
+// reported as 500 the console can only say the server broke when the fix is to
+// correct a value.
+func isRejectedInput(err error) bool {
+	return service.IsValidationError(err) || apierrors.IsInvalid(err) || apierrors.IsBadRequest(err)
+}
+
 // ListExternalSecrets godoc
 // @Summary      List external secrets for a project
 // @Description  Get all external secrets configured in the project namespace
@@ -87,6 +96,10 @@ func (h *ExternalSecretHandler) CreateExternalSecret(c *gin.Context) {
 			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 			return
 		}
+		if isRejectedInput(err) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
 		logrus.WithError(err).Error("Failed to create external secret")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -128,6 +141,10 @@ func (h *ExternalSecretHandler) UpdateExternalSecret(c *gin.Context) {
 		}
 		if isSecretStoreNotFoundError(err) {
 			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			return
+		}
+		if isRejectedInput(err) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
 		logrus.WithError(err).Error("Failed to update external secret")
