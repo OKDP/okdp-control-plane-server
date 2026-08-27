@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"regexp"
+	"net/url"
 	"sort"
 	"strings"
 
@@ -15,10 +15,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
-// A remote key goes straight into the Vault URL, so it may only carry what a
-// path segment carries. Without this, "a?b" turns the read into a request for
-// another path with a query string, and ".." walks out of the store's mount:
-// the check would then report on a key nobody asked about.
 // A secret holding more than this is not one an import can carry, and the
 // figure bounds what a hostile or misconfigured host can make the control
 // plane hold in memory.
@@ -32,7 +28,36 @@ func countProperties(n int) string {
 	return fmt.Sprintf("%d properties", n)
 }
 
-var vaultKeyPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)*$`)
+// A path segment that walks out of the mount is refused; every other character
+// is not, because Vault accepts them and external-secrets passes the key to a
+// client that percent-encodes the path. Measured against the running cluster: a
+// key literally named "avec espace" syncs, so banning the character would have
+// blocked an import that works today.
+func hasTraversal(p string) bool {
+	for _, seg := range strings.Split(p, "/") {
+		if seg == "." || seg == ".." {
+			return true
+		}
+	}
+	return false
+}
+
+// vaultURL builds the read URL so the caller-supplied mount and key reach Vault
+// as path segments and nothing else. Concatenated raw, a "?" in either one
+// turned the rest of the path into a query string and the check reported on an
+// endpoint nobody asked about.
+func vaultURL(server, mount, key string, kvV2 bool) (string, error) {
+	u, err := url.Parse(strings.TrimSuffix(server, "/"))
+	if err != nil {
+		return "", fmt.Errorf("the store's server address is not a URL: %w", err)
+	}
+	segments := u.Path + "/v1/" + mount
+	if kvV2 {
+		segments += "/data"
+	}
+	u.Path = segments + "/" + key
+	return u.String(), nil
+}
 
 // CheckRemoteRef reports whether a remote key can be read through a store,
 // before any import exists.
@@ -52,8 +77,8 @@ func (s *DefaultExternalSecretService) CheckRemoteRef(ctx context.Context, names
 		return nil, invalid("remoteRef.key is required")
 	}
 	key := strings.Trim(req.RemoteRef.Key, "/")
-	if !vaultKeyPattern.MatchString(key) {
-		return nil, invalid("remoteRef.key %q is not a valid path", req.RemoteRef.Key)
+	if hasTraversal(key) {
+		return nil, invalid("remoteRef.key %q walks out of the store's mount", req.RemoteRef.Key)
 	}
 
 	store, err := s.secretStoreRepo.Get(ctx, namespace, req.SecretStoreRef)
@@ -97,7 +122,7 @@ func (s *DefaultExternalSecretService) CheckRemoteRef(ctx context.Context, names
 		return nil, invalid("the credentials of store %q carry no token under key %q", req.SecretStoreRef, tokenKey)
 	}
 
-	properties, status, err := readVaultKey(ctx, vault, key, token)
+	properties, nested, status, err := readVaultKey(ctx, vault, key, token)
 	if err != nil {
 		// Not always a reachability problem: an unusable CA bundle fails before
 		// any request leaves, and an unreadable body arrives after Vault has
@@ -126,6 +151,18 @@ func (s *DefaultExternalSecretService) CheckRemoteRef(ctx context.Context, names
 					Message: fmt.Sprintf("key %q holds property %q", key, p),
 				}, nil
 			}
+		}
+		// external-secrets resolves a property with gjson, so "database.password"
+		// reaches into a JSON value or matches a key that literally contains a
+		// dot. Both were measured against the running cluster and both sync.
+		// Only first-level names are enumerated here, so calling the property
+		// absent would paint a working import red.
+		if nested || strings.Contains(req.RemoteRef.Property, ".") {
+			return &models.ExternalSecretCheckResponse{
+				Verifiable: true, Found: true, Properties: properties,
+				Message: fmt.Sprintf("key %q found. Property %q is not one of its top-level names; external-secrets resolves it as a path, which this check does not follow",
+					key, req.RemoteRef.Property),
+			}, nil
 		}
 		return &models.ExternalSecretCheckResponse{
 			Verifiable: true, Found: false, Properties: properties,
@@ -170,39 +207,41 @@ func notFoundMessage(vault *crd.ESOVaultProvider, key string) string {
 // readVaultKey returns the property names a key holds and the status Vault
 // answered. The values are read to learn the names and never leave this
 // function.
-func readVaultKey(ctx context.Context, vault *crd.ESOVaultProvider, key, token string) ([]string, int, error) {
+func readVaultKey(ctx context.Context, vault *crd.ESOVaultProvider, key, token string) (names []string, nested bool, status int, err error) {
 	// Converted explicitly: the CRD field is a string today and becomes a
 	// []byte with the base64 fix, and this reads the same either way.
 	client, err := vaultHTTPClient(string(vault.CABundle))
 	if err != nil {
-		return nil, 0, err
+		return nil, false, 0, err
 	}
 
 	mount := strings.Trim(vault.Path, "/")
 	if mount == "" {
 		mount = "secret"
 	}
-	url := strings.TrimSuffix(vault.Server, "/") + "/v1/" + mount
-	if vault.Version == "v1" {
-		url += "/" + key
-	} else {
-		url += "/data/" + key
+	if hasTraversal(mount) {
+		return nil, false, 0, fmt.Errorf("the store's secret path %q walks out of itself", vault.Path)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	address, err := vaultURL(vault.Server, mount, key, vault.Version != "v1")
 	if err != nil {
-		return nil, 0, err
+		return nil, false, 0, err
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
+	if err != nil {
+		return nil, false, 0, err
 	}
 	httpReq.Header.Set("X-Vault-Token", token)
 
 	resp, err := client.Do(httpReq)
 	if err != nil {
-		return nil, 0, err
+		return nil, false, 0, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, resp.StatusCode, nil
+		return nil, false, resp.StatusCode, nil
 	}
 
 	var body struct {
@@ -212,27 +251,51 @@ func readVaultKey(ctx context.Context, vault *crd.ESOVaultProvider, key, token s
 	// client timeout bounds how long a hostile host can stream, not how much,
 	// and a secret that needs more than this is not one an import can carry.
 	if err := json.NewDecoder(io.LimitReader(resp.Body, maxVaultResponseBytes)).Decode(&body); err != nil {
-		return nil, resp.StatusCode, fmt.Errorf("vault answered something that is not a secret: %w", err)
+		return nil, false, resp.StatusCode, fmt.Errorf("vault answered something that is not a secret: %w", err)
 	}
 
 	fields := body.Data
 	if vault.Version != "v1" {
-		var inner struct {
-			Data map[string]json.RawMessage `json:"data"`
+		raw, ok := body.Data["data"]
+		if !ok {
+			// A KV v2 read always wraps the secret in data.data. Without it this
+			// is something else answering on the path, and keeping the outer
+			// envelope would report "version" and "metadata" as properties and
+			// call the key found.
+			return nil, false, resp.StatusCode, fmt.Errorf("the answer is not shaped like a KV v2 secret")
 		}
-		if raw, ok := body.Data["data"]; ok {
-			if err := json.Unmarshal(raw, &inner.Data); err != nil {
-				return nil, resp.StatusCode, fmt.Errorf("vault answered something that is not a KV v2 secret: %w", err)
-			}
-			fields = inner.Data
+		var inner map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &inner); err != nil {
+			return nil, false, resp.StatusCode, fmt.Errorf("vault answered something that is not a KV v2 secret: %w", err)
 		}
+		fields = inner
 	}
 
-	names := make([]string, 0, len(fields))
-	for name := range fields {
+	names = make([]string, 0, len(fields))
+	for name, value := range fields {
 		names = append(names, name)
+		// external-secrets resolves a property with gjson, so a value that is
+		// itself JSON can hold nested paths this check cannot enumerate. The
+		// flag says so; the value never leaves.
+		if valueCouldNest(value) {
+			nested = true
+		}
 	}
 	// Stable, so the same key always reads the same way in the form.
 	sort.Strings(names)
-	return names, resp.StatusCode, nil
+	return names, nested, resp.StatusCode, nil
+}
+
+// valueCouldNest reports whether a stored value can carry nested paths, either
+// as a JSON object or as a string holding one. Only the shape is examined.
+func valueCouldNest(value json.RawMessage) bool {
+	trimmed := strings.TrimSpace(string(value))
+	if strings.HasPrefix(trimmed, "{") {
+		return true
+	}
+	var asString string
+	if json.Unmarshal(value, &asString) == nil {
+		return strings.HasPrefix(strings.TrimSpace(asString), "{")
+	}
+	return false
 }

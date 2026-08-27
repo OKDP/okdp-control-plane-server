@@ -185,8 +185,11 @@ func validateExternalSecretRequest(req models.ExternalSecretRequest) error {
 		// disagree on one input: the check refuses "a?b=1" as an invalid path
 		// while the create accepts it and stores an import that can never
 		// resolve.
-		if !vaultKeyPattern.MatchString(strings.Trim(d.RemoteRef.Key, "/")) {
-			return invalid("data[%d].remoteRef.key %q is not a valid path", i, d.RemoteRef.Key)
+		// The same rule the key check applies: only a segment that walks out of
+		// the mount is refused. Vault accepts the rest, and a key literally
+		// named "avec espace" was measured syncing on the running cluster.
+		if hasTraversal(strings.Trim(d.RemoteRef.Key, "/")) {
+			return invalid("data[%d].remoteRef.key %q walks out of the store's mount", i, d.RemoteRef.Key)
 		}
 	}
 	return nil

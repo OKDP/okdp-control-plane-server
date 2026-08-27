@@ -196,21 +196,122 @@ func TestCheckSaysWhenVaultIsUnreachable(t *testing.T) {
 	}
 }
 
-// A key goes straight into the URL, so one carrying a query or a parent segment
-// would make the check report on another path.
-func TestCheckRefusesAKeyThatRetargetsTheURL(t *testing.T) {
+// Only a segment that walks out of the mount is refused. Vault accepts the
+// rest, and banning the characters would have blocked imports that work: a key
+// literally named "avec espace" was measured syncing on the running cluster.
+func TestCheckRefusesOnlyTraversal(t *testing.T) {
 	vault := kvV2Server(t, map[string]map[string]string{"external-client": {"db_password": "x"}})
 	defer vault.Close()
 	svc := checkService(t, vaultStore(vault.URL, "v2", &crd.ESOTokenSecretRef{Name: "store-credentials", Key: "token"}, nil), "s.token")
 
-	for _, key := range []string{"a?b=1", "../../sys/seal", "a b", "a#b"} {
+	for _, key := range []string{"../../sys/seal", "a/../b", "."} {
 		_, err := svc.CheckRemoteRef(context.Background(), "demo", models.ExternalSecretCheckRequest{
 			SecretStoreRef: "store",
 			RemoteRef:      models.ExternalSecretRemote{Key: key},
 		})
 		if err == nil || !IsValidationError(err) {
-			t.Fatalf("key %q was accepted: %v", key, err)
+			t.Fatalf("traversal %q was accepted: %v", key, err)
 		}
+	}
+	// These are legal Vault keys and must reach the server, encoded.
+	for _, key := range []string{"avec espace", "a?b=1", "a#b", "team/app/db"} {
+		if _, err := svc.CheckRemoteRef(context.Background(), "demo", models.ExternalSecretCheckRequest{
+			SecretStoreRef: "store",
+			RemoteRef:      models.ExternalSecretRemote{Key: key},
+		}); err != nil {
+			t.Fatalf("key %q was refused: %v", key, err)
+		}
+	}
+}
+
+// A "?" concatenated raw turned the rest of the path into a query string, so
+// the check reported on an endpoint nobody asked about. The path must arrive
+// percent-encoded, whether the character comes from the key or the mount.
+func TestCheckSendsTheKeyAsAPathSegment(t *testing.T) {
+	paths := make(chan string, 4)
+	vault := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case paths <- r.URL.Path + "|" + r.URL.RawQuery:
+		default:
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer vault.Close()
+	svc := checkService(t, vaultStore(vault.URL, "v2", &crd.ESOTokenSecretRef{Name: "store-credentials", Key: "token"}, nil), "s.token")
+
+	checkRef(t, svc, "a?b=1", "")
+	got := <-paths
+	if got != "/v1/secret/data/a?b=1|" {
+		t.Fatalf("the key did not arrive whole as a path segment: %q", got)
+	}
+}
+
+// The mount comes from the store and was concatenated raw while the key was
+// filtered, so the same trick worked through it.
+func TestCheckSendsTheMountAsAPathSegment(t *testing.T) {
+	paths := make(chan string, 4)
+	vault := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case paths <- r.URL.Path + "|" + r.URL.RawQuery:
+		default:
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer vault.Close()
+	store := vaultStore(vault.URL, "v2", &crd.ESOTokenSecretRef{Name: "store-credentials", Key: "token"}, nil)
+	store.Spec.Provider.Vault.Path = "kv?x=1"
+	svc := checkService(t, store, "s.token")
+
+	checkRef(t, svc, "k", "")
+	got := <-paths
+	if got != "/v1/kv?x=1/data/k|" {
+		t.Fatalf("the mount did not arrive whole as a path segment: %q", got)
+	}
+}
+
+// A KV v2 read always wraps the secret in data.data. Keeping the outer envelope
+// when it is missing reported "metadata" and friends as properties and called
+// the key found, so a proxy answering plain JSON produced a false green.
+func TestCheckRefusesAnAnswerThatIsNotShapedLikeKvV2(t *testing.T) {
+	vault := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"unrelated":"value"}}`))
+	}))
+	defer vault.Close()
+	svc := checkService(t, vaultStore(vault.URL, "v2", &crd.ESOTokenSecretRef{Name: "store-credentials", Key: "token"}, nil), "s.token")
+
+	resp := checkRef(t, svc, "external-client", "")
+	if resp.Found {
+		t.Fatalf("an answer with no data.data was reported as a found key: %+v", resp)
+	}
+	if resp.Verifiable {
+		t.Fatalf("an answer of the wrong shape produced a verdict: %+v", resp)
+	}
+}
+
+// external-secrets resolves a property with gjson. Measured on the running
+// cluster with ESO v0.15.1: "database.password" syncs both as a path into a
+// JSON value and as a key literally containing a dot. Calling it absent would
+// paint a working import red.
+func TestCheckDoesNotCallANestedPropertyAbsent(t *testing.T) {
+	vault := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"data":{"database":{"password":"p4ss"},"flat":"x"}}}`))
+	}))
+	defer vault.Close()
+	svc := checkService(t, vaultStore(vault.URL, "v2", &crd.ESOTokenSecretRef{Name: "store-credentials", Key: "token"}, nil), "s.token")
+
+	resp := checkRef(t, svc, "external-client", "database.password")
+	if !resp.Found {
+		t.Fatalf("a nested property was reported as absent: %+v", resp)
+	}
+
+	// A flat secret with a property that cannot be a path is still absent.
+	flat := kvV2Server(t, map[string]map[string]string{"external-client": {"db_password": "x"}})
+	defer flat.Close()
+	svc = checkService(t, vaultStore(flat.URL, "v2", &crd.ESOTokenSecretRef{Name: "store-credentials", Key: "token"}, nil), "s.token")
+	if resp := checkRef(t, svc, "external-client", "absent"); resp.Found {
+		t.Fatalf("a genuinely absent property was reported as found: %+v", resp)
 	}
 }
 
@@ -338,11 +439,12 @@ func TestCheckDoesNotReportAMissingCredentialAsAMissingStore(t *testing.T) {
 }
 
 // The check and the create must agree on what a key may look like. They did
-// not: the check refused "a?b=1" as an invalid path while the create accepted
-// it and stored an import that can never resolve.
+// not, and the rule itself was wrong: banning characters refused keys Vault
+// accepts. Measured on the running cluster, a key literally named
+// "avec espace" syncs. Only a walk out of the mount is refused, on both paths.
 func TestCreateRefusesTheSameKeysTheCheckRefuses(t *testing.T) {
-	for _, key := range []string{"a?b=1", "../../sys/seal", "a b", "a#b"} {
-		err := validateExternalSecretRequest(models.ExternalSecretRequest{
+	build := func(key string) models.ExternalSecretRequest {
+		return models.ExternalSecretRequest{
 			Name:            "my-import",
 			SecretStoreRef:  "store",
 			RefreshInterval: "1m",
@@ -350,25 +452,23 @@ func TestCreateRefusesTheSameKeysTheCheckRefuses(t *testing.T) {
 			Data: []models.ExternalSecretDataEntry{
 				{SecretKey: "pwd", RemoteRef: models.ExternalSecretRemote{Key: key}},
 			},
-		})
-		if err == nil {
-			t.Fatalf("create accepted key %q that the check refuses", key)
-		}
-		if !IsValidationError(err) {
-			t.Fatalf("key %q refused as a platform failure: %v", key, err)
 		}
 	}
-	// A nested key stays legal on both paths.
-	err := validateExternalSecretRequest(models.ExternalSecretRequest{
-		Name:            "my-import",
-		SecretStoreRef:  "store",
-		RefreshInterval: "1m",
-		Target:          models.ExternalSecretTarget{Name: "my-secret"},
-		Data: []models.ExternalSecretDataEntry{
-			{SecretKey: "pwd", RemoteRef: models.ExternalSecretRemote{Key: "team/app/db"}},
-		},
-	})
-	if err != nil {
-		t.Fatalf("a nested key was rejected: %v", err)
+
+	for _, key := range []string{"../../sys/seal", "a/../b", "."} {
+		err := validateExternalSecretRequest(build(key))
+		if err == nil {
+			t.Fatalf("create accepted traversal %q", key)
+		}
+		if !IsValidationError(err) {
+			t.Fatalf("traversal %q refused as a platform failure: %v", key, err)
+		}
+	}
+
+	// Legal Vault keys, refused by the first version of this rule.
+	for _, key := range []string{"avec espace", "a?b=1", "a#b", "team/app/db"} {
+		if err := validateExternalSecretRequest(build(key)); err != nil {
+			t.Fatalf("create refused key %q, which Vault accepts: %v", key, err)
+		}
 	}
 }
