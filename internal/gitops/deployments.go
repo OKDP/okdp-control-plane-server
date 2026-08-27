@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -122,28 +123,76 @@ func (d *Deployments) writeInstance(tx Tx, st *InstanceState) error {
 		}
 	}
 	dir := ServiceDir(st.Instance.Project, st.Instance.Name)
-	instanceYAML, err := EncodeInstance(st.Instance)
-	if err != nil {
-		return err
+
+	// The sources are rewritten only when their content changes, so a
+	// hand-written file keeps its comments through edits that leave it alone
+	// (a version bump does not touch values.yaml).
+	if current, err := readInstance(tx, st.Instance.Project, st.Instance.Name); err == nil {
+		if !reflect.DeepEqual(current.Instance, normalized(st.Instance)) {
+			if err := writeEncoded(tx, path.Join(dir, InstanceFile), st.Instance); err != nil {
+				return err
+			}
+		}
+		if !reflect.DeepEqual(current.Values, jsonRoundTrip(st.Values)) || !tx.Exists(path.Join(dir, ValuesFile)) {
+			if err := writeValues(tx, path.Join(dir, ValuesFile), st.Values); err != nil {
+				return err
+			}
+		}
+	} else {
+		if err := writeEncoded(tx, path.Join(dir, InstanceFile), st.Instance); err != nil {
+			return err
+		}
+		if err := writeValues(tx, path.Join(dir, ValuesFile), st.Values); err != nil {
+			return err
+		}
 	}
-	valuesYAML, err := EncodeValues(st.Values)
-	if err != nil {
-		return err
-	}
+
 	generated, err := d.Flux.RenderInstance(st.Instance)
 	if err != nil {
 		return err
 	}
-	files := map[string][]byte{InstanceFile: instanceYAML, ValuesFile: valuesYAML}
 	for name, data := range generated {
-		files[name] = data
-	}
-	for name, data := range files {
 		if err := tx.WriteFile(path.Join(dir, name), data); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func normalized(i Instance) Instance {
+	if i.Connections == nil {
+		i.Connections = []string{}
+	}
+	return i
+}
+
+func writeEncoded(tx Tx, p string, i Instance) error {
+	data, err := EncodeInstance(i)
+	if err != nil {
+		return err
+	}
+	return tx.WriteFile(p, data)
+}
+
+func writeValues(tx Tx, p string, values map[string]any) error {
+	data, err := EncodeValues(values)
+	if err != nil {
+		return err
+	}
+	return tx.WriteFile(p, data)
+}
+
+// jsonRoundTrip gives values the types DecodeValues produces, for comparison.
+func jsonRoundTrip(values map[string]any) map[string]any {
+	data, err := EncodeValues(values)
+	if err != nil {
+		return values
+	}
+	out, err := DecodeValues(data)
+	if err != nil {
+		return values
+	}
+	return out
 }
 
 // CreateInstance declares a new instance. Fails with ErrExists when the
@@ -154,7 +203,16 @@ func (d *Deployments) CreateInstance(ctx context.Context, user string, st Instan
 		if tx.Exists(ServiceDir(st.Instance.Project, st.Instance.Name)) {
 			return fmt.Errorf("instance %s: %w", target, ErrExists)
 		}
-		return d.writeInstance(tx, &st)
+		if err := checkReleaseFree(tx, st.Instance); err != nil {
+			return err
+		}
+		if err := ensureProject(tx, st.Instance.Project); err != nil {
+			return err
+		}
+		if err := d.writeInstance(tx, &st); err != nil {
+			return err
+		}
+		return d.renderProject(tx, st.Instance.Project)
 	})
 }
 
@@ -186,7 +244,10 @@ func (d *Deployments) DeleteInstance(ctx context.Context, user, project, name st
 		if !tx.Exists(dir) {
 			return fmt.Errorf("instance %s: %w", target, ErrNotFound)
 		}
-		return tx.Remove(dir)
+		if err := tx.Remove(dir); err != nil {
+			return err
+		}
+		return d.renderProject(tx, project)
 	})
 }
 
@@ -289,7 +350,7 @@ func connectionNames(r Reader, project string) ([]string, error) {
 	}
 	var names []string
 	for _, e := range entries {
-		if e == KustomizationFile || !strings.HasSuffix(e, ".yaml") {
+		if !strings.HasSuffix(e, ".yaml") {
 			continue
 		}
 		names = append(names, strings.TrimSuffix(e, ".yaml"))
@@ -335,24 +396,106 @@ func (d *Deployments) GetConnection(ctx context.Context, project, name string) (
 	return out, err
 }
 
-func (d *Deployments) renderConnections(tx Tx, project string) error {
-	names, err := connectionNames(tx, project)
+// renderProject rewrites projects/<p>/kustomization.yaml (Flux): the services
+// holding an instance.yaml and every connection file, sorted.
+func (d *Deployments) renderProject(tx Tx, project string) error {
+	if !tx.Exists(ProjectDir(project)) {
+		return nil
+	}
+	names, err := tx.ReadDir(ServicesDir(project))
 	if err != nil {
 		return err
 	}
-	dir := ConnectionsDir(project)
-	generated, err := d.Flux.RenderConnections(project, names)
-	if err != nil {
-		return err
-	}
-	if _, ok := generated[KustomizationFile]; !ok {
-		if err := tx.Remove(path.Join(dir, KustomizationFile)); err != nil {
-			return err
+	var services []string
+	for _, name := range names {
+		if tx.Exists(path.Join(ServiceDir(project, name), InstanceFile)) {
+			services = append(services, name)
 		}
 	}
-	for name, data := range generated {
-		if err := tx.WriteFile(path.Join(dir, name), data); err != nil {
+	connections, err := connectionNames(tx, project)
+	if err != nil {
+		return err
+	}
+	sort.Strings(services)
+	sort.Strings(connections)
+	data, err := d.Flux.RenderProject(project, services, connections)
+	if err != nil {
+		return err
+	}
+	return tx.WriteFile(ProjectKustomizationPath(project), data)
+}
+
+// ensureProject declares a project that has no project.yaml yet (one created
+// before the deployments repository existed): render-flux.sh refuses a
+// project directory without it.
+func ensureProject(tx Tx, project string) error {
+	if tx.Exists(ProjectFilePath(project)) {
+		return nil
+	}
+	data, err := MarshalYAML(Project{Name: project})
+	if err != nil {
+		return err
+	}
+	return tx.WriteFile(ProjectFilePath(project), data)
+}
+
+// checkReleaseFree refuses an instance whose release name, or whose values
+// ConfigMap in okdp-releases, another declaration already produces:
+// project a-b instance c and project a instance b-c are both release a-b-c.
+func checkReleaseFree(tx Tx, inst Instance) error {
+	release := inst.ReleaseName()
+	projects, err := tx.ReadDir(ProjectsDir)
+	if err != nil {
+		return err
+	}
+	for _, p := range projects {
+		names, err := tx.ReadDir(ServicesDir(p))
+		if err != nil {
 			return err
+		}
+		for _, i := range names {
+			if (p != inst.Project || i != inst.Name) && ReleaseName(p, i) == release && tx.Exists(path.Join(ServiceDir(p, i), InstanceFile)) {
+				return fmt.Errorf("release %s is already produced by projects/%s/services/%s: %w", release, p, i, ErrExists)
+			}
+		}
+	}
+	components, err := tx.ReadDir(ComponentsDir)
+	if err != nil {
+		return err
+	}
+	for _, c := range components {
+		raw, err := tx.ReadFile(path.Join(ComponentsDir, c, InstanceFile))
+		if err != nil {
+			continue
+		}
+		other, err := DecodeInstance(raw)
+		if err == nil && other.ReleaseName() == release {
+			return fmt.Errorf("release %s is already produced by the platform component %s: %w", release, c, ErrExists)
+		}
+	}
+	return nil
+}
+
+// checkConnectionFree refuses a connection whose ConfigMap conn-<p>-<c>
+// another project's connection already produces.
+func checkConnectionFree(tx Tx, project, name string) error {
+	cm := ConnectionValuesName(project, name)
+	projects, err := tx.ReadDir(ProjectsDir)
+	if err != nil {
+		return err
+	}
+	for _, p := range projects {
+		if p == project {
+			continue
+		}
+		names, err := connectionNames(tx, p)
+		if err != nil {
+			return err
+		}
+		for _, c := range names {
+			if ConnectionValuesName(p, c) == cm {
+				return fmt.Errorf("ConfigMap %s is already produced by projects/%s/connections/%s.yaml: %w", cm, p, c, ErrExists)
+			}
 		}
 	}
 	return nil
@@ -380,6 +523,14 @@ func (d *Deployments) PutConnection(ctx context.Context, user string, c Connecti
 		if !create && !exists {
 			return fmt.Errorf("connection %s: %w", target, ErrNotFound)
 		}
+		if create {
+			if err := checkConnectionFree(tx, c.Project, c.Name); err != nil {
+				return err
+			}
+			if err := ensureProject(tx, c.Project); err != nil {
+				return err
+			}
+		}
 		data, err := EncodeConnection(c)
 		if err != nil {
 			return err
@@ -387,7 +538,7 @@ func (d *Deployments) PutConnection(ctx context.Context, user string, c Connecti
 		if err := tx.WriteFile(ConnectionPath(c.Project, c.Name), data); err != nil {
 			return err
 		}
-		return d.renderConnections(tx, c.Project)
+		return d.renderProject(tx, c.Project)
 	})
 }
 
@@ -417,7 +568,7 @@ func (d *Deployments) DeleteConnection(ctx context.Context, user, project, name 
 		if err := tx.Remove(ConnectionPath(project, name)); err != nil {
 			return err
 		}
-		return d.renderConnections(tx, project)
+		return d.renderProject(tx, project)
 	})
 }
 
@@ -439,7 +590,10 @@ func (d *Deployments) PutProject(ctx context.Context, user string, p Project) (s
 		return "", err
 	}
 	return d.Store.Update(ctx, CommitMessage("update project", p.Name, user), func(tx Tx) error {
-		return tx.WriteFile(ProjectFilePath(p.Name), data)
+		if err := tx.WriteFile(ProjectFilePath(p.Name), data); err != nil {
+			return err
+		}
+		return d.renderProject(tx, p.Name)
 	})
 }
 
@@ -498,7 +652,7 @@ func (d *Deployments) UpdateCatalog(ctx context.Context, user, target string, ch
 		if err := change(catalog); err != nil {
 			return err
 		}
-		data, err := MarshalYAML(catalog)
+		data, err := mergeIntoDocument(raw, catalog)
 		if err != nil {
 			return err
 		}
@@ -507,4 +661,68 @@ func (d *Deployments) UpdateCatalog(ctx context.Context, user, target string, ch
 		}
 		return tx.WriteFile(CatalogPath, data)
 	})
+}
+
+// mergeIntoDocument writes updated over the YAML document raw, top-level key
+// by top-level key: keys whose value did not change keep their original
+// nodes, and the comments of the file (its licence header, the notes a
+// person left) survive a console edit. A document that cannot be merged is
+// replaced.
+func mergeIntoDocument(raw []byte, updated map[string]any) ([]byte, error) {
+	var doc yaml.Node
+	if len(bytes.TrimSpace(raw)) == 0 || yaml.Unmarshal(raw, &doc) != nil ||
+		len(doc.Content) != 1 || doc.Content[0].Kind != yaml.MappingNode {
+		return MarshalYAML(updated)
+	}
+	root := doc.Content[0]
+	original, err := DecodeValues(raw)
+	if err != nil {
+		return MarshalYAML(updated)
+	}
+
+	kept := root.Content[:0]
+	seen := map[string]bool{}
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		key, value := root.Content[i], root.Content[i+1]
+		newValue, present := updated[key.Value]
+		if !present {
+			continue
+		}
+		seen[key.Value] = true
+		if !reflect.DeepEqual(jsonRoundTrip(map[string]any{"v": original[key.Value]}), jsonRoundTrip(map[string]any{"v": newValue})) {
+			var replacement yaml.Node
+			if err := replacement.Encode(newValue); err != nil {
+				return nil, err
+			}
+			replacement.HeadComment, replacement.LineComment, replacement.FootComment = value.HeadComment, value.LineComment, value.FootComment
+			value = &replacement
+		}
+		kept = append(kept, key, value)
+	}
+	root.Content = kept
+	var added []string
+	for k := range updated {
+		if !seen[k] {
+			added = append(added, k)
+		}
+	}
+	sort.Strings(added)
+	for _, k := range added {
+		var value yaml.Node
+		if err := value.Encode(updated[k]); err != nil {
+			return nil, err
+		}
+		root.Content = append(root.Content, str(k), &value)
+	}
+
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(&doc); err != nil {
+		return nil, err
+	}
+	if err := enc.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }

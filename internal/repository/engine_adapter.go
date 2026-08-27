@@ -54,6 +54,34 @@ type EngineAdapter interface {
 	ReleaseOf(obj *unstructured.Unstructured) (project, release string)
 }
 
+// Labels every HelmRelease, OCIRepository and Application of the layout
+// carries (render-flux.sh and the ApplicationSets set them).
+const (
+	LabelEngineProject  = "okdp.io/project"
+	LabelEngineInstance = "okdp.io/instance"
+)
+
+// releaseOf reads the project and release of an engine object from its
+// labels, falling back to the fields that carry the same information.
+func releaseOf(obj *unstructured.Unstructured, projectPath []string, releasePath []string) (string, string) {
+	labels := obj.GetLabels()
+	project, release := labels[LabelEngineProject], labels[LabelEngineInstance]
+	if project == "" {
+		project, _, _ = unstructured.NestedString(obj.Object, projectPath...)
+	}
+	if release == "" && releasePath != nil {
+		release, _, _ = unstructured.NestedString(obj.Object, releasePath...)
+	}
+	if release == "" {
+		release = obj.GetName()
+	}
+	return project, release
+}
+
+func projectSelector(project string) metav1.ListOptions {
+	return metav1.ListOptions{LabelSelector: fmt.Sprintf("%s=%s", LabelEngineProject, project)}
+}
+
 // --- Flux ---
 
 var helmReleaseGVR = schema.GroupVersionResource{Group: "helm.toolkit.fluxcd.io", Version: "v2", Resource: "helmreleases"}
@@ -71,16 +99,11 @@ func NewFluxAdapter(client dynamic.Interface, namespace string) EngineAdapter {
 func (a *fluxAdapter) Name() string { return "flux" }
 
 func (a *fluxAdapter) ReleaseOf(obj *unstructured.Unstructured) (string, string) {
-	project, _, _ := unstructured.NestedString(obj.Object, "spec", "targetNamespace")
-	release, _, _ := unstructured.NestedString(obj.Object, "spec", "releaseName")
-	if release == "" {
-		release = obj.GetName()
-	}
-	return project, release
+	return releaseOf(obj, []string{"spec", "targetNamespace"}, []string{"spec", "releaseName"})
 }
 
 func (a *fluxAdapter) List(ctx context.Context, project string) (map[string]EngineStatus, error) {
-	list, err := a.client.Resource(helmReleaseGVR).Namespace(a.namespace).List(ctx, metav1.ListOptions{})
+	list, err := a.client.Resource(helmReleaseGVR).Namespace(a.namespace).List(ctx, projectSelector(project))
 	if err != nil {
 		return nil, err
 	}
@@ -177,12 +200,11 @@ func NewArgoCDAdapter(client dynamic.Interface, namespace string) EngineAdapter 
 func (a *argoAdapter) Name() string { return "argocd" }
 
 func (a *argoAdapter) ReleaseOf(obj *unstructured.Unstructured) (string, string) {
-	project, _, _ := unstructured.NestedString(obj.Object, "spec", "destination", "namespace")
-	return project, obj.GetName()
+	return releaseOf(obj, []string{"spec", "destination", "namespace"}, nil)
 }
 
 func (a *argoAdapter) List(ctx context.Context, project string) (map[string]EngineStatus, error) {
-	list, err := a.client.Resource(applicationGVR).Namespace(a.namespace).List(ctx, metav1.ListOptions{})
+	list, err := a.client.Resource(applicationGVR).Namespace(a.namespace).List(ctx, projectSelector(project))
 	if err != nil {
 		return nil, err
 	}

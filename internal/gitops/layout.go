@@ -24,6 +24,9 @@ const (
 	ProjectFile       = "project.yaml"
 )
 
+// ComponentsDir holds the platform components (written by administrators only).
+const ComponentsDir = "platform/components"
+
 // ReleasesNamespace is where Flux HelmReleases and their value ConfigMaps live.
 const ReleasesNamespace = "okdp-releases"
 
@@ -34,7 +37,12 @@ const PlatformValuesConfigMap = "okdp-platform-values"
 // ValuesKey is the key of every values ConfigMap.
 const ValuesKey = "values.yaml"
 
-var dnsLabel = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
+// Validation rules of instance.yaml, the same as render-flux.sh enforces.
+var (
+	dnsLabel     = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
+	chartRef     = regexp.MustCompile(`^oci://[a-z0-9]([-a-z0-9.]*[a-z0-9])?(:[0-9]+)?(/[a-z0-9]([-a-z0-9._]*[a-z0-9])?)+$`)
+	chartVersion = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][-0-9A-Za-z.]*)?$`)
+)
 
 // ValidateName refuses a name that cannot be a path segment, a Kubernetes
 // object name and a Helm release name part at once.
@@ -46,6 +54,9 @@ func ValidateName(kind, name string) error {
 }
 
 func ProjectDir(project string) string { return path.Join(ProjectsDir, project) }
+func ProjectKustomizationPath(project string) string {
+	return path.Join(ProjectDir(project), KustomizationFile)
+}
 func ProjectFilePath(project string) string {
 	return path.Join(ProjectDir(project), ProjectFile)
 }
@@ -80,7 +91,9 @@ type Instance struct {
 // ReleaseName is the Helm release name of the instance.
 func (i Instance) ReleaseName() string { return ReleaseName(i.Project, i.Name) }
 
-// Validate checks the fields every consumer of the file relies on.
+// Validate checks the rules of instance.yaml (okdp-sandbox/gitops/README.md),
+// the ones render-flux.sh enforces: a file it would reject must never be
+// committed.
 func (i Instance) Validate() error {
 	if err := ValidateName("project", i.Project); err != nil {
 		return err
@@ -88,16 +101,30 @@ func (i Instance) Validate() error {
 	if err := ValidateName("instance", i.Name); err != nil {
 		return err
 	}
+	if err := ValidateName("service", i.Service); err != nil {
+		return err
+	}
 	if len(i.ReleaseName()) > 53 {
 		return fmt.Errorf("the release name %q is longer than the 53 characters Helm allows", i.ReleaseName())
 	}
-	if i.Service == "" || i.Chart == "" || i.Version == "" {
-		return fmt.Errorf("instance %s/%s: service, chart and version are required", i.Project, i.Name)
+	if !chartRef.MatchString(i.Chart) {
+		return fmt.Errorf("chart %q is not an oci:// chart reference", i.Chart)
 	}
+	if path.Base(i.Chart) != i.Service {
+		return fmt.Errorf("chart %q must end with /%s", i.Chart, i.Service)
+	}
+	if !chartVersion.MatchString(i.Version) {
+		return fmt.Errorf("version %q is not an exact semantic version", i.Version)
+	}
+	seen := map[string]bool{}
 	for _, c := range i.Connections {
 		if err := ValidateName("connection", c); err != nil {
 			return err
 		}
+		if seen[c] {
+			return fmt.Errorf("connection %q listed twice", c)
+		}
+		seen[c] = true
 	}
 	return nil
 }

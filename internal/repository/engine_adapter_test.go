@@ -16,9 +16,11 @@ func helmRelease(name, target string, status map[string]any) *unstructured.Unstr
 	u := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "helm.toolkit.fluxcd.io/v2",
 		"kind":       "HelmRelease",
-		"metadata":   map[string]any{"name": name, "namespace": "okdp-releases"},
-		"spec":       map[string]any{"releaseName": name, "targetNamespace": target},
-		"status":     status,
+		"metadata": map[string]any{"name": name, "namespace": "okdp-releases", "labels": map[string]any{
+			"okdp.io/project": target, "okdp.io/instance": name,
+		}},
+		"spec":   map[string]any{"releaseName": name, "targetNamespace": target},
+		"status": status,
 	}}
 	return u
 }
@@ -61,7 +63,9 @@ func application(name, dest string, status map[string]any) *unstructured.Unstruc
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "argoproj.io/v1alpha1",
 		"kind":       "Application",
-		"metadata":   map[string]any{"name": name, "namespace": "argocd"},
+		"metadata": map[string]any{"name": name, "namespace": "argocd", "labels": map[string]any{
+			"okdp.io/project": dest, "okdp.io/instance": name,
+		}},
 		"spec": map[string]any{
 			"destination": map[string]any{"namespace": dest},
 			"sources": []any{

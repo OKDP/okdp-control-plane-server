@@ -150,7 +150,8 @@ func TestCreateStoresCredentialsInASecretAndNotInGit(t *testing.T) {
 	assert.Contains(t, file, "secretRef:\n      name: warehouse-credentials")
 	assert.NotContains(t, file, "s3cret", "a password must never be committed")
 	assert.NotContains(t, file, "reader", "secret fields stay in the Secret")
-	assert.Contains(t, store.Files(), "projects/demo/connections/kustomization.yaml", "Flux needs the conn- ConfigMap generated")
+	assert.Contains(t, store.Files()["projects/demo/kustomization.yaml"], `name: "conn-demo-warehouse"`, "Flux needs the conn- ConfigMap generated")
+	assert.Contains(t, store.Files(), "projects/demo/project.yaml", "render-flux.sh refuses a project directory without it")
 
 	secret := env.secrets.secrets["demo/warehouse-credentials"]
 	assert.Equal(t, "s3cret", string(secret["password"]))
@@ -284,7 +285,7 @@ func TestDeleteRemovesTheSecretItWrote(t *testing.T) {
 	require.NoError(t, svc.Delete(context.Background(), "demo", "warehouse"))
 
 	assert.NotContains(t, store.Files(), "projects/demo/connections/warehouse.yaml")
-	assert.NotContains(t, store.Files(), "projects/demo/connections/kustomization.yaml")
+	assert.Contains(t, store.Files()["projects/demo/kustomization.yaml"], "configMapGenerator: []")
 	_, stillThere := env.secrets.secrets["demo/warehouse-credentials"]
 	assert.False(t, stillThere)
 }

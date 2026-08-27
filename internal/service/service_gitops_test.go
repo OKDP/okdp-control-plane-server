@@ -28,7 +28,7 @@ type stubPlatform struct {
 }
 
 func (stubPlatform) GetPlatformServices(context.Context) ([]models.PlatformService, error) {
-	return []models.PlatformService{{Name: "trino", DefaultVersion: "476-1.0.0", Versions: []string{"476-1.0.0"}}}, nil
+	return []models.PlatformService{{Name: "trino", DefaultVersion: "480.0.0-p21", Versions: []string{"480.0.0-p21"}}}, nil
 }
 func (stubPlatform) GetPackageRepository(context.Context) (string, error) {
 	return "quay.io/okdp/platform-charts", nil
@@ -124,10 +124,10 @@ func TestDeployCommitsTheInstanceFiles(t *testing.T) {
 	require.NoError(t, err)
 
 	files := store.Files()
-	assert.Equal(t, "name: sql\nproject: demo\nservice: trino\nchart: oci://quay.io/okdp/platform-charts/trino\nversion: 476-1.0.0\nconnections:\n  - lake-hms\n", files["projects/demo/services/sql/instance.yaml"],
+	assert.Equal(t, "name: sql\nproject: demo\nservice: trino\nchart: oci://quay.io/okdp/platform-charts/trino\nversion: 480.0.0-p21\nconnections:\n  - lake-hms\n", files["projects/demo/services/sql/instance.yaml"],
 		"the external connection the parameters name is layered in; the internal one (demo-hive) is not a file")
 	assert.Contains(t, files["projects/demo/services/sql/values.yaml"], "workers: 2")
-	assert.Contains(t, files["projects/demo/services/sql/helmrelease.yaml"], "name: conn-demo-lake-hms")
+	assert.Contains(t, files["projects/demo/services/sql/helmrelease.yaml"], `name: "conn-demo-lake-hms"`)
 	assert.Contains(t, files, "projects/demo/services/sql/kustomization.yaml")
 	assert.Equal(t, "okdp: deploy demo/sql by alice", store.Messages[len(store.Messages)-1])
 
@@ -161,9 +161,9 @@ func TestUpdateMergesIntoValuesAndMovesTheVersion(t *testing.T) {
 	_, err := svc.DeployService(aliceContext(), "demo", models.ServiceRequest{Service: "trino", Parameters: map[string]any{"workers": float64(2)}})
 	require.NoError(t, err)
 
-	engine.statuses["demo-trino"] = repository.EngineStatus{Found: true, Phase: repository.PhaseReady, Revision: "476-1.0.0"}
+	engine.statuses["demo-trino"] = repository.EngineStatus{Found: true, Phase: repository.PhaseReady, Revision: "480.0.0-p21"}
 	instance, err := svc.UpdateServiceParameters(aliceContext(), "demo", "trino", models.ServiceUpdateRequest{
-		Tag:        "477-1.0.0",
+		Tag:        "481.0.0-p01",
 		Parameters: map[string]any{"catalogs": []any{map[string]any{"name": "lake", "hive": "lake-hms"}}},
 	})
 	require.NoError(t, err)
@@ -171,7 +171,7 @@ func TestUpdateMergesIntoValuesAndMovesTheVersion(t *testing.T) {
 	values := store.Files()["projects/demo/services/trino/values.yaml"]
 	assert.Contains(t, values, "workers: 2", "keys not submitted are kept")
 	assert.Contains(t, values, "hive: lake-hms")
-	assert.Contains(t, store.Files()["projects/demo/services/trino/instance.yaml"], "version: 477-1.0.0")
+	assert.Contains(t, store.Files()["projects/demo/services/trino/instance.yaml"], "version: 481.0.0-p01")
 	assert.Contains(t, store.Files()["projects/demo/services/trino/instance.yaml"], "- lake-hms")
 	assert.Equal(t, "okdp: update demo/trino by alice", store.Messages[len(store.Messages)-1])
 	assert.Equal(t, repository.PhaseUpdating, instance.Status, "the engine still runs the previous version")
@@ -207,9 +207,9 @@ func TestListAssemblesGitAndClusterState(t *testing.T) {
 	d := svc.deployments
 	for _, st := range []gitops.InstanceState{
 		{Instance: gitops.Instance{Name: "hive", Project: "demo", Service: "hive-metastore", Chart: "oci://r/hive-metastore", Version: "1.0.0"}},
-		{Instance: gitops.Instance{Name: "sql", Project: "demo", Service: "trino", Chart: "oci://r/trino", Version: "476-1.0.0"},
+		{Instance: gitops.Instance{Name: "sql", Project: "demo", Service: "trino", Chart: "oci://r/trino", Version: "480.0.0-p21"},
 			Values: map[string]any{"catalogs": []any{map[string]any{"hive": "demo-hive"}}}},
-		{Instance: gitops.Instance{Name: "new", Project: "demo", Service: "trino", Chart: "oci://r/trino", Version: "476-1.0.0"}},
+		{Instance: gitops.Instance{Name: "new", Project: "demo", Service: "trino", Chart: "oci://r/trino", Version: "480.0.0-p21"}},
 	} {
 		_, err := d.CreateInstance(context.Background(), "bob", st)
 		require.NoError(t, err)

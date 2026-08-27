@@ -9,7 +9,7 @@ import (
 
 func trino() InstanceState {
 	return InstanceState{
-		Instance: Instance{Name: "trino", Project: "demo", Service: "trino", Chart: "oci://quay.io/okdp/platform-charts/trino", Version: "476-1.0.0", Connections: []string{"lake"}},
+		Instance: Instance{Name: "trino", Project: "demo", Service: "trino", Chart: "oci://quay.io/okdp/platform-charts/trino", Version: "480.0.0-p21", Connections: []string{"lake"}},
 		Values:   map[string]any{"workers": float64(2)},
 	}
 }
@@ -37,7 +37,7 @@ func TestInstanceLifecycleWritesTheContractFiles(t *testing.T) {
 		"projects/demo/services/trino/helmrelease.yaml",
 		"projects/demo/services/trino/kustomization.yaml",
 		"projects/demo/connections/lake.yaml",
-		"projects/demo/connections/kustomization.yaml",
+		"projects/demo/kustomization.yaml",
 	} {
 		if _, ok := files[p]; !ok {
 			t.Errorf("missing %s", p)
@@ -79,12 +79,15 @@ func TestInstanceLifecycleWritesTheContractFiles(t *testing.T) {
 	if _, err := d.DeleteConnection(ctx, "alice", "demo", "lake"); err != nil {
 		t.Fatalf("delete unused connection: %v", err)
 	}
-	if _, ok := store.Files()["projects/demo/connections/kustomization.yaml"]; ok {
-		t.Errorf("the connections kustomization outlived the last connection")
+	if got := store.Files()["projects/demo/kustomization.yaml"]; !strings.Contains(got, "configMapGenerator: []") || !strings.Contains(got, "- services/trino") {
+		t.Errorf("the project kustomization was not rewritten:\n%s", got)
 	}
 
 	if _, err := d.DeleteInstance(ctx, "bob", "demo", "trino"); err != nil {
 		t.Fatal(err)
+	}
+	if got := store.Files()["projects/demo/kustomization.yaml"]; !strings.Contains(got, "resources: []") {
+		t.Errorf("the deleted instance is still listed:\n%s", got)
 	}
 	if _, err := d.GetInstance(ctx, "demo", "trino"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("get after delete: %v", err)
@@ -114,5 +117,46 @@ func TestUpdateCatalogKeepsWhatItDoesNotTouch(t *testing.T) {
 	got, _ := d.ReadCatalog(context.Background())
 	if got["defaultRepository"] != "quay.io/okdp/platform-charts" || len(got["categories"].([]any)) != 1 {
 		t.Fatalf("catalog = %v", got)
+	}
+}
+
+// Project a-b instance c and project a instance b-c are both release a-b-c,
+// and both engines would fight over it.
+func TestCreateRefusesACollidingReleaseName(t *testing.T) {
+	d := NewDeployments(NewMemoryStore(nil), nil)
+	ctx := context.Background()
+	mk := func(project, name string) InstanceState {
+		return InstanceState{Instance: Instance{Name: name, Project: project, Service: "hive-metastore", Chart: "oci://r/hive-metastore", Version: "1.0.0"}}
+	}
+	if _, err := d.CreateInstance(ctx, "alice", mk("a-b", "c")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.CreateInstance(ctx, "alice", mk("a", "b-c")); !errors.Is(err, ErrExists) {
+		t.Fatalf("err = %v, want ErrExists", err)
+	}
+	if _, err := d.PutConnection(ctx, "alice", Connection{Name: "c", Project: "a-b", Contract: "hive"}, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.PutConnection(ctx, "alice", Connection{Name: "b-c", Project: "a", Contract: "hive"}, true); !errors.Is(err, ErrExists) {
+		t.Fatalf("conn- ConfigMap collision: err = %v, want ErrExists", err)
+	}
+}
+
+func TestUpdateCatalogKeepsTheCommentsOfTheFile(t *testing.T) {
+	raw := "# Licence header.\n\n# Console service catalog.\ndefaultRepository: oci://quay.io/okdp/platform-charts # the registry\ncategories:\n  - title: SQL\n    services: []\n"
+	store := NewMemoryStore(map[string]string{CatalogPath: raw})
+	d := NewDeployments(store, nil)
+	_, err := d.UpdateCatalog(context.Background(), "alice", "trino", func(c map[string]any) error {
+		c["categories"] = []any{map[string]any{"title": "SQL", "services": []any{map[string]any{"name": "trino", "versions": []any{"480.0.0-p21"}, "default": "480.0.0-p21"}}}}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := store.Files()[CatalogPath]
+	for _, want := range []string{"# Licence header.", "# Console service catalog.", "# the registry", "name: trino"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("%q lost:\n%s", want, got)
+		}
 	}
 }
