@@ -73,8 +73,8 @@ What the server writes (relative to `GITOPS_PATH`):
 ```
 platform/catalog.yaml                          # console service catalog
 projects/<project>/project.yaml
+projects/<project>/kustomization.yaml          # Flux only, generated: services + connection ConfigMaps
 projects/<project>/connections/<name>.yaml     # external connection (credentials stay in a Secret)
-projects/<project>/connections/kustomization.yaml   # Flux only, generated
 projects/<project>/services/<instance>/instance.yaml
 projects/<project>/services/<instance>/values.yaml  # the submitted parameters only
 projects/<project>/services/<instance>/helmrelease.yaml   # Flux only, generated
@@ -82,7 +82,10 @@ projects/<project>/services/<instance>/kustomization.yaml # Flux only, generated
 ```
 
 Commits read `okdp: <action> <project>/<instance> by <user>`. Writes are serialised and
-replayed on top of the new revision when someone else pushed in between. The reference
+replayed on top of the new revision when someone else pushed in between. The generated
+Flux files are byte-identical to what `scripts/render-flux.sh` of okdp-sandbox produces
+(the format is specified in its `gitops/README.md`; the golden tests of
+`internal/gitops` replay its fixtures and run the script itself). The reference
 layout, and the script producing the same Flux files by hand, live in
 [okdp-sandbox `gitops/`](https://github.com/OKDP/okdp-sandbox).
 
