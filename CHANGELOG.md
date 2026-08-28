@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.8.0](https://github.com/OKDP/okdp-control-plane-server/compare/v0.7.1...v0.8.0) (2026-08-28)
+
+
+### Features
+
+* **secret-stores:** let kubernetes auth pick its ServiceAccount ([#76](https://github.com/OKDP/okdp-control-plane-server/issues/76)) ([061c64f](https://github.com/OKDP/okdp-control-plane-server/commit/061c64f2dd0bc7351b753174f0b2658fd1c9b664))
+
+
+### Bug Fixes
+
+* **docs:** align the README versions with the released 0.7.1 ([d3e9fda](https://github.com/OKDP/okdp-control-plane-server/commit/d3e9fda2309bdf9f700461da908d0ce15d6869f9))
+* **external-secrets:** answer 400 on a rejected import, not 500 ([9c2fec1](https://github.com/OKDP/okdp-control-plane-server/commit/9c2fec144c4276581156ce9531a4a6f938a15c31))
+* **external-secrets:** refuse a negative refresh interval, and write the tests in English ([9014410](https://github.com/OKDP/okdp-control-plane-server/commit/9014410a030a6eb8eca3bf68e8e1355cfcc6a39b))
+* **secret-stores:** clone the CA bundle in DeepCopy ([3a50e9f](https://github.com/OKDP/okdp-control-plane-server/commit/3a50e9f3bbf93c6c43a4cbfe22ed5809e93bc658))
+* **secret-stores:** look the Vault token up with GET, not POST ([a2448f7](https://github.com/OKDP/okdp-control-plane-server/commit/a2448f7821abbcb544eb15706553e924f7af91a6)), closes [#73](https://github.com/OKDP/okdp-control-plane-server/issues/73)
+* **secret-stores:** send the Vault CA bundle as base64, as the CRD requires ([ccca43d](https://github.com/OKDP/okdp-control-plane-server/commit/ccca43d840d0932a40d69c8ad5665fb3b09f9cc4))
+* **sse:** capture the request context before the scanner goroutine ([1c6c8eb](https://github.com/OKDP/okdp-control-plane-server/commit/1c6c8eb72df3057f56c6eaa468599a17e00854af))
+* **sse:** keep idle streams alive through proxies ([e2db7f3](https://github.com/OKDP/okdp-control-plane-server/commit/e2db7f3c0219ca20794102ecc6f6ca009db13579))
+* **sse:** keep the log-follow streams alive too ([04c1900](https://github.com/OKDP/okdp-control-plane-server/commit/04c19003c8e0cb76d4dae1cfb69c5443bfce885c))
+
 ## [0.7.1](https://github.com/OKDP/okdp-control-plane-server/compare/v0.7.0...v0.7.1) (2026-08-23)
 
 
