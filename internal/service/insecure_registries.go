@@ -6,11 +6,11 @@ import "strings"
 // registries declared plain-HTTP through INSECURE_OCI_REGISTRIES.
 //
 // This exists for development sandboxes, where packages are pushed to a local
-// registry with no TLS: the schema dump and the Release must both be told to
+// registry with no TLS: the chart schema pull and the tag listing must be told to
 // speak plain HTTP, or every fetch dies on a handshake. Production registries
 // are never listed, so the default behaviour stays strict HTTPS.
 func insecureOCIHost(repository string, insecureHosts []string) bool {
-	host := repository
+	host := strings.TrimPrefix(repository, "oci://")
 	if i := strings.IndexByte(host, '/'); i >= 0 {
 		host = host[:i]
 	}

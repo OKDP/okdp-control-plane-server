@@ -203,6 +203,7 @@ func (s *DefaultPackageSchemaService) ListPackageTags(ctx context.Context, servi
 
 // listOCITags fetches available tags from the OCI registry for a given package.
 func (s *DefaultPackageSchemaService) listOCITags(packageRepo, serviceName string) ([]string, error) {
+	packageRepo = strings.TrimPrefix(packageRepo, "oci://")
 	// packageRepo is like "quay.io/kubotal/packages-dev"
 	scheme := "https"
 	if insecureOCIHost(packageRepo, s.insecureRegistries) {
@@ -420,6 +421,7 @@ func (s *DefaultPackageSchemaService) fetchAndCache(serviceName, tag, packageRep
 		}
 	}
 
+	packageRepo = strings.TrimPrefix(packageRepo, "oci://")
 	repository := fmt.Sprintf("%s/%s", packageRepo, serviceName)
 	ctx, cancel := context.WithTimeout(context.Background(), chartFetchTimeout)
 	defer cancel()
