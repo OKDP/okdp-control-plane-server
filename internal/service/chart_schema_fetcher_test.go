@@ -34,7 +34,7 @@ func chartArchive(t *testing.T, files map[string]string) []byte {
 
 func TestValuesSchemaFromChartArchivePicksTheChartsOwn(t *testing.T) {
 	archive := chartArchive(t, map[string]string{
-		"trino/Chart.yaml":                    "name: trino\n",
+		"trino/Chart.yaml":                    "name: trino\ndependencies:\n  - name: okdp-lib\n  - name: opa\n    alias: policy\n",
 		"trino/charts/opa/values.schema.json": `{"title": "subchart"}`,
 		"trino/values.schema.json":            `{"title": "trino"}`,
 	})
@@ -42,8 +42,11 @@ func TestValuesSchemaFromChartArchivePicksTheChartsOwn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if schema["title"] != "trino" {
-		t.Fatalf("got the schema titled %v", schema["title"])
+	if schema.Schema["title"] != "trino" {
+		t.Fatalf("got the schema titled %v", schema.Schema["title"])
+	}
+	if strings.Join(schema.Dependencies, ",") != "okdp-lib,policy" {
+		t.Fatalf("dependencies = %v", schema.Dependencies)
 	}
 
 	_, err = valuesSchemaFromChartArchive(bytes.NewReader(chartArchive(t, map[string]string{"x/Chart.yaml": "name: x\n"})))
@@ -88,7 +91,7 @@ func TestOCIChartSchemaFetcherPullsFromARegistry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if schema["title"] != "hive" {
+	if schema.Schema["title"] != "hive" {
 		t.Fatalf("schema = %v", schema)
 	}
 }

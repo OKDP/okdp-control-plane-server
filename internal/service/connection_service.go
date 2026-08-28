@@ -176,7 +176,17 @@ func (s *DefaultConnectionService) List(ctx context.Context, namespace string) (
 	return result, nil
 }
 
+// withoutSecretIfNone drops a named Secret for a contract without secret
+// fields: such a connection carries no secretRef at all.
+func (s *DefaultConnectionService) withoutSecretIfNone(req models.ConnectionRequest) models.ConnectionRequest {
+	if descriptor, known := s.catalog.Get(req.Type); known && len(descriptor.SecretFields()) == 0 {
+		req.ExistingSecret = ""
+	}
+	return req
+}
+
 func (s *DefaultConnectionService) Create(ctx context.Context, namespace string, req models.ConnectionRequest) (*models.ConnectionResponse, error) {
+	req = s.withoutSecretIfNone(req)
 	descriptor, values, err := s.validateRequest(ctx, namespace, req, false)
 	if err != nil {
 		return nil, err
@@ -237,6 +247,7 @@ func (s *DefaultConnectionService) Create(ctx context.Context, namespace string,
 
 func (s *DefaultConnectionService) Update(ctx context.Context, namespace, name string, req models.ConnectionRequest) (*models.ConnectionResponse, error) {
 	req.Name = name
+	req = s.withoutSecretIfNone(req)
 	descriptor, values, err := s.validateRequest(ctx, namespace, req, true)
 	if err != nil {
 		return nil, err
@@ -260,7 +271,13 @@ func (s *DefaultConnectionService) Update(ctx context.Context, namespace, name s
 	// exists.
 	orphanedSecret := ""
 
-	if req.ExistingSecret != "" {
+	if len(descriptor.SecretFields()) == 0 {
+		// No secret field, no secretRef.
+		req.ExistingSecret, secretName = "", ""
+		if existing.SecretRef == ownedName {
+			orphanedSecret = ownedName
+		}
+	} else if req.ExistingSecret != "" {
 		if existing.SecretRef == ownedName && req.ExistingSecret != ownedName {
 			orphanedSecret = ownedName
 		}
@@ -403,8 +420,18 @@ func (s *DefaultConnectionService) outputsOf(ctx context.Context, project string
 	return s.descriptors.List(ctx, project)
 }
 
+// internalCapable reports whether an instance output of that contract can be
+// referenced by name: okdp.connection resolves an internal reference only for
+// contracts declaring a naming convention (x-okdp-internal). The others (s3,
+// database-server) are external only.
+func (s *DefaultConnectionService) internalCapable(contract string) bool {
+	descriptor, known := s.catalog.Get(contract)
+	return known && descriptor.Internal
+}
+
 // ListInternal returns the connections the project's own instances publish
-// (their descriptor's outputs.yaml), and only those.
+// (their descriptor's outputs.yaml) that other instances can reference by
+// name, and only those.
 func (s *DefaultConnectionService) ListInternal(ctx context.Context, project string) ([]models.InternalConnection, error) {
 	descriptors, err := s.outputsOf(ctx, project)
 	if err != nil {
@@ -413,6 +440,9 @@ func (s *DefaultConnectionService) ListInternal(ctx context.Context, project str
 	result := make([]models.InternalConnection, 0)
 	for _, d := range descriptors {
 		for _, output := range d.Outputs {
+			if !s.internalCapable(output.Contract) {
+				continue
+			}
 			result = append(result, s.outputToInternal(d, output, project))
 		}
 	}
@@ -626,6 +656,9 @@ func (s *DefaultConnectionService) ListSelectable(ctx context.Context, project, 
 	for _, d := range descriptors {
 		for _, output := range d.Outputs {
 			if contract != "" && output.Contract != contract {
+				continue
+			}
+			if !s.internalCapable(output.Contract) {
 				continue
 			}
 			result = append(result, models.SelectableConnection{

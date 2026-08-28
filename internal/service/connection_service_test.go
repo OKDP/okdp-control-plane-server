@@ -368,25 +368,49 @@ func TestListInternalReadsTheDescriptorOutputs(t *testing.T) {
 
 func TestListSelectableOffersBothKindsOfTheContract(t *testing.T) {
 	svc, env, _ := newServiceUnderTest(t)
-	_, err := svc.Create(context.Background(), "demo", postgresRequest())
+	_, err := svc.Create(context.Background(), "demo", models.ConnectionRequest{
+		Name: "shared-hms", Type: "hive", Values: map[string]any{"thriftUri": "thrift://hms:9083"},
+	})
+	require.NoError(t, err)
+	_, err = svc.Create(context.Background(), "demo", postgresRequest())
 	require.NoError(t, err)
 	env.descriptors.list = []repository.Descriptor{
+		descriptorWith("demo-hive", repository.DescriptorOutput{Name: "demo-hive", Contract: "hive"}),
+		// database-server has no naming convention: an output of it cannot be
+		// referenced by name, so it is never offered.
 		descriptorWith("demo-pg", repository.DescriptorOutput{Name: "demo-pg", Contract: "database-server"}),
-		descriptorWith("demo-trino", repository.DescriptorOutput{Name: "demo-trino", Contract: "trino"}),
 	}
 
-	selectable, err := svc.ListSelectable(context.Background(), "demo", "database-server")
+	selectable, err := svc.ListSelectable(context.Background(), "demo", "hive")
 	require.NoError(t, err)
 	require.Len(t, selectable, 2)
-	assert.Equal(t, "demo-pg", selectable[0].Name)
+	assert.Equal(t, "demo-hive", selectable[0].Name)
 	assert.True(t, selectable[0].Managed)
-	assert.Equal(t, "demo-pg", selectable[0].ProvidedBy)
-	assert.Equal(t, "warehouse", selectable[1].Name)
+	assert.Equal(t, "demo-hive", selectable[0].ProvidedBy)
+	assert.Equal(t, "shared-hms", selectable[1].Name)
 	assert.False(t, selectable[1].Managed)
 
-	all, err := svc.ListSelectable(context.Background(), "demo", "")
+	databases, err := svc.ListSelectable(context.Background(), "demo", "database-server")
 	require.NoError(t, err)
-	assert.Len(t, all, 3)
+	require.Len(t, databases, 1)
+	assert.Equal(t, "warehouse", databases[0].Name)
+
+	internal, err := svc.ListInternal(context.Background(), "demo")
+	require.NoError(t, err)
+	require.Len(t, internal, 1)
+	assert.Equal(t, "demo-hive", internal[0].Name)
+}
+
+// A contract without secret fields carries no secretRef, even when a Secret
+// is named.
+func TestAContractWithoutSecretsHasNoSecretRef(t *testing.T) {
+	svc, _, store := newServiceUnderTest(t)
+	response, err := svc.Create(context.Background(), "demo", models.ConnectionRequest{
+		Name: "shared-hms", Type: "hive", ExistingSecret: "whatever", Values: map[string]any{"thriftUri": "thrift://hms:9083"},
+	})
+	require.NoError(t, err)
+	assert.NotContains(t, store.Files()["projects/demo/connections/shared-hms.yaml"], "secretRef")
+	assert.Nil(t, response.CredentialsSecret)
 }
 
 func TestListConsumersReadsTheBoundConnections(t *testing.T) {

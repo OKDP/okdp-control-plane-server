@@ -113,6 +113,7 @@ type contractSchema struct {
 	Category     string                    `json:"x-okdp-category"`
 	External     bool                      `json:"x-okdp-external"`
 	EndpointFrom []string                  `json:"x-okdp-endpoint-from"`
+	Internal     map[string]any            `json:"x-okdp-internal"`
 	Required     []string                  `json:"required"`
 	Properties   map[string]propertySchema `json:"properties"`
 }
@@ -184,6 +185,7 @@ func descriptorFromSchema(raw []byte) (*models.ContractDescriptor, error) {
 		Icon:         cs.Icon,
 		Category:     cs.Category,
 		External:     cs.External,
+		Internal:     len(cs.Internal) > 0,
 		EndpointFrom: cs.EndpointFrom,
 	}
 	for _, name := range order {

@@ -1018,6 +1018,12 @@ func (s *DefaultServiceService) resolvePlatformService(ctx context.Context, name
 }
 
 func (s *DefaultServiceService) validateParameters(ctx context.Context, serviceName, tag string, params map[string]any) error {
+	// Filled by the platform and the connection layers, never by values.yaml.
+	for _, key := range PlatformKeys {
+		if _, set := params[key]; set {
+			return invalid("parameter %q is reserved: the platform fills it", key)
+		}
+	}
 	if s.schemaService == nil {
 		return nil
 	}

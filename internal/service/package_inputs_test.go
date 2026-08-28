@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"os"
 	"testing"
 )
 
@@ -26,7 +27,7 @@ func TestInputsFromMarkersReadsAConnectionRef(t *testing.T) {
 		t.Fatalf("got %d inputs, want 2 (the KuboCD marker is gone): %+v", len(inputs), inputs)
 	}
 	// Sorted by parameter name.
-	if inputs[0].Parameter != "metadataDb" || inputs[0].Optional {
+	if inputs[0].Parameter != "metadataDb" || inputs[0].Path != "metadataDb" || inputs[0].Optional {
 		t.Errorf("metadataDb = %+v, want required (listed in the parent's required array)", inputs[0])
 	}
 	if inputs[0].Contract != "database-server" || inputs[0].Description != "Metadata database" {
@@ -73,5 +74,47 @@ func TestParameterSchemaDropsThePlatformKeys(t *testing.T) {
 	// The chart's own document is not modified.
 	if _, ok := chart["properties"].(map[string]any)["global"]; !ok {
 		t.Errorf("parameterSchema mutated its input")
+	}
+}
+
+// The trino chart of the platform-packages spike (a copy of its
+// values.schema.json): refs live in the items of catalog lists.
+func TestInputsFromMarkersWalksNestedRefs(t *testing.T) {
+	raw, err := os.ReadFile("testdata/trino.values.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var chart map[string]any
+	if err := json.Unmarshal(raw, &chart); err != nil {
+		t.Fatal(err)
+	}
+	schema := parameterSchema(chart, "okdp-lib")
+	for _, reserved := range []string{"global", "connections", "okdp-lib"} {
+		if _, ok := schema["properties"].(map[string]any)[reserved]; ok {
+			t.Errorf("%s is offered as a form field", reserved)
+		}
+	}
+
+	inputs := inputsFromMarkers(schema)
+	got := map[string]string{}
+	for _, in := range inputs {
+		got[in.Path] = in.Contract
+		if in.Parameter != "" {
+			t.Errorf("%s is nested, it names no root parameter: %+v", in.Path, in)
+		}
+	}
+	want := map[string]string{
+		"hiveCatalogs[].metastore":  "hive",
+		"hiveCatalogs[].storage":    "s3",
+		"icebergCatalogs[].catalog": "iceberg-catalog",
+		"icebergCatalogs[].storage": "s3",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("inputs = %v, want %v", got, want)
+	}
+	for p, c := range want {
+		if got[p] != c {
+			t.Errorf("%s: contract %q, want %q", p, got[p], c)
+		}
 	}
 }

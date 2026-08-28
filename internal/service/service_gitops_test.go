@@ -151,6 +151,8 @@ func TestDeployRefusesInvalidParametersWithoutCommitting(t *testing.T) {
 	assert.True(t, IsValidationError(err), "got %v", err)
 	_, err = svc.DeployService(aliceContext(), "demo", models.ServiceRequest{Service: "trino", InstanceName: "Bad_Name"})
 	assert.True(t, IsValidationError(err), "got %v", err)
+	_, err = svc.DeployService(aliceContext(), "demo", models.ServiceRequest{Service: "trino", Parameters: map[string]any{"global": map[string]any{}}})
+	assert.True(t, IsValidationError(err), "global is the platform's: got %v", err)
 
 	assert.Equal(t, before, len(store.Messages), "nothing may be committed")
 }

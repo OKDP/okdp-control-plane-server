@@ -425,12 +425,12 @@ func (s *DefaultPackageSchemaService) fetchAndCache(serviceName, tag, packageRep
 	repository := fmt.Sprintf("%s/%s", packageRepo, serviceName)
 	ctx, cancel := context.WithTimeout(context.Background(), chartFetchTimeout)
 	defer cancel()
-	raw, err := s.charts.FetchValuesSchema(ctx, repository, tag, insecureOCIHost(packageRepo, s.insecureRegistries))
+	chart, err := s.charts.FetchValuesSchema(ctx, repository, tag, insecureOCIHost(packageRepo, s.insecureRegistries))
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch the schema of oci://%s:%s: %w", repository, tag, err)
 	}
 
-	schema := parameterSchema(raw)
+	schema := parameterSchema(chart.Schema, chart.Dependencies...)
 	entry := &schemaCacheEntry{
 		schema:    schema,
 		inputs:    inputsFromMarkers(schema),
@@ -445,27 +445,33 @@ func (s *DefaultPackageSchemaService) fetchAndCache(serviceName, tag, packageRep
 // accepts the connection and never answers pins the request forever.
 const chartFetchTimeout = 60 * time.Second
 
-// platformKeys are the root properties of every OKDP chart schema that the
+// PlatformKeys are the root properties of every OKDP chart schema that the
 // platform fills, never the user: the platform values and the external
-// connection layers.
-var platformKeys = []string{"global", "connections"}
+// connection layers. The chart's dependencies (okdp-lib, former modules) are
+// reserved the same way.
+var PlatformKeys = []string{"global", "connections"}
 
 // parameterSchema turns a chart's values.schema.json into the schema of the
-// user parameters: the same document without the platform-filled root
-// properties. The console renders it as the deployment form, and submitted
-// parameters are validated against it. The x-ui-* keywords are the chart's
-// own, passed through untouched.
-func parameterSchema(chartSchema map[string]any) map[string]any {
+// user parameters: the same document without the reserved root properties
+// (PlatformKeys and the dependency keys). The console renders it as the
+// deployment form, and submitted parameters are validated against it: with
+// the chart's additionalProperties: false, a reserved key is refused. The
+// x-ui-* keywords are the chart's own, passed through untouched.
+func parameterSchema(chartSchema map[string]any, dependencies ...string) map[string]any {
+	reserved := map[string]bool{}
+	for _, key := range append(append([]string{}, PlatformKeys...), dependencies...) {
+		reserved[key] = true
+	}
 	result := deepCopyMap(chartSchema)
 	if props, ok := result["properties"].(map[string]any); ok {
-		for _, key := range platformKeys {
+		for key := range reserved {
 			delete(props, key)
 		}
 	}
 	if required, ok := result["required"].([]any); ok {
 		kept := make([]any, 0, len(required))
 		for _, r := range required {
-			if name, _ := r.(string); name == "global" || name == "connections" {
+			if name, _ := r.(string); reserved[name] {
 				continue
 			}
 			kept = append(kept, r)
@@ -486,57 +492,77 @@ func deepCopyMap(src map[string]any) map[string]any {
 // connection of a contract: {"x-okdp-connection-ref": {"contract": "<contract>"}}.
 const ConnectionRefKeyword = "x-okdp-connection-ref"
 
-// inputsFromMarkers reads the connection inputs a chart declares: the root
-// parameters carrying an x-okdp-connection-ref marker. The parameter IS the
-// input, no template to reverse-engineer.
-//
-// Only top-level parameters are reported: a ref nested in an array produces
-// one input per element, which no deployment form can offer a static choice
-// for.
+// inputsFromMarkers reads the connection inputs a chart declares: every
+// property carrying an x-okdp-connection-ref marker, at any depth (a Trino
+// catalog list holds one per item). Path is the JSON path of the property
+// (hiveCatalogs[].metastore). A root property is also a Parameter the form can
+// offer a choice for; a nested one is reported so the console knows the
+// contract of the field it renders inside its list.
 func inputsFromMarkers(parameters map[string]any) []models.PackageInput {
-	properties, ok := parameters["properties"].(map[string]any)
-	if !ok {
-		return nil
-	}
+	var inputs []models.PackageInput
+	walkConnectionRefs(parameters, "", func(p string, property map[string]any, contract string, required bool) {
+		description, _ := property["description"].(string)
+		// A default lets the form say the binding is inherited instead of
+		// showing None, which reads as "nothing", the opposite of the truth.
+		defaultValue, _ := property["default"].(string)
+		input := models.PackageInput{
+			Alias:       p,
+			Path:        p,
+			Contract:    contract,
+			Optional:    !required,
+			Default:     defaultValue,
+			Description: description,
+		}
+		if !strings.ContainsAny(p, ".[") {
+			input.Parameter = p
+		}
+		inputs = append(inputs, input)
+	})
+	sort.Slice(inputs, func(i, j int) bool { return inputs[i].Path < inputs[j].Path })
+	return inputs
+}
 
-	// The required flag of a connection ref lives in the PARENT's required
-	// array, not in the marker.
+// walkConnectionRefs calls fn for every property of node marked
+// x-okdp-connection-ref. The required flag of a ref lives in its PARENT's
+// required array.
+func walkConnectionRefs(node map[string]any, prefix string, fn func(path string, property map[string]any, contract string, required bool)) {
 	required := map[string]bool{}
-	if list, ok := parameters["required"].([]any); ok {
+	if list, ok := node["required"].([]any); ok {
 		for _, item := range list {
 			if name, ok := item.(string); ok {
 				required[name] = true
 			}
 		}
 	}
-
-	var inputs []models.PackageInput
-	for name, raw := range properties {
-		property, ok := raw.(map[string]any)
-		if !ok {
-			continue
+	if properties, ok := node["properties"].(map[string]any); ok {
+		for name, raw := range properties {
+			property, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			p := name
+			if prefix != "" {
+				p = prefix + "." + name
+			}
+			if marker, ok := property[ConnectionRefKeyword].(map[string]any); ok {
+				if contract, _ := marker["contract"].(string); contract != "" {
+					fn(p, property, contract, required[name])
+				}
+				continue
+			}
+			walkConnectionRefs(property, p, fn)
 		}
-		marker, ok := property[ConnectionRefKeyword].(map[string]any)
-		if !ok {
-			continue
-		}
-		contract, _ := marker["contract"].(string)
-		if contract == "" {
-			continue
-		}
-		description, _ := property["description"].(string)
-		// A default lets the form say the binding is inherited instead of
-		// showing None, which reads as "nothing", the opposite of the truth.
-		defaultValue, _ := property["default"].(string)
-		inputs = append(inputs, models.PackageInput{
-			Alias:       name,
-			Contract:    contract,
-			Parameter:   name,
-			Optional:    !required[name],
-			Default:     defaultValue,
-			Description: description,
-		})
 	}
-	sort.Slice(inputs, func(i, j int) bool { return inputs[i].Parameter < inputs[j].Parameter })
-	return inputs
+	if items, ok := node["items"].(map[string]any); ok {
+		walkConnectionRefs(items, prefix+"[]", fn)
+	}
+	for _, combinator := range []string{"allOf", "anyOf", "oneOf"} {
+		if list, ok := node[combinator].([]any); ok {
+			for _, raw := range list {
+				if sub, ok := raw.(map[string]any); ok {
+					walkConnectionRefs(sub, prefix, fn)
+				}
+			}
+		}
+	}
 }

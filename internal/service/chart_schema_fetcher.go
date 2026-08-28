@@ -12,17 +12,29 @@ import (
 	"strings"
 
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+	"gopkg.in/yaml.v3"
 	"oras.land/oras-go/v2/content"
 	"oras.land/oras-go/v2/registry/remote"
 	"oras.land/oras-go/v2/registry/remote/auth"
 	"oras.land/oras-go/v2/registry/remote/retry"
 )
 
+// ChartSchema is what the console needs from a chart version.
+type ChartSchema struct {
+	// Schema is the chart's root values.schema.json.
+	Schema map[string]any
+	// Dependencies are the values keys of the chart's dependencies (alias,
+	// else name, from Chart.yaml): okdp-lib and the former modules. They are
+	// the chart's business, never user parameters.
+	Dependencies []string
+}
+
 // ChartSchemaFetcher reads the values.schema.json of a chart version.
 type ChartSchemaFetcher interface {
 	// FetchValuesSchema pulls repository:tag (repository without scheme, e.g.
-	// quay.io/okdp/platform-charts/trino) and returns its root values.schema.json.
-	FetchValuesSchema(ctx context.Context, repository, tag string, plainHTTP bool) (map[string]any, error)
+	// quay.io/okdp/platform-charts/trino) and reads its root values.schema.json
+	// and Chart.yaml.
+	FetchValuesSchema(ctx context.Context, repository, tag string, plainHTTP bool) (*ChartSchema, error)
 }
 
 // Media type of the layer holding a Helm chart archive in an OCI registry.
@@ -42,7 +54,7 @@ func NewOCIChartSchemaFetcher() *OCIChartSchemaFetcher {
 	return &OCIChartSchemaFetcher{client: &auth.Client{Client: retry.DefaultClient, Cache: auth.NewCache()}}
 }
 
-func (f *OCIChartSchemaFetcher) FetchValuesSchema(ctx context.Context, repository, tag string, plainHTTP bool) (map[string]any, error) {
+func (f *OCIChartSchemaFetcher) FetchValuesSchema(ctx context.Context, repository, tag string, plainHTTP bool) (*ChartSchema, error) {
 	repo, err := remote.NewRepository(strings.TrimPrefix(repository, "oci://"))
 	if err != nil {
 		return nil, err
@@ -81,33 +93,60 @@ func (f *OCIChartSchemaFetcher) FetchValuesSchema(ctx context.Context, repositor
 	return nil, errors.New("the artifact holds no Helm chart layer")
 }
 
-// valuesSchemaFromChartArchive extracts <chart>/values.schema.json from a
-// chart .tgz. Subcharts carry their own under <chart>/charts/, which are not
-// the chart's.
-func valuesSchemaFromChartArchive(r io.Reader) (map[string]any, error) {
+// valuesSchemaFromChartArchive extracts <chart>/values.schema.json and the
+// dependencies of <chart>/Chart.yaml from a chart .tgz. Subcharts carry their
+// own under <chart>/charts/, which are not the chart's.
+func valuesSchemaFromChartArchive(r io.Reader) (*ChartSchema, error) {
 	gz, err := gzip.NewReader(r)
 	if err != nil {
 		return nil, fmt.Errorf("the chart is not a gzip archive: %w", err)
 	}
 	defer gz.Close()
 	tr := tar.NewReader(gz)
+	result := &ChartSchema{}
 	for {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {
-			return nil, errors.New("the chart has no values.schema.json")
+			break
 		}
 		if err != nil {
 			return nil, fmt.Errorf("reading the chart archive: %w", err)
 		}
 		name := path.Clean(hdr.Name)
 		dir, file := path.Split(name)
-		if file != "values.schema.json" || strings.Count(strings.Trim(dir, "/"), "/") != 0 || dir == "" {
+		if dir == "" || strings.Count(strings.Trim(dir, "/"), "/") != 0 {
 			continue
 		}
-		var schema map[string]any
-		if err := json.NewDecoder(tr).Decode(&schema); err != nil {
-			return nil, fmt.Errorf("invalid values.schema.json: %w", err)
+		switch file {
+		case "values.schema.json":
+			if err := json.NewDecoder(tr).Decode(&result.Schema); err != nil {
+				return nil, fmt.Errorf("invalid values.schema.json: %w", err)
+			}
+		case "Chart.yaml":
+			var chart struct {
+				Dependencies []struct {
+					Name  string `yaml:"name"`
+					Alias string `yaml:"alias"`
+				} `yaml:"dependencies"`
+			}
+			data, err := io.ReadAll(tr)
+			if err != nil {
+				return nil, err
+			}
+			if err := yaml.Unmarshal(data, &chart); err != nil {
+				return nil, fmt.Errorf("invalid Chart.yaml: %w", err)
+			}
+			for _, d := range chart.Dependencies {
+				key := d.Alias
+				if key == "" {
+					key = d.Name
+				}
+				result.Dependencies = append(result.Dependencies, key)
+			}
 		}
-		return schema, nil
 	}
+	if result.Schema == nil {
+		return nil, errors.New("the chart has no values.schema.json")
+	}
+	return result, nil
 }

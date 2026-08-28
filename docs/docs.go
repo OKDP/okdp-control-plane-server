@@ -3462,6 +3462,10 @@ const docTemplate = `{
                 "icon": {
                     "type": "string"
                 },
+                "internal": {
+                    "description": "Internal reports that an instance of the project can provide this\ncontract by naming convention (x-okdp-internal in the contract schema:\nhive, iceberg-catalog, trino). Only those outputs are selectable.",
+                    "type": "boolean"
+                },
                 "name": {
                     "description": "Name IS the contract this descriptor produces (x-okdp-connection-ref).\nOne descriptor, one contract, deliberately: an entry form that produced a\ndifferently named contract would mean nothing a chart asks for could be\nfound by its own name.",
                     "type": "string"
@@ -3846,7 +3850,11 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "parameter": {
-                    "description": "Parameter is the chart parameter carrying the chosen connection name\n(the property marked x-okdp-connection-ref).",
+                    "description": "Parameter is the root chart parameter carrying the chosen connection\nname (the property marked x-okdp-connection-ref). Empty for a ref nested\nin an object or a list, which the form fills inside that structure.",
+                    "type": "string"
+                },
+                "path": {
+                    "description": "Path is the JSON path of the marked property: \"metadataDb\" at the root,\n\"hiveCatalogs[].metastore\" inside the items of a list.",
                     "type": "string"
                 }
             }

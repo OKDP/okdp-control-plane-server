@@ -93,7 +93,11 @@ type ContractDescriptor struct {
 	// contract by hand. A contract that is not external is listed for the
 	// internal view, where the connections come from the deployed services,
 	// but offers no creation form.
-	External bool              `json:"external"`
+	External bool `json:"external"`
+	// Internal reports that an instance of the project can provide this
+	// contract by naming convention (x-okdp-internal in the contract schema:
+	// hive, iceberg-catalog, trino). Only those outputs are selectable.
+	Internal bool              `json:"internal"`
 	Fields   []ConnectionField `json:"fields"`
 	// EndpointFrom names the value fields carrying the address a consumer would
 	// reach, most specific first. A contract publishing a plain host and port
@@ -244,9 +248,13 @@ type PackageInput struct {
 	// Contract names the contract the chosen connection must satisfy. It is what
 	// makes the choice safe: only connections of that contract are offered.
 	Contract string `json:"contract"`
-	// Parameter is the chart parameter carrying the chosen connection name
-	// (the property marked x-okdp-connection-ref).
+	// Parameter is the root chart parameter carrying the chosen connection
+	// name (the property marked x-okdp-connection-ref). Empty for a ref nested
+	// in an object or a list, which the form fills inside that structure.
 	Parameter string `json:"parameter,omitempty"`
+	// Path is the JSON path of the marked property: "metadataDb" at the root,
+	// "hiveCatalogs[].metastore" inside the items of a list.
+	Path string `json:"path"`
 	// Optional reports that the package tolerates no connection at all.
 	Optional bool `json:"optional"`
 	// Default is the connection the chart falls back to when the deployer picks
