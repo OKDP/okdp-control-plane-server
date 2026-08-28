@@ -65,9 +65,13 @@ type Verifier struct {
 	source   OidcConfigSource
 	fallback Fallback
 
+	// Keyed by the issuer alone. The verifier checks the signature, the issuer
+	// and the expiry, none of which depend on the client: which client a token
+	// names is compared afterwards, against the value resolved for the request.
+	// Keying on it too would send the server back to the discovery endpoint for
+	// a change the verifier cannot even see.
 	mu       sync.Mutex
 	issuer   string
-	clientID string
 	verifier *oidc.IDTokenVerifier
 }
 
@@ -78,7 +82,11 @@ func NewVerifier(source OidcConfigSource, fallback Fallback) *Verifier {
 // Verify returns the identity a raw bearer token establishes, or an error
 // naming why it establishes none.
 func (v *Verifier) Verify(ctx context.Context, rawToken string) (*Identity, error) {
-	verifier, clientID, err := v.current(ctx)
+	issuer, clientID, err := v.resolve(ctx)
+	if err != nil {
+		return nil, err
+	}
+	verifier, err := v.verifierFor(ctx, issuer)
 	if err != nil {
 		return nil, err
 	}
@@ -109,16 +117,11 @@ func (v *Verifier) Verify(ctx context.Context, rawToken string) (*Identity, erro
 	}, nil
 }
 
-// current returns the verifier for the issuer the platform publishes now,
-// building it when the issuer is seen for the first time or has changed.
-func (v *Verifier) current(ctx context.Context) (*oidc.IDTokenVerifier, string, error) {
-	issuer, clientID, err := v.resolve(ctx)
-	if err != nil {
-		return nil, "", err
-	}
-
-	if verifier, ok := v.cached(issuer, clientID); ok {
-		return verifier, clientID, nil
+// verifierFor returns the verifier for an issuer, building it the first time
+// that issuer is seen and whenever the platform names another one.
+func (v *Verifier) verifierFor(ctx context.Context, issuer string) (*oidc.IDTokenVerifier, error) {
+	if verifier, ok := v.cached(issuer); ok {
+		return verifier, nil
 	}
 
 	// Built outside the lock. Reaching the discovery document is network I/O,
@@ -131,7 +134,7 @@ func (v *Verifier) current(ctx context.Context) (*oidc.IDTokenVerifier, string, 
 	// mistakes.
 	provider, err := oidc.NewProvider(ctx, issuer)
 	if err != nil {
-		return nil, "", fmt.Errorf("the issuer %q could not be reached: %w", issuer, err)
+		return nil, fmt.Errorf("the issuer %q could not be reached: %w", issuer, err)
 	}
 	// SkipClientIDCheck because go-oidc would compare the configured id against
 	// aud alone. Which claim carries it depends on the provider, so the
@@ -143,21 +146,19 @@ func (v *Verifier) current(ctx context.Context) (*oidc.IDTokenVerifier, string, 
 	// Another request may have published one for the same issuer while this one
 	// was on the network. Either is correct, and keeping the published one
 	// avoids swapping it under a caller for nothing.
-	if v.verifier != nil && v.issuer == issuer && v.clientID == clientID {
-		return v.verifier, v.clientID, nil
+	if v.verifier != nil && v.issuer == issuer {
+		return v.verifier, nil
 	}
 	v.verifier = verifier
 	v.issuer = issuer
-	v.clientID = clientID
-	return verifier, clientID, nil
+	return verifier, nil
 }
 
-// cached returns the verifier already published for this provider, if it is the
-// one still declared.
-func (v *Verifier) cached(issuer, clientID string) (*oidc.IDTokenVerifier, bool) {
+// cached returns the verifier already published for this issuer.
+func (v *Verifier) cached(issuer string) (*oidc.IDTokenVerifier, bool) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	if v.verifier != nil && v.issuer == issuer && v.clientID == clientID {
+	if v.verifier != nil && v.issuer == issuer {
 		return v.verifier, true
 	}
 	return nil, false

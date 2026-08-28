@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -23,8 +24,9 @@ const testClientID = "okdp-ui"
 // and a key set, and mints tokens signed by that key. Nothing is stubbed inside
 // the verifier, so the tests exercise the real signature and issuer checks.
 type fakeIDP struct {
-	server *httptest.Server
-	key    *rsa.PrivateKey
+	server      *httptest.Server
+	key         *rsa.PrivateKey
+	discoveries atomic.Int32
 }
 
 func newFakeIDP(t *testing.T) *fakeIDP {
@@ -40,6 +42,7 @@ func newFakeIDP(t *testing.T) *fakeIDP {
 	t.Cleanup(idp.server.Close)
 
 	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
+		idp.discoveries.Add(1)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"issuer":                                idp.server.URL,
@@ -453,7 +456,7 @@ func TestASlowIssuerDoesNotBlockRequestsThatNeedNothingFromIt(t *testing.T) {
 	// held across the discovery call, this blocks until the issuer answers.
 	done := make(chan struct{})
 	go func() {
-		v.cached(warm.server.URL, testClientID)
+		v.cached(warm.server.URL)
 		close(done)
 	}()
 
@@ -464,4 +467,42 @@ func TestASlowIssuerDoesNotBlockRequestsThatNeedNothingFromIt(t *testing.T) {
 		t.Fatal("the cache was held hostage by a discovery call in flight")
 	}
 	close(release)
+}
+
+// The verifier checks the signature, the issuer and the expiry, none of which
+// depend on the client: which client a token names is compared afterwards.
+// Keying the cache on the client id too sent the server back to the discovery
+// endpoint for a change the verifier cannot even see.
+func TestChangingOnlyTheClientIdDoesNotRefetchTheDiscoveryDocument(t *testing.T) {
+	idp := newFakeIDP(t)
+	src := sourceFor(idp)
+	v := NewVerifier(src, Fallback{})
+
+	c := idp.claims()
+	c["aud"] = testClientID
+	if _, err := v.Verify(context.Background(), idp.mint(t, c)); err != nil {
+		t.Fatalf("the first call was refused: %v", err)
+	}
+	after := idp.discoveries.Load()
+	if after == 0 {
+		t.Fatal("the discovery document was never read")
+	}
+
+	// The platform renames its console client. Same issuer, same keys.
+	src.cfg = &models.IdentityOidcConfig{Authority: idp.server.URL, ClientID: "okdp-console"}
+
+	renamed := idp.claims()
+	renamed["aud"] = "okdp-console"
+	if _, err := v.Verify(context.Background(), idp.mint(t, renamed)); err != nil {
+		t.Fatalf("a token for the new client was refused: %v", err)
+	}
+	if got := idp.discoveries.Load(); got != after {
+		t.Fatalf("the discovery document was read again, %d times instead of %d", got, after)
+	}
+
+	// And the old client is no longer accepted, so the new value is really the
+	// one being compared.
+	if _, err := v.Verify(context.Background(), idp.mint(t, c)); err == nil {
+		t.Fatal("a token for the previous client was still accepted")
+	}
 }
