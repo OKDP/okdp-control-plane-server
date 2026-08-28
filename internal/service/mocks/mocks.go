@@ -93,6 +93,20 @@ type SecretStoreRepository struct {
 	mock.Mock
 }
 
+// Available defaults to true so a test that only exercises store logic does not
+// have to arrange the CRD-presence check first.
+func (m *SecretStoreRepository) Available(ctx context.Context) bool {
+	if len(m.ExpectedCalls) == 0 {
+		return true
+	}
+	for _, call := range m.ExpectedCalls {
+		if call.Method == "Available" {
+			return m.Called(ctx).Bool(0)
+		}
+	}
+	return true
+}
+
 func (m *SecretStoreRepository) Create(ctx context.Context, namespace string, store *crd.ESOSecretStore) error {
 	args := m.Called(ctx, namespace, store)
 	return args.Error(0)

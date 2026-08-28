@@ -1132,6 +1132,47 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/projects/{name}/metrics": {
+            "get": {
+                "description": "One call returns the aggregated CPU/memory usage and limits of each deployed instance, keyed by instance name.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "services"
+                ],
+                "summary": "Get live resource usage for every instance of a project",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/models.ServiceMetrics"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/projects/{name}/services": {
             "get": {
                 "description": "Get all deployed service instances for a project",
@@ -3915,6 +3956,10 @@ const docTemplate = `{
                 "role": {
                     "type": "string"
                 },
+                "serviceAccount": {
+                    "description": "ServiceAccount names the account the store authenticates as under\nKubernetes auth, so a project can give its store its own identity\ninstead of the default account every workload in the namespace shares.\n\nA pointer, because on update three intents must stay apart: absent keeps\nthe account already in use, an empty string asks for the default account\nback, and a name selects that account. A plain string merges the first\ntwo, which leaves no way to return to the default once a name is set.",
+                    "type": "string"
+                },
                 "token": {
                     "type": "string"
                 }
@@ -3927,6 +3972,10 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "role": {
+                    "type": "string"
+                },
+                "serviceAccount": {
+                    "description": "Nil for token auth, which has no service account to report.",
                     "type": "string"
                 }
             }

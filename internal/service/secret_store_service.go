@@ -14,6 +14,7 @@ import (
 	"github.com/sirupsen/logrus"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 type SecretStoreService interface {
@@ -61,6 +62,13 @@ func (s *DefaultSecretStoreService) CreateSecretStore(ctx context.Context, names
 	credSecretName := req.Name + "-credentials"
 
 	if req.Auth.Type == "token" {
+		// validateRequest lets the token be empty because an update reads that
+		// as "keep the stored one". On a create there is nothing to keep: an
+		// empty token writes an empty Secret and the store can never
+		// authenticate, while the API answers 201.
+		if req.Auth.Config.Token == "" {
+			return nil, invalid("auth.config.token is required for token auth")
+		}
 		secretData := map[string][]byte{"token": []byte(req.Auth.Config.Token)}
 		if err := s.repo.CreateOrUpdateSecret(ctx, namespace, credSecretName, secretData); err != nil {
 			return nil, fmt.Errorf("failed to create credentials secret: %w", err)
@@ -101,10 +109,33 @@ func (s *DefaultSecretStoreService) UpdateSecretStore(ctx context.Context, names
 
 	credSecretName := name + "-credentials"
 
-	if req.Auth.Type == "token" && req.Auth.Config.Token != "" {
-		secretData := map[string][]byte{"token": []byte(req.Auth.Config.Token)}
-		if err := s.repo.CreateOrUpdateSecret(ctx, namespace, credSecretName, secretData); err != nil {
-			return nil, fmt.Errorf("failed to update credentials secret: %w", err)
+	// What the store authenticates with today. An omitted token can only mean
+	// "keep the stored one" when there is a stored one.
+	existingVault := existing.Spec.Provider.Vault
+	usedTokenAuth := existingVault != nil && existingVault.Auth.TokenSecretRef != nil
+
+	switch req.Auth.Type {
+	case "token":
+		if req.Auth.Config.Token != "" {
+			secretData := map[string][]byte{"token": []byte(req.Auth.Config.Token)}
+			if err := s.repo.CreateOrUpdateSecret(ctx, namespace, credSecretName, secretData); err != nil {
+				return nil, fmt.Errorf("failed to update credentials secret: %w", err)
+			}
+		} else if !usedTokenAuth {
+			// The CR would reference a Secret that was never written, so the
+			// store could never sync while the API reported success.
+			return nil, invalid("auth.config.token is required when switching to token auth")
+		}
+	case "kubernetes":
+		// The CR is rebuilt from the request, so a caller that omits the
+		// account would silently repoint the store at default and break the
+		// Vault role binding. Absent means "leave it", like the token above,
+		// while an empty string is an explicit ask for the default account.
+		if req.Auth.Config.ServiceAccount == nil && existingVault != nil && existingVault.Auth.Kubernetes != nil {
+			if ref := existingVault.Auth.Kubernetes.ServiceAccountRef; ref != nil {
+				current := ref.Name
+				req.Auth.Config.ServiceAccount = &current
+			}
 		}
 	}
 
@@ -119,6 +150,16 @@ func (s *DefaultSecretStoreService) UpdateSecretStore(ctx context.Context, names
 
 	if err := s.repo.Update(ctx, namespace, store); err != nil {
 		return nil, err
+	}
+
+	// Dropped only once the stored CR no longer points at it, so a failed
+	// update never destroys a credential the store still uses. Left behind, the
+	// Vault token would outlive the store's use of it: still valid in Vault,
+	// no longer shown anywhere in the console.
+	if usedTokenAuth && req.Auth.Type != "token" {
+		if err := s.repo.DeleteSecret(ctx, namespace, credSecretName); err != nil && !apierrors.IsNotFound(err) {
+			logrus.WithError(err).Warnf("Failed to delete unused credentials secret %s", credSecretName)
+		}
 	}
 
 	updated, err := s.repo.Get(ctx, namespace, name)
@@ -248,35 +289,43 @@ func (s *DefaultSecretStoreService) GetSecretStoreStatus(ctx context.Context, na
 
 func validateRequest(req models.SecretStoreRequest) error {
 	if req.Name == "" {
-		return fmt.Errorf("name is required")
+		return invalid("name is required")
 	}
 	if req.Provider != "vault" {
-		return fmt.Errorf("unsupported provider %q, only 'vault' is supported", req.Provider)
+		return invalid("unsupported provider %q, only 'vault' is supported", req.Provider)
 	}
 	if req.Vault == nil {
-		return fmt.Errorf("vault configuration is required")
+		return invalid("vault configuration is required")
 	}
 	if req.Vault.Server == "" {
-		return fmt.Errorf("vault.server is required")
+		return invalid("vault.server is required")
 	}
 	if req.Vault.Path == "" {
-		return fmt.Errorf("vault.path is required")
+		return invalid("vault.path is required")
 	}
 	if req.Vault.Version != "v1" && req.Vault.Version != "v2" {
-		return fmt.Errorf("vault.version must be 'v1' or 'v2'")
+		return invalid("vault.version must be 'v1' or 'v2'")
 	}
 	if req.Auth == nil {
-		return fmt.Errorf("auth configuration is required")
+		return invalid("auth configuration is required")
 	}
 	switch req.Auth.Type {
 	case "token":
 		// Token can be empty on update (preserves existing)
 	case "kubernetes":
 		if req.Auth.Config.Role == "" {
-			return fmt.Errorf("auth.config.role is required for kubernetes auth")
+			return invalid("auth.config.role is required for kubernetes auth")
+		}
+		// Left to the API server this came back as a schema rejection the
+		// handler could not tell from a platform failure, so a mistyped
+		// account answered 500.
+		if sa := req.Auth.Config.ServiceAccount; sa != nil && *sa != "" {
+			if msgs := validation.IsDNS1123Subdomain(*sa); len(msgs) > 0 {
+				return invalid("auth.config.serviceAccount %q is not a valid ServiceAccount name: %s", *sa, msgs[0])
+			}
 		}
 	default:
-		return fmt.Errorf("unsupported auth type %q, must be 'token' or 'kubernetes'", req.Auth.Type)
+		return invalid("unsupported auth type %q, must be 'token' or 'kubernetes'", req.Auth.Type)
 	}
 	return nil
 }
@@ -314,11 +363,18 @@ func buildSecretStoreCRD(namespace string, req models.SecretStoreRequest, credSe
 		if mountPath == "" {
 			mountPath = "kubernetes"
 		}
+		// Vault matches the bound_service_account_names of the role against this
+		// account, so pinning it to default forced every role onto the identity
+		// the whole namespace already shares.
+		serviceAccount := "default"
+		if req.Auth.Config.ServiceAccount != nil && *req.Auth.Config.ServiceAccount != "" {
+			serviceAccount = *req.Auth.Config.ServiceAccount
+		}
 		store.Spec.Provider.Vault.Auth.Kubernetes = &crd.ESOKubernetesAuth{
 			MountPath: mountPath,
 			Role:      req.Auth.Config.Role,
 			ServiceAccountRef: &crd.ESOServiceAccountRef{
-				Name: "default",
+				Name: serviceAccount,
 			},
 		}
 	}
@@ -370,6 +426,12 @@ func (s *DefaultSecretStoreService) toResponse(store *crd.ESOSecretStore, namesp
 			authResp.Config.MountPath = &mp
 			role := v.Auth.Kubernetes.Role
 			authResp.Config.Role = &role
+			// Read back the account the store authenticates as, otherwise a
+			// caller cannot tell which identity the Vault role must bind.
+			if ref := v.Auth.Kubernetes.ServiceAccountRef; ref != nil {
+				sa := ref.Name
+				authResp.Config.ServiceAccount = &sa
+			}
 		}
 		resp.Auth = authResp
 	}
