@@ -14,9 +14,7 @@ import (
 	"github.com/okdp/okdp-control-plane-server/internal/models"
 )
 
-// noOidc stands for a platform that publishes no OIDC client. It is enough for
-// this file: what is under test is whether a request without a token is stopped
-// before it reaches a handler, not what a valid token establishes.
+// noOidc stands for a platform that publishes no OIDC client.
 type noOidc struct{}
 
 func (noOidc) GetIdentityOidcConfig(context.Context) (*models.IdentityOidcConfig, error) {
@@ -25,17 +23,14 @@ func (noOidc) GetIdentityOidcConfig(context.Context) (*models.IdentityOidcConfig
 
 func (noOidc) GetOidcIssuerURI(context.Context) (string, error) { return "", nil }
 
-// anonymousRoutes are the only paths served without a token, and the list is
-// repeated here on purpose. Exempting one more route then has to be done twice,
-// in the middleware and in this test, which is the point: it cannot happen by
-// accident.
+// Repeated from the middleware on purpose: one more exemption has to be added
+// twice, so it cannot happen by accident.
 var anonymousRoutes = map[string]bool{
 	"/api/capabilities": true,
 }
 
-// The handlers are nil. That is deliberate: a route that slips past the
-// middleware calls a nil pointer and blows up, so a gap cannot be mistaken for
-// a pass.
+// Handlers are nil on purpose: a route slipping past the middleware panics,
+// so a gap cannot read as a pass.
 func testRouter() *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	return SetupRouter(&config.Config{}, auth.NewVerifier(noOidc{}, auth.Fallback{}), nil, nil, nil, nil, nil, nil, nil, nil)
@@ -55,9 +50,6 @@ func fillParams(pattern string) string {
 	return strings.Join(parts, "/")
 }
 
-// The regression this guards, and the reason the middleware sits on the group
-// rather than on each route: the API served 68 endpoints with no authentication
-// at all, and any route added later would have had to be guarded by hand.
 func TestEveryApiRouteRefusesAnAnonymousCaller(t *testing.T) {
 	r := testRouter()
 
@@ -81,24 +73,19 @@ func TestEveryApiRouteRefusesAnAnonymousCaller(t *testing.T) {
 	t.Logf("%d API routes refuse an anonymous caller", checked)
 }
 
-// The console reads the issuer and the client id from /api/capabilities before
-// it can build its OIDC client. Requiring a token here would leave it unable to
-// ever obtain one.
 func TestTheConsoleBootstrapStaysAnonymous(t *testing.T) {
 	r := testRouter()
 
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/capabilities", nil))
 
-	// The handler is nil here, so it panics and Recovery answers 500. Anything
-	// but 401 proves the middleware let the request through, which is all this
-	// test is about.
+	// Nil handler panics into a 500; anything but 401 proves the middleware let
+	// the request through.
 	if w.Code == http.StatusUnauthorized {
 		t.Fatal("the console bootstrap requires a token, so the console can never sign in")
 	}
 }
 
-// The kubelet probes carry no token, and the API description carries no data.
 func TestHealthAndSwaggerStayOutsideTheGuardedGroup(t *testing.T) {
 	r := testRouter()
 
@@ -115,9 +102,7 @@ func TestHealthAndSwaggerStayOutsideTheGuardedGroup(t *testing.T) {
 	}
 }
 
-// A browser sends OPTIONS before a cross-origin call, without an Authorization
-// header. Answering 401 to it would make every call fail at the preflight, and
-// the browser would report a CORS error naming nothing.
+// A preflight OPTIONS carries no Authorization header by design.
 func TestThePreflightIsNotRefused(t *testing.T) {
 	r := testRouter()
 
