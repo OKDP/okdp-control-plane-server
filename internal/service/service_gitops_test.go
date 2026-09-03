@@ -315,3 +315,92 @@ func TestInstanceStatusVocabulary(t *testing.T) {
 	assert.Equal(t, "Ready", status)
 	assert.Empty(t, msg)
 }
+
+func TestMergePatchFollowsRFC7386(t *testing.T) {
+	target := map[string]any{
+		"workers": float64(2),
+		"opa":     map[string]any{"enabled": true, "debug": true, "policy": map[string]any{"repo": "x"}},
+		"list":    []any{"a", "b"},
+	}
+	got := MergePatch(target, map[string]any{
+		"workers": nil,
+		"opa":     map[string]any{"debug": nil, "policy": map[string]any{"branch": "main"}},
+		"list":    []any{"c"},
+		"new":     map[string]any{"k": nil, "v": "1"},
+	})
+	want := map[string]any{
+		"opa":  map[string]any{"enabled": true, "policy": map[string]any{"repo": "x", "branch": "main"}},
+		"list": []any{"c"},
+		"new":  map[string]any{"v": "1"},
+	}
+	assert.Equal(t, want, got)
+	assert.Equal(t, float64(2), target["workers"], "the target is not modified")
+	assert.Equal(t, map[string]any{}, MergePatch(map[string]any{"a": float64(1)}, map[string]any{"a": nil}))
+}
+
+func TestPatchWithNullDeletesFromValuesYAML(t *testing.T) {
+	svc, store := newGitServiceUnderTest(t, stubEngine{}, nil)
+	_, err := svc.DeployService(aliceContext(), "demo", models.ServiceRequest{Service: "trino", Parameters: map[string]any{
+		"workers":  float64(2),
+		"catalogs": []any{map[string]any{"name": "a"}, map[string]any{"name": "b"}},
+	}})
+	require.NoError(t, err)
+
+	_, err = svc.UpdateServiceParameters(aliceContext(), "demo", "trino", models.ServiceUpdateRequest{
+		Parameters: map[string]any{"catalogs": []any{map[string]any{"name": "c"}}},
+	})
+	require.NoError(t, err)
+	values := store.Files()["projects/demo/services/trino/values.yaml"]
+	assert.Contains(t, values, "name: c")
+	assert.NotContains(t, values, "name: a", "arrays replace, they do not merge")
+
+	_, err = svc.UpdateServiceParameters(aliceContext(), "demo", "trino", models.ServiceUpdateRequest{
+		Parameters: map[string]any{"workers": nil, "catalogs": nil},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "{}\n", store.Files()["projects/demo/services/trino/values.yaml"])
+
+	// Validation runs on the merged result: removing a required key is refused.
+	svc.schemaService = stubSchema{schema: map[string]any{
+		"type": "object", "required": []any{"workers"},
+		"properties": map[string]any{"workers": map[string]any{"type": "integer"}},
+	}}
+	_, err = svc.UpdateServiceParameters(aliceContext(), "demo", "trino", models.ServiceUpdateRequest{Parameters: map[string]any{"workers": nil}})
+	assert.True(t, IsValidationError(err), "got %v", err)
+}
+
+// The chart's defaults apply at render time; values.yaml holds only what the
+// user submitted, never the schema's defaults.
+func TestDeployWritesOnlyTheSubmittedParameters(t *testing.T) {
+	svc, store := newGitServiceUnderTest(t, stubEngine{}, nil)
+	svc.schemaService = stubSchema{schema: map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"workers": map[string]any{"type": "integer", "default": 3},
+			"opa":     map[string]any{"type": "object", "default": map[string]any{"enabled": false}},
+			"memory":  map[string]any{"type": "string", "default": "4Gi"},
+		},
+	}}
+	_, err := svc.DeployService(aliceContext(), "demo", models.ServiceRequest{Service: "trino", InstanceName: "a", Parameters: map[string]any{"memory": "8Gi"}})
+	require.NoError(t, err)
+	assert.Equal(t, "memory: 8Gi\n", store.Files()["projects/demo/services/a/values.yaml"])
+
+	_, err = svc.DeployService(aliceContext(), "demo", models.ServiceRequest{Service: "trino", InstanceName: "b"})
+	require.NoError(t, err)
+	assert.Equal(t, "{}\n", store.Files()["projects/demo/services/b/values.yaml"])
+}
+
+func TestReleaseNameCollisionIsNotADuplicateInstance(t *testing.T) {
+	svc, _ := newGitServiceUnderTest(t, stubEngine{}, nil)
+	_, err := svc.DeployService(aliceContext(), "demo", models.ServiceRequest{Service: "trino", InstanceName: "sql-x"})
+	require.NoError(t, err)
+
+	_, err = svc.DeployService(aliceContext(), "demo-sql", models.ServiceRequest{Service: "trino", InstanceName: "x"})
+	require.True(t, IsReleaseNameTaken(err), "got %v", err)
+	assert.False(t, apierrors.IsAlreadyExists(err))
+	assert.Equal(t, "release name 'demo-sql-x' is already used by instance 'sql-x' of project 'demo'", err.Error())
+
+	_, err = svc.DeployService(aliceContext(), "demo", models.ServiceRequest{Service: "trino", InstanceName: "sql-x"})
+	assert.True(t, apierrors.IsAlreadyExists(err), "got %v", err)
+	assert.False(t, IsReleaseNameTaken(err))
+}

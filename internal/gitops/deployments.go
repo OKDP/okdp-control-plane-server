@@ -36,6 +36,25 @@ type InstanceState struct {
 	Values map[string]any
 }
 
+// ErrReleaseTaken is returned when an instance's release name <p>-<i> is
+// already produced by another declaration: project a-b instance c and project
+// a instance b-c are both release a-b-c. It is not ErrExists: the instance
+// itself is new, its name only collides.
+type ErrReleaseTaken struct {
+	Release  string
+	Project  string
+	Instance string
+	// Component is set when the colliding declaration is a platform component.
+	Component string
+}
+
+func (e *ErrReleaseTaken) Error() string {
+	if e.Component != "" {
+		return fmt.Sprintf("release name '%s' is already used by the platform component '%s'", e.Release, e.Component)
+	}
+	return fmt.Sprintf("release name '%s' is already used by instance '%s' of project '%s'", e.Release, e.Instance, e.Project)
+}
+
 // ErrInUse is returned when deleting something other declarations still use.
 type ErrInUse struct {
 	What  string
@@ -455,7 +474,7 @@ func checkReleaseFree(tx Tx, inst Instance) error {
 		}
 		for _, i := range names {
 			if (p != inst.Project || i != inst.Name) && ReleaseName(p, i) == release && tx.Exists(path.Join(ServiceDir(p, i), InstanceFile)) {
-				return fmt.Errorf("release %s is already produced by projects/%s/services/%s: %w", release, p, i, ErrExists)
+				return &ErrReleaseTaken{Release: release, Project: p, Instance: i}
 			}
 		}
 	}
@@ -470,7 +489,7 @@ func checkReleaseFree(tx Tx, inst Instance) error {
 		}
 		other, err := DecodeInstance(raw)
 		if err == nil && other.ReleaseName() == release {
-			return fmt.Errorf("release %s is already produced by the platform component %s: %w", release, c, ErrExists)
+			return &ErrReleaseTaken{Release: release, Project: other.Project, Instance: other.Name, Component: c}
 		}
 	}
 	return nil

@@ -14,6 +14,15 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
+// Error codes carried next to "error" in 409 answers of POST .../services.
+const (
+	// ErrorCodeInstanceExists: the project already has an instance of that name.
+	ErrorCodeInstanceExists = "instance-exists"
+	// ErrorCodeReleaseNameTaken: the release name <project>-<instance> is
+	// already used by an instance of another project (or a platform component).
+	ErrorCodeReleaseNameTaken = "release-name-taken"
+)
+
 // ServiceHandler handles platform service and catalog requests
 type ServiceHandler struct {
 	service       service.ServiceService
@@ -174,7 +183,7 @@ func (h *ServiceHandler) ListServices(c *gin.Context) {
 
 // DeployService godoc
 // @Summary      Deploy a platform service
-// @Description  Deploy a managed platform service into a project: commits the instance files to the deployments Git repository. The answer carries the commit (revision) and the status Pending until the GitOps engine reconciles it. 400 on invalid parameters.
+// @Description  Deploy a managed platform service into a project: commits the instance files to the deployments Git repository. The answer carries the commit (revision) and the status Pending until the GitOps engine reconciles it. Only the submitted parameters are written to values.yaml. 400 on invalid parameters; 409 with code instance-exists or release-name-taken.
 // @Tags         services
 // @Accept       json
 // @Produce      json
@@ -196,6 +205,10 @@ func (h *ServiceHandler) DeployService(c *gin.Context) {
 
 	instance, err := h.service.DeployService(c.Request.Context(), project, req)
 	if err != nil {
+		if service.IsReleaseNameTaken(err) {
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error(), "code": ErrorCodeReleaseNameTaken})
+			return
+		}
 		if apierrors.IsAlreadyExists(err) {
 			instanceName := req.InstanceName
 			if instanceName == "" {
@@ -203,6 +216,7 @@ func (h *ServiceHandler) DeployService(c *gin.Context) {
 			}
 			c.JSON(http.StatusConflict, gin.H{
 				"error": fmt.Sprintf("Instance '%s' already exists in project '%s'", instanceName, project),
+				"code":  ErrorCodeInstanceExists,
 			})
 			return
 		}
@@ -420,7 +434,7 @@ func (h *ServiceHandler) GetProfileImages(c *gin.Context) {
 
 // UpdateServiceParameters godoc
 // @Summary      Update service parameters and/or version
-// @Description  Merge new parameters and optionally update the chart version of a deployed service, committed to values.yaml/instance.yaml in the deployments Git repository. 400 on invalid parameters.
+// @Description  JSON Merge Patch (RFC 7386) of the parameters (null deletes a key, objects merge, arrays replace) and optionally update the chart version of a deployed service, committed to values.yaml/instance.yaml in the deployments Git repository. 400 on invalid parameters.
 // @Tags         services
 // @Accept       json
 // @Produce      json

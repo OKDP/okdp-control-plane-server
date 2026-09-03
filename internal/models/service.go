@@ -49,6 +49,8 @@ type ServiceRequest struct {
 }
 
 // ServiceUpdateRequest is the body for PATCH /api/projects/:name/services/:serviceName/parameters.
+// Parameters is a JSON Merge Patch (RFC 7386) of the stored values: null
+// deletes a key, objects merge recursively, arrays replace.
 type ServiceUpdateRequest struct {
 	Tag        string         `json:"tag,omitempty"`
 	Parameters map[string]any `json:"parameters,omitempty"`

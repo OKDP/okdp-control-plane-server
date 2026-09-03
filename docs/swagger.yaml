@@ -1834,8 +1834,9 @@ paths:
       - application/json
       description: 'Deploy a managed platform service into a project: commits the
         instance files to the deployments Git repository. The answer carries the commit
-        (revision) and the status Pending until the GitOps engine reconciles it. 400
-        on invalid parameters.'
+        (revision) and the status Pending until the GitOps engine reconciles it. Only
+        the submitted parameters are written to values.yaml. 400 on invalid parameters;
+        409 with code instance-exists or release-name-taken.'
       parameters:
       - description: Project name
         in: path
@@ -1981,7 +1982,8 @@ paths:
     patch:
       consumes:
       - application/json
-      description: Merge new parameters and optionally update the chart version of
+      description: JSON Merge Patch (RFC 7386) of the parameters (null deletes a key,
+        objects merge, arrays replace) and optionally update the chart version of
         a deployed service, committed to values.yaml/instance.yaml in the deployments
         Git repository. 400 on invalid parameters.
       parameters:

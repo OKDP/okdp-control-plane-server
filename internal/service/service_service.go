@@ -300,12 +300,26 @@ func normalizeAndValidateCatalogService(svc *models.PlatformService) error {
 
 // --- Instances: desired state in Git ---
 
+// ReleaseNameTakenError is a new instance whose release name <p>-<i> another
+// project's instance (or a platform component) already uses. The handler
+// answers 409 with its own code, distinct from a duplicate instance.
+type ReleaseNameTakenError struct{ *gitops.ErrReleaseTaken }
+
+// IsReleaseNameTaken reports whether err is a release-name collision.
+func IsReleaseNameTaken(err error) bool {
+	var taken *ReleaseNameTakenError
+	return errors.As(err, &taken)
+}
+
 // gitError maps the errors of the deployments repository to the Kubernetes
 // API errors the handlers already turn into 404 and 409.
 func gitError(err error, name string) error {
+	var taken *gitops.ErrReleaseTaken
 	switch {
 	case err == nil:
 		return nil
+	case errors.As(err, &taken):
+		return &ReleaseNameTakenError{taken}
 	case errors.Is(err, gitops.ErrNotFound):
 		return apierrors.NewNotFound(servicesResource, name)
 	case errors.Is(err, gitops.ErrExists):
@@ -401,11 +415,9 @@ func (s *DefaultServiceService) UpdateServiceParameters(ctx context.Context, pro
 		if req.Tag != "" {
 			st.Instance.Version = req.Tag
 		}
-		// A shallow merge, as parameters always were: a submitted key replaces
-		// the stored one, the others are kept.
-		for k, v := range req.Parameters {
-			st.Values[k] = v
-		}
+		// JSON Merge Patch (RFC 7386): a submitted key replaces the stored
+		// one, null deletes it, objects merge recursively, arrays replace.
+		st.Values = MergePatch(st.Values, req.Parameters)
 		if err := s.validateParameters(ctx, st.Instance.Service, st.Instance.Version, st.Values); err != nil {
 			return err
 		}
@@ -452,6 +464,30 @@ func (s *DefaultServiceService) cleanupOidcClient(ctx context.Context, releaseNa
 	} else {
 		logrus.WithField("oidcClient", releaseName).Info("Cleaned up OidcClient")
 	}
+}
+
+// MergePatch applies patch to target as a JSON Merge Patch (RFC 7386) and
+// returns the result: a null value removes the key, a nested object merges
+// into the stored one (recursively), anything else (arrays included)
+// replaces it. target is not modified. The result is never nil.
+func MergePatch(target, patch map[string]any) map[string]any {
+	out := make(map[string]any, len(target)+len(patch))
+	for k, v := range target {
+		out[k] = v
+	}
+	for k, v := range patch {
+		if v == nil {
+			delete(out, k)
+			continue
+		}
+		if patchObject, ok := v.(map[string]any); ok {
+			current, _ := out[k].(map[string]any)
+			out[k] = MergePatch(current, patchObject)
+			continue
+		}
+		out[k] = v
+	}
+	return out
 }
 
 // connectionNames lists the external connections of a project.

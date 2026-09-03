@@ -131,8 +131,13 @@ func TestCreateRefusesACollidingReleaseName(t *testing.T) {
 	if _, err := d.CreateInstance(ctx, "alice", mk("a-b", "c")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.CreateInstance(ctx, "alice", mk("a", "b-c")); !errors.Is(err, ErrExists) {
-		t.Fatalf("err = %v, want ErrExists", err)
+	var taken *ErrReleaseTaken
+	_, err := d.CreateInstance(ctx, "alice", mk("a", "b-c"))
+	if !errors.As(err, &taken) || errors.Is(err, ErrExists) {
+		t.Fatalf("err = %v, want ErrReleaseTaken and not ErrExists", err)
+	}
+	if err.Error() != "release name 'a-b-c' is already used by instance 'c' of project 'a-b'" {
+		t.Fatalf("message = %q", err.Error())
 	}
 	if _, err := d.PutConnection(ctx, "alice", Connection{Name: "c", Project: "a-b", Contract: "hive"}, true); err != nil {
 		t.Fatal(err)
