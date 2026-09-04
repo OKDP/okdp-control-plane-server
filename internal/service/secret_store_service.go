@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/okdp/okdp-control-plane-server/internal/models"
@@ -199,7 +200,7 @@ func (s *DefaultSecretStoreService) TestConnection(ctx context.Context, req mode
 	}
 
 	if req.Auth.Type == "kubernetes" {
-		return nil
+		return checkVaultAnswers(ctx, req.Vault.Server, req.Vault.CABundle)
 	}
 
 	if req.Auth.Config.Token == "" {
@@ -207,6 +208,61 @@ func (s *DefaultSecretStoreService) TestConnection(ctx context.Context, req mode
 	}
 
 	return validateVaultToken(ctx, req.Vault.Server, req.Auth.Config.Token, req.Vault.CABundle)
+}
+
+// checkVaultAnswers asks sys/health, which needs no token. It proves the
+// server address and its TLS setup, not the Kubernetes role: only the operator
+// logs in with that role, at sync time.
+func checkVaultAnswers(ctx context.Context, server, caBundle string) error {
+	client, err := vaultClient(caBundle)
+	if err != nil {
+		return err
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, vaultURL(server, "/v1/sys/health"), nil)
+	if err != nil {
+		return fmt.Errorf("failed to build request: %w", err)
+	}
+
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("connection failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// sys/health encodes the node state in the status: 200 active, 429
+	// standby, 472 and 473 the replication standbys, all of them answering.
+	switch resp.StatusCode {
+	case http.StatusOK, http.StatusTooManyRequests, 472, 473:
+		return nil
+	case http.StatusNotImplemented:
+		return fmt.Errorf("vault is not initialized")
+	case http.StatusServiceUnavailable:
+		return fmt.Errorf("vault is sealed")
+	default:
+		return fmt.Errorf("vault returned status %d", resp.StatusCode)
+	}
+}
+
+// vaultURL joins the configured server and an API path, whether or not the
+// server was written with a trailing slash.
+func vaultURL(server, path string) string {
+	return strings.TrimRight(server, "/") + path
+}
+
+func vaultClient(caBundle string) (*http.Client, error) {
+	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
+	if caBundle != "" {
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM([]byte(caBundle)) {
+			return nil, fmt.Errorf("invalid CA bundle")
+		}
+		tlsConfig.RootCAs = pool
+	}
+	return &http.Client{
+		Timeout:   10 * time.Second,
+		Transport: &http.Transport{TLSClientConfig: tlsConfig},
+	}, nil
 }
 
 // validateVaultToken calls GET /v1/auth/token/lookup-self to verify that
@@ -217,22 +273,12 @@ func (s *DefaultSecretStoreService) TestConnection(ctx context.Context, req mode
 // maps to GET. A POST needs the "update" capability, which no least-privilege
 // token carries, so only a root token would have passed.
 func validateVaultToken(ctx context.Context, server, token, caBundle string) error {
-	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
-
-	if caBundle != "" {
-		pool := x509.NewCertPool()
-		if !pool.AppendCertsFromPEM([]byte(caBundle)) {
-			return fmt.Errorf("invalid CA bundle")
-		}
-		tlsConfig.RootCAs = pool
+	client, err := vaultClient(caBundle)
+	if err != nil {
+		return err
 	}
 
-	client := &http.Client{
-		Timeout:   10 * time.Second,
-		Transport: &http.Transport{TLSClientConfig: tlsConfig},
-	}
-
-	url := server + "/v1/auth/token/lookup-self"
+	url := vaultURL(server, "/v1/auth/token/lookup-self")
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return fmt.Errorf("failed to build request: %w", err)
