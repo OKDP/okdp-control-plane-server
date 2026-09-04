@@ -45,7 +45,7 @@ external list exists at platform scope, for connections shared by every project.
 |---|---|---|
 | Depend on `feat/connection2`? | **No.** Probe the cluster, degrade cleanly | The feature ships and merges on its own schedule. It activates when the CRDs land, with no code change |
 | Where the connectivity test runs | Server pod, like `SecretStoreService.TestConnection` | Reuses the existing precedent. A Job in the project namespace costs RBAC, an image, cleanup and latency for a fidelity gain we do not need yet |
-| A test that only reaches the host | **Rejected** | The Vault precedent already refuses `sys/health`: a wrong password must fail the test |
+| A test that only reaches the host | **Rejected** | The Vault precedent asks `lookup-self` with the token whenever it has one: a wrong password must fail the test. Only Kubernetes auth, which has no token to present, falls back to `sys/health`, and says so |
 | Contracts in v1 | `database-server`, `s3`, `trino`, `hive`, `iceberg-catalog` | Covers the requested cases, and the descriptor format makes a sixth contract one file |
 | Where contract descriptors live | JSON embedded in the server, served by API | One descriptor drives the console form, server validation and provider matching. Cluster `Contract` schemas can be layered over them later without touching the API contract |
 | Credentials | Kubernetes Secret, referenced by annotation | Keeps `spec.values` exactly the shape a `Contract` schema will validate, and reading a Connection never discloses a password |
