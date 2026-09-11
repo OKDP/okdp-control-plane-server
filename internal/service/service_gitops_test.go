@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -17,10 +18,20 @@ import (
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 
 	"github.com/okdp/okdp-control-plane-server/internal/auth"
+	"github.com/okdp/okdp-control-plane-server/internal/buildinfo"
 	"github.com/okdp/okdp-control-plane-server/internal/gitops"
 	"github.com/okdp/okdp-control-plane-server/internal/models"
 	"github.com/okdp/okdp-control-plane-server/internal/repository"
 )
+
+// TestMain fixes the version the commits name, as the linker would.
+func TestMain(m *testing.M) {
+	buildinfo.Version = "0.9.0"
+	os.Exit(m.Run())
+}
+
+// coAuthor is the trailer of a commit authored by a logged-in user.
+const coAuthor = "\n\nCo-Authored-By: okdp-control-plane-server v0.9.0 <okdp-control-plane@okdp.io>"
 
 // stubPlatform serves a catalog with one chart.
 type stubPlatform struct {
@@ -129,7 +140,8 @@ func TestDeployCommitsTheInstanceFiles(t *testing.T) {
 	assert.Contains(t, files["projects/demo/services/sql/values.yaml"], "workers: 2")
 	assert.Contains(t, files["projects/demo/services/sql/helmrelease.yaml"], `name: "conn-demo-lake-hms"`)
 	assert.Contains(t, files, "projects/demo/services/sql/kustomization.yaml")
-	assert.Equal(t, "okdp: deploy demo/sql by alice\n\nCo-Authored-By: Alice Martin <alice@example.com>", store.Messages[len(store.Messages)-1])
+	assert.Equal(t, "okdp: deploy demo/sql by alice"+coAuthor, store.Messages[len(store.Messages)-1])
+	assert.Equal(t, &gitops.Signature{Name: "Alice Martin", Email: "alice@example.com"}, store.Commits[len(store.Commits)-1].Author)
 
 	assert.Equal(t, "demo-sql", instance.ReleaseName)
 	assert.Equal(t, repository.PhasePending, instance.Status, "committed, the engine has not seen it yet")
@@ -175,7 +187,7 @@ func TestUpdateMergesIntoValuesAndMovesTheVersion(t *testing.T) {
 	assert.Contains(t, values, "hive: lake-hms")
 	assert.Contains(t, store.Files()["projects/demo/services/trino/instance.yaml"], "version: 481.0.0-p01")
 	assert.Contains(t, store.Files()["projects/demo/services/trino/instance.yaml"], "- lake-hms")
-	assert.Equal(t, "okdp: update demo/trino by alice\n\nCo-Authored-By: Alice Martin <alice@example.com>", store.Messages[len(store.Messages)-1])
+	assert.Equal(t, "okdp: update demo/trino by alice"+coAuthor, store.Messages[len(store.Messages)-1])
 	assert.Equal(t, repository.PhaseUpdating, instance.Status, "the engine still runs the previous version")
 	assert.NotEmpty(t, instance.Revision)
 
@@ -248,7 +260,7 @@ func TestDeleteRemovesTheInstanceDirectory(t *testing.T) {
 	for p := range store.Files() {
 		assert.False(t, strings.HasPrefix(p, "projects/demo/services/trino/"), "left behind: %s", p)
 	}
-	assert.Equal(t, "okdp: delete demo/trino by alice\n\nCo-Authored-By: Alice Martin <alice@example.com>", store.Messages[len(store.Messages)-1])
+	assert.Equal(t, "okdp: delete demo/trino by alice"+coAuthor, store.Messages[len(store.Messages)-1])
 	assert.True(t, apierrors.IsNotFound(svc.DeleteService(aliceContext(), "demo", "trino")))
 }
 

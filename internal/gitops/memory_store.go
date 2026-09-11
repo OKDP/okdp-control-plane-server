@@ -14,8 +14,11 @@ type MemoryStore struct {
 	mu       sync.Mutex
 	files    map[string][]byte
 	revision int
-	// Messages records the commit messages, oldest first.
+	// Messages records the full commit messages, oldest first, as a GitStore
+	// committing as DefaultCommitter writes them.
 	Messages []string
+	// Commits records the commits themselves, oldest first.
+	Commits []Commit
 }
 
 // NewMemoryStore returns a store holding the given files.
@@ -48,7 +51,7 @@ func (s *MemoryStore) View(_ context.Context, fn func(r Reader) error) error {
 	return fn(&memoryTx{files: s.files})
 }
 
-func (s *MemoryStore) Update(_ context.Context, message string, fn func(tx Tx) error) (string, error) {
+func (s *MemoryStore) Update(_ context.Context, commit Commit, fn func(tx Tx) error) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -65,7 +68,8 @@ func (s *MemoryStore) Update(_ context.Context, message string, fn func(tx Tx) e
 	}
 	s.files = working
 	s.revision++
-	s.Messages = append(s.Messages, message)
+	s.Messages = append(s.Messages, commit.Message(DefaultCommitter))
+	s.Commits = append(s.Commits, commit)
 	return s.rev(), nil
 }
 

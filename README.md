@@ -81,20 +81,29 @@ projects/<project>/services/<instance>/helmrelease.yaml   # Flux only, generated
 projects/<project>/services/<instance>/kustomization.yaml # Flux only, generated
 ```
 
-Commits read `okdp: <action> <project>/<instance> by <user>`, authored by the configured
-GitOps author and naming the logged-in user as co-author in a trailer:
+Commits read `okdp: <action> <project>/<instance> by <user>`. The logged-in user is the
+commit author; the configured GitOps identity (`GITOPS_AUTHOR_NAME` / `GITOPS_AUTHOR_EMAIL`)
+is the committer, and the server names itself as co-author in a trailer:
 
 ```
-okdp: deploy demo/trino by alice
+Author:    Alice Martin <alice@example.com>
+Committer: OKDP control plane <okdp-control-plane@okdp.io>
 
-Co-Authored-By: Alice Martin <alice@example.com>
+    okdp: deploy demo/trino by alice
+
+    Co-Authored-By: okdp-control-plane-server v0.9.0 <okdp-control-plane@okdp.io>
 ```
 
-The trailer comes from the access token: the `email` claim (Keycloak: the `email` client
-scope on the console client) and the `name` claim (the `profile` scope; the user name
-when absent). Without an email (the claim is missing or not an address, or authentication
-is disabled) the commit has no trailer and the server logs a warning once per user. CR,
-LF, `<` and `>` are stripped from both values. Writes are serialised and
+The trailer names the program (the last element of the Go module path) and its version,
+set at build time (`-ldflags "-X github.com/okdp/okdp-control-plane-server/internal/buildinfo.Version=<v>"`:
+the image build passes the release version as the `VERSION` build argument, `make build`
+passes `git describe`; `dev` otherwise), with the committer email. The author comes from
+the access token: the `email` claim (Keycloak: the `email` client scope on the console
+client) and the `name` claim (the `profile` scope; the user name when absent). Without an
+email (the claim is missing or not an address, or authentication is disabled) the GitOps
+identity authors the commit too, the user is named in the subject only, the message has
+no trailer, and the server logs a warning once per user. CR, LF, `<` and `>` are stripped
+from the name and email. Writes are serialised and
 replayed on top of the new revision when someone else pushed in between. The generated
 Flux files are byte-identical to what `scripts/render-flux.sh` of okdp-sandbox produces
 (the format is specified in its `gitops/README.md`; the golden tests of
@@ -237,7 +246,7 @@ its `configuration:` values (see [`chart/values.yaml`](chart/values.yaml)).
 | `GITOPS_PATH` | Directory of the repository holding the layout | repository root | No |
 | `GITOPS_CREDENTIALS_DIR` | Mounted credentials Secret (`username`/`password`, `bearerToken`, or `identity`/`known_hosts`) | `/etc/okdp/gitops-credentials` | No |
 | `GITOPS_SSH_INSECURE_IGNORE_HOST_KEY` | Accept any SSH host key (sandboxes only) | `false` | No |
-| `GITOPS_AUTHOR_NAME` / `GITOPS_AUTHOR_EMAIL` | Commit author (the acting user is in the message) | `OKDP control plane` / `okdp-control-plane@okdp.io` | No |
+| `GITOPS_AUTHOR_NAME` / `GITOPS_AUTHOR_EMAIL` | Commit committer (and author when the user has no email; the logged-in user authors the commit otherwise) | `OKDP control plane` / `okdp-control-plane@okdp.io` | No |
 | `GITOPS_CLONE_DIR` | Local clone, a cache (empty: in memory) | in memory | No |
 | `GITOPS_ENGINE` | `flux` or `argocd`: whose objects carry render/sync errors | `flux` | No |
 | `GITOPS_RELEASES_NAMESPACE` | Flux HelmReleases and values ConfigMaps, `okdp-platform-values` included | `okdp-releases` | No |

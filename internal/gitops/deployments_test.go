@@ -54,7 +54,7 @@ func TestInstanceLifecycleWritesTheContractFiles(t *testing.T) {
 	if err != nil || back.Description != "Data lake bucket" || back.SecretRef != "lake-credentials" || back.Values["region"] != "eu" {
 		t.Fatalf("round trip: %+v %v", back, err)
 	}
-	if store.Messages[1] != "okdp: deploy demo/trino by alice\n\nCo-Authored-By: Alice Martin <alice@example.com>" {
+	if store.Messages[1] != "okdp: deploy demo/trino by alice"+trailer || *store.Commits[1].Author != (Signature{Name: "Alice Martin", Email: "alice@example.com"}) {
 		t.Errorf("commit message %q", store.Messages[1])
 	}
 

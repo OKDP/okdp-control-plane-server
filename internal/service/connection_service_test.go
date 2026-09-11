@@ -163,6 +163,7 @@ func TestCreateStoresCredentialsInASecretAndNotInGit(t *testing.T) {
 	assert.True(t, response.CredentialsSecret.Owned)
 	assert.Equal(t, "Corporate warehouse", response.Description)
 	assert.Equal(t, "okdp: create connection demo/warehouse by anonymous", store.Messages[0])
+	assert.Nil(t, store.Commits[0].Author, "without a user the service identity authors the commit")
 }
 
 func TestCreateOnATakenNameIsAConflictAndLeavesTheCredentialsAlone(t *testing.T) {

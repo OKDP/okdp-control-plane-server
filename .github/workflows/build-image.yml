@@ -41,6 +41,7 @@ jobs:
           INPUT_VERSION: ${{ inputs.version }}
         run: |
           VERSION="${INPUT_VERSION:-$(jq -r '.["."] // "0.1.0"' .release-please-manifest.json)}"
+          VERSION="${VERSION#v}"   # the image tag and the binary carry no leading "v"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
@@ -58,6 +59,8 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           tags: quay.io/okdp/images/okdp-control-plane-server:${{ steps.vars.outputs.version }}
+          build-args: |
+            VERSION=${{ steps.vars.outputs.version }}
           labels: |
             org.opencontainers.image.title=okdp-control-plane-server
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}

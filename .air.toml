@@ -2,7 +2,7 @@ root = "."
 tmp_dir = "tmp"
 
 [build]
-  cmd = "go build -o ./tmp/server ./cmd/server"
+  cmd = "go build -ldflags \"-X github.com/okdp/okdp-control-plane-server/internal/buildinfo.Version=$(git describe --tags --always --dirty 2>/dev/null | sed s/^v//)\" -o ./tmp/server ./cmd/server"
   bin = "./tmp/server"
   include_ext = ["go"]
   exclude_dir = ["tmp", "vendor", "docs", ".dev"]

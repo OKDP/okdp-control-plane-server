@@ -219,7 +219,7 @@ func jsonRoundTrip(values map[string]any) map[string]any {
 // instance directory is already there.
 func (d *Deployments) CreateInstance(ctx context.Context, actor auth.Actor, st InstanceState) (string, error) {
 	target := st.Instance.Project + "/" + st.Instance.Name
-	return d.Store.Update(ctx, CommitMessage("deploy", target, actor), func(tx Tx) error {
+	return d.Store.Update(ctx, NewCommit("deploy", target, actor), func(tx Tx) error {
 		if tx.Exists(ServiceDir(st.Instance.Project, st.Instance.Name)) {
 			return fmt.Errorf("instance %s: %w", target, ErrExists)
 		}
@@ -240,7 +240,7 @@ func (d *Deployments) CreateInstance(ctx context.Context, actor auth.Actor, st I
 // writes it back. change may run more than once when the write is replayed.
 func (d *Deployments) UpdateInstance(ctx context.Context, actor auth.Actor, project, name string, change func(st *InstanceState) error) (*InstanceState, string, error) {
 	var result *InstanceState
-	rev, err := d.Store.Update(ctx, CommitMessage("update", project+"/"+name, actor), func(tx Tx) error {
+	rev, err := d.Store.Update(ctx, NewCommit("update", project+"/"+name, actor), func(tx Tx) error {
 		st, err := readInstance(tx, project, name)
 		if err != nil {
 			return err
@@ -259,7 +259,7 @@ func (d *Deployments) UpdateInstance(ctx context.Context, actor auth.Actor, proj
 // had deployed.
 func (d *Deployments) DeleteInstance(ctx context.Context, actor auth.Actor, project, name string) (string, error) {
 	target := project + "/" + name
-	return d.Store.Update(ctx, CommitMessage("delete", target, actor), func(tx Tx) error {
+	return d.Store.Update(ctx, NewCommit("delete", target, actor), func(tx Tx) error {
 		dir := ServiceDir(project, name)
 		if !tx.Exists(dir) {
 			return fmt.Errorf("instance %s: %w", target, ErrNotFound)
@@ -535,7 +535,7 @@ func (d *Deployments) PutConnection(ctx context.Context, actor auth.Actor, c Con
 		action = "create connection"
 	}
 	target := c.Project + "/" + c.Name
-	return d.Store.Update(ctx, CommitMessage(action, target, actor), func(tx Tx) error {
+	return d.Store.Update(ctx, NewCommit(action, target, actor), func(tx Tx) error {
 		exists := tx.Exists(ConnectionPath(c.Project, c.Name))
 		if create && exists {
 			return fmt.Errorf("connection %s: %w", target, ErrExists)
@@ -566,7 +566,7 @@ func (d *Deployments) PutConnection(ctx context.Context, actor auth.Actor, c Con
 // instance still layers it in: both engines would fail to render that instance.
 func (d *Deployments) DeleteConnection(ctx context.Context, actor auth.Actor, project, name string) (string, error) {
 	target := project + "/" + name
-	return d.Store.Update(ctx, CommitMessage("delete connection", target, actor), func(tx Tx) error {
+	return d.Store.Update(ctx, NewCommit("delete connection", target, actor), func(tx Tx) error {
 		if !tx.Exists(ConnectionPath(project, name)) {
 			return fmt.Errorf("connection %s: %w", target, ErrNotFound)
 		}
@@ -609,7 +609,7 @@ func (d *Deployments) PutProject(ctx context.Context, actor auth.Actor, p Projec
 	if err != nil {
 		return "", err
 	}
-	return d.Store.Update(ctx, CommitMessage("update project", p.Name, actor), func(tx Tx) error {
+	return d.Store.Update(ctx, NewCommit("update project", p.Name, actor), func(tx Tx) error {
 		if err := tx.WriteFile(ProjectFilePath(p.Name), data); err != nil {
 			return err
 		}
@@ -622,7 +622,7 @@ func (d *Deployments) DeleteProject(ctx context.Context, actor auth.Actor, proje
 	if err := ValidateName("project", project); err != nil {
 		return "", err
 	}
-	return d.Store.Update(ctx, CommitMessage("delete project", project, actor), func(tx Tx) error {
+	return d.Store.Update(ctx, NewCommit("delete project", project, actor), func(tx Tx) error {
 		return tx.Remove(ProjectDir(project))
 	})
 }
@@ -657,7 +657,7 @@ func (d *Deployments) ReadCatalog(ctx context.Context) (map[string]any, error) {
 // UpdateCatalog applies change to the latest catalog and writes it back. A
 // missing catalog starts empty.
 func (d *Deployments) UpdateCatalog(ctx context.Context, actor auth.Actor, target string, change func(catalog map[string]any) error) (string, error) {
-	return d.Store.Update(ctx, CommitMessage("update catalog", target, actor), func(tx Tx) error {
+	return d.Store.Update(ctx, NewCommit("update catalog", target, actor), func(tx Tx) error {
 		catalog := map[string]any{}
 		raw, err := tx.ReadFile(CatalogPath)
 		switch {

@@ -18,12 +18,12 @@ func IdentityFromContext(ctx context.Context) *Identity {
 }
 
 // Actor is the caller as the Git writer records it: Username goes in the
-// commit subject, Name and Email in its Co-Authored-By trailer.
+// commit subject, Name and Email make the commit author.
 type Actor struct {
 	Username string
 	Name     string
 	// Email is empty when the token has no email claim or without
-	// authentication; no trailer can be written then.
+	// authentication; the service identity authors the commit then.
 	Email string
 }
 

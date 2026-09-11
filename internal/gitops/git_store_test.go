@@ -11,6 +11,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/transport/client"
 	"github.com/go-git/go-git/v5/plumbing/transport/server"
+	"github.com/okdp/okdp-control-plane-server/internal/auth"
 )
 
 func init() {
@@ -62,7 +63,7 @@ func TestGitStoreWritesToAnEmptyRemoteAndReadsBack(t *testing.T) {
 		writer := newStore(t, url, onDisk)
 		ctx := context.Background()
 
-		rev, err := writer.Update(ctx, CommitMessage("deploy", "demo/hive", alice), func(tx Tx) error {
+		rev, err := writer.Update(ctx, NewCommit("deploy", "demo/hive", alice), func(tx Tx) error {
 			return tx.WriteFile("projects/demo/services/hive/instance.yaml", []byte("name: hive\n"))
 		})
 		if err != nil || rev == "" {
@@ -89,12 +90,40 @@ func TestGitStoreWritesToAnEmptyRemoteAndReadsBack(t *testing.T) {
 			t.Fatalf("main branch not pushed: %v", err)
 		}
 		commit, _ := repo.CommitObject(head.Hash())
-		if commit.Message != "okdp: deploy demo/hive by alice\n\nCo-Authored-By: Alice Martin <alice@example.com>" || commit.Author.Name != "tester" {
-			t.Fatalf("commit = %q by %q", commit.Message, commit.Author.Name)
+		if want := "okdp: deploy demo/hive by alice\n\nCo-Authored-By: okdp-control-plane-server v0.9.0 <t@example.com>"; commit.Message != want {
+			t.Fatalf("message = %q, want %q", commit.Message, want)
+		}
+		if commit.Author.Name != "Alice Martin" || commit.Author.Email != "alice@example.com" {
+			t.Fatalf("author = %s <%s>, want the logged-in user", commit.Author.Name, commit.Author.Email)
+		}
+		if commit.Committer.Name != "tester" || commit.Committer.Email != "t@example.com" {
+			t.Fatalf("committer = %s <%s>, want the service identity", commit.Committer.Name, commit.Committer.Email)
 		}
 		if _, err := commit.File("gitops/projects/demo/services/hive/instance.yaml"); err != nil {
 			t.Fatalf("file not under the prefix: %v", err)
 		}
+	}
+}
+
+func TestGitStoreCommitsWithoutAUserAsTheServiceIdentity(t *testing.T) {
+	url := newRemote(t)
+	s := newStore(t, url, false)
+	anonymous := auth.Actor{Username: "anonymous", Name: "anonymous"}
+	if _, err := s.Update(context.Background(), NewCommit("create connection", "demo/lake", anonymous), func(tx Tx) error {
+		return tx.WriteFile("a.yaml", []byte("a\n"))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	repo, _ := git.PlainOpen(strings.TrimPrefix(url, "file://"))
+	head, _ := repo.Reference(plumbing.NewBranchReferenceName("main"), true)
+	commit, _ := repo.CommitObject(head.Hash())
+	if commit.Message != "okdp: create connection demo/lake by anonymous" {
+		t.Errorf("message = %q, want the subject only", commit.Message)
+	}
+	if commit.Author.Name != "tester" || commit.Author.Email != "t@example.com" ||
+		commit.Committer.Name != "tester" || commit.Committer.Email != "t@example.com" {
+		t.Errorf("author %s <%s>, committer %s <%s>: want the service identity for both",
+			commit.Author.Name, commit.Author.Email, commit.Committer.Name, commit.Committer.Email)
 	}
 }
 
@@ -104,18 +133,18 @@ func TestGitStoreReplaysAWriteThatLostTheRace(t *testing.T) {
 	a := newStore(t, url, false)
 	b := newStore(t, url, true)
 
-	if _, err := a.Update(ctx, "seed", func(tx Tx) error {
+	if _, err := a.Update(ctx, Commit{Subject: "seed"}, func(tx Tx) error {
 		return tx.WriteFile("platform/catalog.yaml", []byte("categories: []\n"))
 	}); err != nil {
 		t.Fatal(err)
 	}
 
 	calls := 0
-	_, err := b.Update(ctx, "b writes", func(tx Tx) error {
+	_, err := b.Update(ctx, Commit{Subject: "b writes"}, func(tx Tx) error {
 		calls++
 		if calls == 1 {
 			// Another writer pushes between our fetch and our push.
-			if _, err := a.Update(ctx, "a writes", func(tx Tx) error {
+			if _, err := a.Update(ctx, Commit{Subject: "a writes"}, func(tx Tx) error {
 				return tx.WriteFile("projects/demo/project.yaml", []byte("name: demo\n"))
 			}); err != nil {
 				t.Fatalf("concurrent write: %v", err)
@@ -143,13 +172,13 @@ func TestGitStoreFailedChangeLeavesNothingBehind(t *testing.T) {
 	url := newRemote(t)
 	ctx := context.Background()
 	s := newStore(t, url, true)
-	if _, err := s.Update(ctx, "seed", func(tx Tx) error {
+	if _, err := s.Update(ctx, Commit{Subject: "seed"}, func(tx Tx) error {
 		return tx.WriteFile("a.yaml", []byte("a\n"))
 	}); err != nil {
 		t.Fatal(err)
 	}
 	boom := errors.New("boom")
-	_, err := s.Update(ctx, "fails", func(tx Tx) error {
+	_, err := s.Update(ctx, Commit{Subject: "fails"}, func(tx Tx) error {
 		_ = tx.WriteFile("b.yaml", []byte("b\n"))
 		_ = tx.Remove("a.yaml")
 		return boom
@@ -169,11 +198,11 @@ func TestGitStoreNoChangeCommitsNothing(t *testing.T) {
 	url := newRemote(t)
 	ctx := context.Background()
 	s := newStore(t, url, false)
-	rev1, err := s.Update(ctx, "seed", func(tx Tx) error { return tx.WriteFile("a.yaml", []byte("a\n")) })
+	rev1, err := s.Update(ctx, Commit{Subject: "seed"}, func(tx Tx) error { return tx.WriteFile("a.yaml", []byte("a\n")) })
 	if err != nil {
 		t.Fatal(err)
 	}
-	rev2, err := s.Update(ctx, "same", func(tx Tx) error { return tx.WriteFile("a.yaml", []byte("a\n")) })
+	rev2, err := s.Update(ctx, Commit{Subject: "same"}, func(tx Tx) error { return tx.WriteFile("a.yaml", []byte("a\n")) })
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -36,7 +36,9 @@ type GitOptions struct {
 	PathPrefix string
 	// Auth authenticates the fetches and pushes, nil for anonymous access.
 	Auth transport.AuthMethod
-	// AuthorName and AuthorEmail sign the commits.
+	// AuthorName and AuthorEmail are the service identity: the committer of
+	// every commit, and its author when the commit names no user
+	// (GITOPS_AUTHOR_NAME, GITOPS_AUTHOR_EMAIL).
 	AuthorName  string
 	AuthorEmail string
 	// CloneDir holds the local clone, a cache only (an emptyDir in the pod).
@@ -77,10 +79,10 @@ func NewGitStore(opts GitOptions) (*GitStore, error) {
 		opts.RefreshInterval = 5 * time.Second
 	}
 	if opts.AuthorName == "" {
-		opts.AuthorName = "OKDP control plane"
+		opts.AuthorName = DefaultCommitter.Name
 	}
 	if opts.AuthorEmail == "" {
-		opts.AuthorEmail = "okdp-control-plane@okdp.io"
+		opts.AuthorEmail = DefaultCommitter.Email
 	}
 	prefix, err := cleanPath(strings.Trim(opts.PathPrefix, "/"))
 	if err != nil {
@@ -220,7 +222,14 @@ func (s *GitStore) View(ctx context.Context, fn func(r Reader) error) error {
 	return fn(&fsTx{fs: s.root})
 }
 
-func (s *GitStore) Update(ctx context.Context, message string, fn func(tx Tx) error) (string, error) {
+func (s *GitStore) Update(ctx context.Context, commit Commit, fn func(tx Tx) error) (string, error) {
+	committerID := Signature{Name: s.opts.AuthorName, Email: s.opts.AuthorEmail}
+	authorID := committerID
+	if commit.Author != nil {
+		authorID = *commit.Author
+	}
+	message := commit.Message(committerID)
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -256,8 +265,10 @@ func (s *GitStore) Update(ctx context.Context, message string, fn func(tx Tx) er
 		}
 
 		now := time.Now()
-		signature := &object.Signature{Name: s.opts.AuthorName, Email: s.opts.AuthorEmail, When: now}
-		hash, err := s.worktree.Commit(message, &git.CommitOptions{Author: signature, Committer: signature})
+		hash, err := s.worktree.Commit(message, &git.CommitOptions{
+			Author:    &object.Signature{Name: authorID.Name, Email: authorID.Email, When: now},
+			Committer: &object.Signature{Name: committerID.Name, Email: committerID.Email, When: now},
+		})
 		if err != nil {
 			s.synced = false
 			return "", fmt.Errorf("failed to commit: %w", err)
@@ -272,7 +283,7 @@ func (s *GitStore) Update(ctx context.Context, message string, fn func(tx Tx) er
 			// The remote now holds exactly this commit.
 			_ = s.repo.Storer.SetReference(plumbing.NewHashReference(s.remoteRef(), hash))
 			s.lastSync = now
-			logrus.WithField("revision", hash.String()).WithField("message", message).Info("Committed to the deployments repository")
+			logrus.WithField("revision", hash.String()).WithField("author", authorID.Name).WithField("message", commit.Subject).Info("Committed to the deployments repository")
 			return hash.String(), nil
 		}
 		s.synced = false

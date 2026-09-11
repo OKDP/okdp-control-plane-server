@@ -20,6 +20,7 @@ import (
 	"unicode"
 
 	"github.com/okdp/okdp-control-plane-server/internal/auth"
+	"github.com/okdp/okdp-control-plane-server/internal/buildinfo"
 	"github.com/sirupsen/logrus"
 )
 
@@ -59,11 +60,11 @@ type Store interface {
 	// View runs fn against a consistent, recently refreshed snapshot.
 	View(ctx context.Context, fn func(r Reader) error) error
 	// Update runs fn on top of the latest remote revision and commits its
-	// changes with message. When another writer pushed in between, the change
+	// changes as commit describes. When another writer pushed in between, the change
 	// is replayed on the new revision (the equivalent of a rebase: fn is the
 	// change, not a patch) and pushed again. A transaction changing nothing
 	// commits nothing. Returns the revision holding the change.
-	Update(ctx context.Context, message string, fn func(tx Tx) error) (string, error)
+	Update(ctx context.Context, commit Commit, fn func(tx Tx) error) (string, error)
 }
 
 // cleanPath validates a repository-relative path. Absolute paths and paths
@@ -83,39 +84,78 @@ func cleanPath(p string) (string, error) {
 	return cleaned, nil
 }
 
-// CommitMessage builds the commit message of a console action, as the shared
-// contract fixes it: "okdp: <action> <project>/<instance> by <user>". The
-// logged-in user is also named as co-author, in a trailer Git hosts link to
-// their account:
+// Signature is a Git identity: a commit author or committer.
+type Signature struct {
+	Name  string
+	Email string
+}
+
+// Commit is a change the Store writes: its subject line and who made it. The
+// Store is the committer, with the service identity it is configured with
+// (GITOPS_AUTHOR_NAME, GITOPS_AUTHOR_EMAIL).
+type Commit struct {
+	// Subject is the first line of the message.
+	Subject string
+	// Author is the logged-in user, nil when unknown: the committer then
+	// authors the commit too.
+	Author *Signature
+}
+
+// NewCommit describes a console action, as the shared contract fixes its
+// subject: "okdp: <action> <project>/<instance> by <user>". The logged-in
+// user authors the commit with the name and email claims of the token; the
+// control plane commits it and names itself as co-author (see Message):
+//
+//	Author:    Alice Martin <alice@example.com>
+//	Committer: OKDP control plane <okdp-control-plane@okdp.io>
 //
 //	okdp: deploy demo/trino by alice
 //
-//	Co-Authored-By: Alice Martin <alice@example.com>
+//	Co-Authored-By: okdp-control-plane-server v0.9.0 <okdp-control-plane@okdp.io>
 //
-// The trailer needs an email: without one (a token lacking the email claim, or
-// authentication disabled) it is left out and a warning is logged once per
-// user. Name and email are sanitised so a crafted claim cannot add lines.
-func CommitMessage(action, target string, actor auth.Actor) string {
+// An author needs an email: without one (a token lacking the email claim, or
+// authentication disabled) the service identity authors the commit, the user
+// is named in the subject only, and a warning is logged once per user. Name
+// and email are sanitised so a crafted claim cannot add lines.
+func NewCommit(action, target string, actor auth.Actor) Commit {
 	user := stripUnsafe(actor.Username)
 	if user == "" {
 		user = "unknown"
 	}
-	subject := fmt.Sprintf("okdp: %s %s by %s", action, target, user)
+	commit := Commit{Subject: fmt.Sprintf("okdp: %s %s by %s", action, target, user)}
 
 	email := stripUnsafe(actor.Email)
 	if !looksLikeEmail(email) {
-		warnNoCoAuthor(user, actor.Email)
-		return subject
+		warnNoAuthor(user, actor.Email)
+		return commit
 	}
 	name := stripUnsafe(actor.Name)
 	if name == "" {
 		name = user
 	}
-	return fmt.Sprintf("%s\n\nCo-Authored-By: %s <%s>", subject, name, email)
+	commit.Author = &Signature{Name: name, Email: email}
+	return commit
 }
 
-// stripUnsafe removes what could break out of a trailer line or its <email>
-// part: control characters (CR and LF included), '<' and '>'.
+// Message returns the full commit message. A commit authored by a user names
+// the control plane, which committed it, as co-author:
+// "Co-Authored-By: <program> v<version> <committer email>", the program and
+// version being those of the running binary (package buildinfo). A commit the
+// service identity authors itself has the subject only: the trailer would
+// repeat the author.
+func (c Commit) Message(committer Signature) string {
+	if c.Author == nil {
+		return c.Subject
+	}
+	return fmt.Sprintf("%s\n\nCo-Authored-By: %s v%s <%s>", c.Subject,
+		stripUnsafe(buildinfo.Name(committer.Name)), stripUnsafe(buildinfo.CurrentVersion()), stripUnsafe(committer.Email))
+}
+
+// DefaultCommitter is the service identity used when none is configured.
+var DefaultCommitter = Signature{Name: "OKDP control plane", Email: "okdp-control-plane@okdp.io"}
+
+// stripUnsafe removes what could break out of a message line or an
+// identity's <email> part: control characters (CR and LF included), '<' and '>'.
 func stripUnsafe(s string) string {
 	s = strings.Map(func(r rune) rune {
 		if r == '<' || r == '>' || unicode.IsControl(r) {
@@ -138,7 +178,7 @@ func looksLikeEmail(s string) bool {
 // warnedActors remembers who was already reported as lacking an email.
 var warnedActors sync.Map
 
-func warnNoCoAuthor(user, email string) {
+func warnNoAuthor(user, email string) {
 	if _, seen := warnedActors.LoadOrStore(user, struct{}{}); seen {
 		return
 	}
@@ -149,5 +189,5 @@ func warnNoCoAuthor(user, email string) {
 	case user == "anonymous":
 		reason = "no logged-in user (authentication disabled)"
 	}
-	logrus.Warnf("gitops: commits by %q carry no Co-Authored-By trailer: %s", user, reason)
+	logrus.Warnf("gitops: commits by %q are authored by the control plane, not the user: %s", user, reason)
 }

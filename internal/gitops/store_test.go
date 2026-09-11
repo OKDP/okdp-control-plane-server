@@ -1,13 +1,21 @@
 package gitops
 
 import (
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/okdp/okdp-control-plane-server/internal/auth"
+	"github.com/okdp/okdp-control-plane-server/internal/buildinfo"
 	"github.com/sirupsen/logrus"
 	"github.com/sirupsen/logrus/hooks/test"
 )
+
+// TestMain fixes the version the commits name, as the linker would.
+func TestMain(m *testing.M) {
+	buildinfo.Version = "0.9.0"
+	os.Exit(m.Run())
+}
 
 // alice and bob are the logged-in users of the writer tests.
 var (
@@ -15,21 +23,40 @@ var (
 	bob   = auth.Actor{Username: "bob", Name: "Bob", Email: "bob@example.com"}
 )
 
-func TestCommitMessageNamesTheUserAsCoAuthor(t *testing.T) {
-	got := CommitMessage("deploy", "demo/trino", alice)
-	want := "okdp: deploy demo/trino by alice\n\nCo-Authored-By: Alice Martin <alice@example.com>"
-	if got != want {
+// service is the committer of the message tests.
+var service = Signature{Name: "OKDP control plane", Email: "okdp-control-plane@okdp.io"}
+
+const trailer = "\n\nCo-Authored-By: okdp-control-plane-server v0.9.0 <okdp-control-plane@okdp.io>"
+
+func TestCommitIsAuthoredByTheUserAndCoAuthoredByTheControlPlane(t *testing.T) {
+	commit := NewCommit("deploy", "demo/trino", alice)
+	if commit.Author == nil || *commit.Author != (Signature{Name: "Alice Martin", Email: "alice@example.com"}) {
+		t.Errorf("author = %+v", commit.Author)
+	}
+	want := "okdp: deploy demo/trino by alice" + trailer
+	if got := commit.Message(service); got != want {
 		t.Errorf("message =\n%q\nwant\n%q", got, want)
 	}
 }
 
-func TestCommitMessageWithoutEmailHasNoTrailerAndWarnsOnce(t *testing.T) {
+func TestCommitTrailerNamesTheConfiguredCommitterEmail(t *testing.T) {
+	got := NewCommit("deploy", "demo/trino", alice).Message(Signature{Name: "Bot", Email: "bot@corp.example"})
+	if want := "okdp: deploy demo/trino by alice\n\nCo-Authored-By: okdp-control-plane-server v0.9.0 <bot@corp.example>"; got != want {
+		t.Errorf("message = %q, want %q", got, want)
+	}
+}
+
+func TestCommitWithoutEmailIsAuthoredByTheServiceAndWarnsOnce(t *testing.T) {
 	hook := test.NewGlobal()
 	defer hook.Reset()
 
 	bob := auth.Actor{Username: "bob-no-email", Name: "Bob"}
 	for range 3 {
-		if got := CommitMessage("delete", "demo/trino", bob); got != "okdp: delete demo/trino by bob-no-email" {
+		commit := NewCommit("delete", "demo/trino", bob)
+		if commit.Author != nil {
+			t.Errorf("author = %+v, want none", commit.Author)
+		}
+		if got := commit.Message(service); got != "okdp: delete demo/trino by bob-no-email" {
 			t.Errorf("message = %q", got)
 		}
 	}
@@ -44,25 +71,30 @@ func TestCommitMessageWithoutEmailHasNoTrailerAndWarnsOnce(t *testing.T) {
 	}
 }
 
-func TestCommitMessageForAnonymousHasNoTrailer(t *testing.T) {
+func TestCommitForAnonymousHasNoAuthorNorTrailer(t *testing.T) {
 	anonymous := auth.Actor{Username: "anonymous", Name: "anonymous"}
-	if got := CommitMessage("create connection", "demo/lake", anonymous); got != "okdp: create connection demo/lake by anonymous" {
-		t.Errorf("message = %q", got)
+	commit := NewCommit("create connection", "demo/lake", anonymous)
+	if commit.Author != nil || commit.Message(service) != "okdp: create connection demo/lake by anonymous" {
+		t.Errorf("commit = %+v, message %q", commit, commit.Message(service))
 	}
-	if got := CommitMessage("update", "demo/lake", auth.Actor{}); got != "okdp: update demo/lake by unknown" {
-		t.Errorf("message = %q", got)
+	commit = NewCommit("update", "demo/lake", auth.Actor{})
+	if commit.Author != nil || commit.Message(service) != "okdp: update demo/lake by unknown" {
+		t.Errorf("commit = %+v, message %q", commit, commit.Message(service))
 	}
 }
 
-func TestCommitMessageCannotBeInjectedIntoTrailers(t *testing.T) {
+func TestCommitCannotBeInjectedIntoTheMessageOrTheAuthor(t *testing.T) {
 	mallory := auth.Actor{
 		Username: "mallory\nCo-Authored-By: u <u@v>",
 		Name:     "Mallory\nCo-Authored-By: x <y@z>",
 		Email:    "mallory@example.com\r\n",
 	}
-	got := CommitMessage("deploy", "demo/trino", mallory)
-	want := "okdp: deploy demo/trino by malloryCo-Authored-By: u u@v\n\nCo-Authored-By: MalloryCo-Authored-By: x y@z <mallory@example.com>"
-	if got != want {
+	commit := NewCommit("deploy", "demo/trino", mallory)
+	if commit.Author == nil || *commit.Author != (Signature{Name: "MalloryCo-Authored-By: x y@z", Email: "mallory@example.com"}) {
+		t.Errorf("author = %+v", commit.Author)
+	}
+	got := commit.Message(service)
+	if want := "okdp: deploy demo/trino by malloryCo-Authored-By: u u@v" + trailer; got != want {
 		t.Errorf("message =\n%q\nwant\n%q", got, want)
 	}
 	if n := strings.Count(got, "\n"); n != 2 {
@@ -70,18 +102,19 @@ func TestCommitMessageCannotBeInjectedIntoTrailers(t *testing.T) {
 	}
 }
 
-func TestCommitMessageSkipsTheTrailerForAnInvalidEmail(t *testing.T) {
+func TestCommitHasNoUserAuthorForAnInvalidEmail(t *testing.T) {
 	for _, email := range []string{"not-an-address", "a@b@c", "a b@c", "@example.com", "alice@", "<>@x"} {
 		actor := auth.Actor{Username: "eve-" + email, Name: "Eve", Email: email}
-		if got := CommitMessage("deploy", "demo/trino", actor); strings.Contains(got, "Co-Authored-By") {
-			t.Errorf("email %q: message %q has a trailer", email, got)
+		commit := NewCommit("deploy", "demo/trino", actor)
+		if commit.Author != nil || strings.Contains(commit.Message(service), "Co-Authored-By") {
+			t.Errorf("email %q: author %+v, message %q", email, commit.Author, commit.Message(service))
 		}
 	}
 }
 
-func TestCommitMessageFallsBackToTheUsernameForAnEmptyName(t *testing.T) {
-	got := CommitMessage("deploy", "demo/trino", auth.Actor{Username: "alice", Name: "<>", Email: "alice@example.com"})
-	if want := "okdp: deploy demo/trino by alice\n\nCo-Authored-By: alice <alice@example.com>"; got != want {
-		t.Errorf("message = %q, want %q", got, want)
+func TestCommitAuthorFallsBackToTheUsernameForAnEmptyName(t *testing.T) {
+	commit := NewCommit("deploy", "demo/trino", auth.Actor{Username: "alice", Name: "<>", Email: "alice@example.com"})
+	if commit.Author == nil || *commit.Author != (Signature{Name: "alice", Email: "alice@example.com"}) {
+		t.Errorf("author = %+v", commit.Author)
 	}
 }

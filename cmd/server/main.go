@@ -10,6 +10,7 @@ import (
 	"github.com/okdp/okdp-control-plane-server/internal/api/handlers"
 	"github.com/okdp/okdp-control-plane-server/internal/api/router"
 	"github.com/okdp/okdp-control-plane-server/internal/auth"
+	"github.com/okdp/okdp-control-plane-server/internal/buildinfo"
 	"github.com/okdp/okdp-control-plane-server/internal/config"
 	"github.com/okdp/okdp-control-plane-server/internal/gitops"
 	"github.com/okdp/okdp-control-plane-server/internal/repository"
@@ -196,7 +197,7 @@ func main() {
 		IdleTimeout:       120 * time.Second,
 	}
 
-	logrus.WithField("port", cfg.ServerPort).Info("Starting server")
+	logrus.WithField("port", cfg.ServerPort).WithField("version", buildinfo.CurrentVersion()).Info("Starting server")
 	if err := server.ListenAndServe(); err != nil {
 		logrus.Fatalf("Failed to start server: %v", err)
 	}

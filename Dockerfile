@@ -6,6 +6,9 @@ FROM --platform=$BUILDPLATFORM golang:${GO_VERSION} AS go-build
 
 ARG TARGETOS=linux
 ARG TARGETARCH
+# Version of the server (no leading "v"), named in the startup log and in the
+# co-author trailer of the commits it writes. CI passes the release version.
+ARG VERSION=dev
 
 WORKDIR /workspace/okdp-server
 
@@ -22,7 +25,9 @@ COPY internal/ internal/
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg \
     CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
-    go build -trimpath -ldflags="-s -w" -o /okdp-server ./cmd/server
+    go build -trimpath \
+      -ldflags="-s -w -X github.com/okdp/okdp-control-plane-server/internal/buildinfo.Version=${VERSION}" \
+      -o /okdp-server ./cmd/server
 
 FROM alpine:3.21
 
