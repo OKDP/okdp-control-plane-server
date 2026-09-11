@@ -43,7 +43,8 @@ func (s *DefaultExternalSecretService) ListExternalSecrets(ctx context.Context, 
 		return nil, err
 	}
 
-	var result []models.ExternalSecretResponse
+	// Never nil: no external secret answers [] in JSON, not null.
+	result := make([]models.ExternalSecretResponse, 0, len(items))
 	for i := range items {
 		result = append(result, s.toResponse(&items[i], namespace))
 	}

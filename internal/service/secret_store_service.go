@@ -47,7 +47,8 @@ func (s *DefaultSecretStoreService) ListSecretStores(ctx context.Context, namesp
 		return nil, err
 	}
 
-	var result []models.SecretStoreResponse
+	// Never nil: no store answers [] in JSON, not null.
+	result := make([]models.SecretStoreResponse, 0, len(stores))
 	for i := range stores {
 		result = append(result, s.toResponse(&stores[i], namespace))
 	}
@@ -440,7 +441,7 @@ func (s *DefaultSecretStoreService) toResponse(store *crd.ESOSecretStore, namesp
 }
 
 func mapConditions(conditions []crd.ESOCondition) []models.SecretStoreCondition {
-	var out []models.SecretStoreCondition
+	out := make([]models.SecretStoreCondition, 0, len(conditions))
 	for _, c := range conditions {
 		out = append(out, models.SecretStoreCondition{
 			Type:               c.Type,

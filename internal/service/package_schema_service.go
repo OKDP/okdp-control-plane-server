@@ -108,6 +108,9 @@ func (s *DefaultPackageSchemaService) GetServiceVersions(ctx context.Context, se
 			versions = []string{defaultVersion}
 		}
 	}
+	if versions == nil {
+		versions = []string{}
+	}
 
 	return &ServiceVersionsResponse{
 		Versions: versions,
