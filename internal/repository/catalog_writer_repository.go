@@ -36,7 +36,7 @@ func NewCatalogWriterRepository(deployments *gitops.Deployments) CatalogWriterRe
 // The Git writer replays it on the latest revision when the branch moved, so
 // concurrent edits don't clobber each other.
 func (r *gitCatalogWriterRepository) mutateCategories(ctx context.Context, target string, fn func(categories []interface{}) ([]interface{}, error)) error {
-	_, err := r.deployments.UpdateCatalog(ctx, auth.ActorName(ctx), target, func(doc map[string]interface{}) error {
+	_, err := r.deployments.UpdateCatalog(ctx, auth.ActorFrom(ctx), target, func(doc map[string]interface{}) error {
 		body := unwrapCatalog(doc)
 		categories, _ := body["categories"].([]interface{})
 		updated, err := fn(categories)

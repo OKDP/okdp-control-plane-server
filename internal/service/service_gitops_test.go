@@ -107,7 +107,7 @@ func newGitServiceUnderTest(t *testing.T, engine repository.EngineAdapter, descr
 }
 
 func aliceContext() context.Context {
-	return auth.WithIdentity(context.Background(), &auth.Identity{Username: "alice"})
+	return auth.WithIdentity(context.Background(), &auth.Identity{Username: "alice", Name: "Alice Martin", Email: "alice@example.com"})
 }
 
 func TestDeployCommitsTheInstanceFiles(t *testing.T) {
@@ -129,7 +129,7 @@ func TestDeployCommitsTheInstanceFiles(t *testing.T) {
 	assert.Contains(t, files["projects/demo/services/sql/values.yaml"], "workers: 2")
 	assert.Contains(t, files["projects/demo/services/sql/helmrelease.yaml"], `name: "conn-demo-lake-hms"`)
 	assert.Contains(t, files, "projects/demo/services/sql/kustomization.yaml")
-	assert.Equal(t, "okdp: deploy demo/sql by alice", store.Messages[len(store.Messages)-1])
+	assert.Equal(t, "okdp: deploy demo/sql by alice\n\nCo-Authored-By: Alice Martin <alice@example.com>", store.Messages[len(store.Messages)-1])
 
 	assert.Equal(t, "demo-sql", instance.ReleaseName)
 	assert.Equal(t, repository.PhasePending, instance.Status, "committed, the engine has not seen it yet")
@@ -175,7 +175,7 @@ func TestUpdateMergesIntoValuesAndMovesTheVersion(t *testing.T) {
 	assert.Contains(t, values, "hive: lake-hms")
 	assert.Contains(t, store.Files()["projects/demo/services/trino/instance.yaml"], "version: 481.0.0-p01")
 	assert.Contains(t, store.Files()["projects/demo/services/trino/instance.yaml"], "- lake-hms")
-	assert.Equal(t, "okdp: update demo/trino by alice", store.Messages[len(store.Messages)-1])
+	assert.Equal(t, "okdp: update demo/trino by alice\n\nCo-Authored-By: Alice Martin <alice@example.com>", store.Messages[len(store.Messages)-1])
 	assert.Equal(t, repository.PhaseUpdating, instance.Status, "the engine still runs the previous version")
 	assert.NotEmpty(t, instance.Revision)
 
@@ -213,7 +213,7 @@ func TestListAssemblesGitAndClusterState(t *testing.T) {
 			Values: map[string]any{"catalogs": []any{map[string]any{"hive": "demo-hive"}}}},
 		{Instance: gitops.Instance{Name: "new", Project: "demo", Service: "trino", Chart: "oci://r/trino", Version: "480.0.0-p21"}},
 	} {
-		_, err := d.CreateInstance(context.Background(), "bob", st)
+		_, err := d.CreateInstance(context.Background(), auth.Actor{Username: "bob"}, st)
 		require.NoError(t, err)
 	}
 
@@ -248,7 +248,7 @@ func TestDeleteRemovesTheInstanceDirectory(t *testing.T) {
 	for p := range store.Files() {
 		assert.False(t, strings.HasPrefix(p, "projects/demo/services/trino/"), "left behind: %s", p)
 	}
-	assert.Equal(t, "okdp: delete demo/trino by alice", store.Messages[len(store.Messages)-1])
+	assert.Equal(t, "okdp: delete demo/trino by alice\n\nCo-Authored-By: Alice Martin <alice@example.com>", store.Messages[len(store.Messages)-1])
 	assert.True(t, apierrors.IsNotFound(svc.DeleteService(aliceContext(), "demo", "trino")))
 }
 

@@ -26,6 +26,10 @@ type Verifier interface {
 type Identity struct {
 	Subject  string
 	Username string
+	// Name is the display name (OIDC "name" claim, Keycloak "profile" scope).
+	Name string
+	// Email is the "email" claim (Keycloak "email" scope); empty when absent.
+	Email string
 }
 
 // Config describes the identity provider to trust.
@@ -47,6 +51,7 @@ type idClaims struct {
 	Azp               string `json:"azp"`
 	ClientID          string `json:"client_id"`
 	PreferredUsername string `json:"preferred_username"`
+	Name              string `json:"name"`
 	Email             string `json:"email"`
 }
 
@@ -101,7 +106,7 @@ func (v *oidcVerifier) Verify(ctx context.Context, rawToken string) (*Identity, 
 	if username == "" {
 		username = claims.Email
 	}
-	return &Identity{Subject: token.Subject, Username: username}, nil
+	return &Identity{Subject: token.Subject, Username: username, Name: claims.Name, Email: claims.Email}, nil
 }
 
 // ResolveIssuer prefers the environment override, then what the platform

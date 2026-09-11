@@ -228,7 +228,7 @@ func (s *DefaultConnectionService) Create(ctx context.Context, namespace string,
 		Values:      public,
 		SecretRef:   secretName,
 	}
-	if _, err := s.deployments.PutConnection(ctx, auth.ActorName(ctx), connection, true); err != nil {
+	if _, err := s.deployments.PutConnection(ctx, auth.ActorFrom(ctx), connection, true); err != nil {
 		// Leave no orphan Secret behind when the connection itself is refused. A
 		// Secret we do not own is never touched, and neither is the one a
 		// concurrent create under the same name has just bound to its own
@@ -300,7 +300,7 @@ func (s *DefaultConnectionService) Update(ctx context.Context, namespace, name s
 		Values:      public,
 		SecretRef:   secretName,
 	}
-	if _, err := s.deployments.PutConnection(ctx, auth.ActorName(ctx), updated, false); err != nil {
+	if _, err := s.deployments.PutConnection(ctx, auth.ActorFrom(ctx), updated, false); err != nil {
 		return nil, connectionGitError(err, name)
 	}
 
@@ -320,7 +320,7 @@ func (s *DefaultConnectionService) Delete(ctx context.Context, namespace, name s
 	if err != nil {
 		return connectionGitError(err, name)
 	}
-	if _, err := s.deployments.DeleteConnection(ctx, auth.ActorName(ctx), namespace, name); err != nil {
+	if _, err := s.deployments.DeleteConnection(ctx, auth.ActorFrom(ctx), namespace, name); err != nil {
 		return connectionGitError(err, name)
 	}
 

@@ -393,7 +393,7 @@ func (s *DefaultServiceService) DeployService(ctx context.Context, project strin
 		return nil, invalid("%v", err)
 	}
 
-	revision, err := s.deployments.CreateInstance(ctx, auth.ActorName(ctx), state)
+	revision, err := s.deployments.CreateInstance(ctx, auth.ActorFrom(ctx), state)
 	if err != nil {
 		return nil, gitError(err, instanceName)
 	}
@@ -411,7 +411,7 @@ func (s *DefaultServiceService) UpdateServiceParameters(ctx context.Context, pro
 	}
 	known := connectionNames(connections)
 
-	state, revision, err := s.deployments.UpdateInstance(ctx, auth.ActorName(ctx), project, name, func(st *gitops.InstanceState) error {
+	state, revision, err := s.deployments.UpdateInstance(ctx, auth.ActorFrom(ctx), project, name, func(st *gitops.InstanceState) error {
 		if req.Tag != "" {
 			st.Instance.Version = req.Tag
 		}
@@ -439,7 +439,7 @@ func (s *DefaultServiceService) UpdateServiceParameters(ctx context.Context, pro
 }
 
 func (s *DefaultServiceService) DeleteService(ctx context.Context, project, name string) error {
-	if _, err := s.deployments.DeleteInstance(ctx, auth.ActorName(ctx), project, name); err != nil {
+	if _, err := s.deployments.DeleteInstance(ctx, auth.ActorFrom(ctx), project, name); err != nil {
 		return gitError(err, name)
 	}
 	s.changes.Notify(project, name, "DELETED")

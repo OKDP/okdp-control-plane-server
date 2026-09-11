@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/okdp/okdp-control-plane-server/internal/auth"
 	"gopkg.in/yaml.v3"
 )
 
@@ -216,9 +217,9 @@ func jsonRoundTrip(values map[string]any) map[string]any {
 
 // CreateInstance declares a new instance. Fails with ErrExists when the
 // instance directory is already there.
-func (d *Deployments) CreateInstance(ctx context.Context, user string, st InstanceState) (string, error) {
+func (d *Deployments) CreateInstance(ctx context.Context, actor auth.Actor, st InstanceState) (string, error) {
 	target := st.Instance.Project + "/" + st.Instance.Name
-	return d.Store.Update(ctx, CommitMessage("deploy", target, user), func(tx Tx) error {
+	return d.Store.Update(ctx, CommitMessage("deploy", target, actor), func(tx Tx) error {
 		if tx.Exists(ServiceDir(st.Instance.Project, st.Instance.Name)) {
 			return fmt.Errorf("instance %s: %w", target, ErrExists)
 		}
@@ -237,9 +238,9 @@ func (d *Deployments) CreateInstance(ctx context.Context, user string, st Instan
 
 // UpdateInstance applies change to the latest declaration of an instance and
 // writes it back. change may run more than once when the write is replayed.
-func (d *Deployments) UpdateInstance(ctx context.Context, user, project, name string, change func(st *InstanceState) error) (*InstanceState, string, error) {
+func (d *Deployments) UpdateInstance(ctx context.Context, actor auth.Actor, project, name string, change func(st *InstanceState) error) (*InstanceState, string, error) {
 	var result *InstanceState
-	rev, err := d.Store.Update(ctx, CommitMessage("update", project+"/"+name, user), func(tx Tx) error {
+	rev, err := d.Store.Update(ctx, CommitMessage("update", project+"/"+name, actor), func(tx Tx) error {
 		st, err := readInstance(tx, project, name)
 		if err != nil {
 			return err
@@ -256,9 +257,9 @@ func (d *Deployments) UpdateInstance(ctx context.Context, user, project, name st
 
 // DeleteInstance removes an instance directory. The engine prunes what it
 // had deployed.
-func (d *Deployments) DeleteInstance(ctx context.Context, user, project, name string) (string, error) {
+func (d *Deployments) DeleteInstance(ctx context.Context, actor auth.Actor, project, name string) (string, error) {
 	target := project + "/" + name
-	return d.Store.Update(ctx, CommitMessage("delete", target, user), func(tx Tx) error {
+	return d.Store.Update(ctx, CommitMessage("delete", target, actor), func(tx Tx) error {
 		dir := ServiceDir(project, name)
 		if !tx.Exists(dir) {
 			return fmt.Errorf("instance %s: %w", target, ErrNotFound)
@@ -522,7 +523,7 @@ func checkConnectionFree(tx Tx, project, name string) error {
 
 // PutConnection writes an external connection. create fails with ErrExists
 // when it is already declared; an update fails with ErrNotFound when it is not.
-func (d *Deployments) PutConnection(ctx context.Context, user string, c Connection, create bool) (string, error) {
+func (d *Deployments) PutConnection(ctx context.Context, actor auth.Actor, c Connection, create bool) (string, error) {
 	if err := ValidateName("project", c.Project); err != nil {
 		return "", err
 	}
@@ -534,7 +535,7 @@ func (d *Deployments) PutConnection(ctx context.Context, user string, c Connecti
 		action = "create connection"
 	}
 	target := c.Project + "/" + c.Name
-	return d.Store.Update(ctx, CommitMessage(action, target, user), func(tx Tx) error {
+	return d.Store.Update(ctx, CommitMessage(action, target, actor), func(tx Tx) error {
 		exists := tx.Exists(ConnectionPath(c.Project, c.Name))
 		if create && exists {
 			return fmt.Errorf("connection %s: %w", target, ErrExists)
@@ -563,9 +564,9 @@ func (d *Deployments) PutConnection(ctx context.Context, user string, c Connecti
 
 // DeleteConnection removes an external connection. It refuses while an
 // instance still layers it in: both engines would fail to render that instance.
-func (d *Deployments) DeleteConnection(ctx context.Context, user, project, name string) (string, error) {
+func (d *Deployments) DeleteConnection(ctx context.Context, actor auth.Actor, project, name string) (string, error) {
 	target := project + "/" + name
-	return d.Store.Update(ctx, CommitMessage("delete connection", target, user), func(tx Tx) error {
+	return d.Store.Update(ctx, CommitMessage("delete connection", target, actor), func(tx Tx) error {
 		if !tx.Exists(ConnectionPath(project, name)) {
 			return fmt.Errorf("connection %s: %w", target, ErrNotFound)
 		}
@@ -600,7 +601,7 @@ type Project struct {
 }
 
 // PutProject writes project.yaml, creating the project directory if needed.
-func (d *Deployments) PutProject(ctx context.Context, user string, p Project) (string, error) {
+func (d *Deployments) PutProject(ctx context.Context, actor auth.Actor, p Project) (string, error) {
 	if err := ValidateName("project", p.Name); err != nil {
 		return "", err
 	}
@@ -608,7 +609,7 @@ func (d *Deployments) PutProject(ctx context.Context, user string, p Project) (s
 	if err != nil {
 		return "", err
 	}
-	return d.Store.Update(ctx, CommitMessage("update project", p.Name, user), func(tx Tx) error {
+	return d.Store.Update(ctx, CommitMessage("update project", p.Name, actor), func(tx Tx) error {
 		if err := tx.WriteFile(ProjectFilePath(p.Name), data); err != nil {
 			return err
 		}
@@ -617,11 +618,11 @@ func (d *Deployments) PutProject(ctx context.Context, user string, p Project) (s
 }
 
 // DeleteProject removes a project and everything it declares.
-func (d *Deployments) DeleteProject(ctx context.Context, user, project string) (string, error) {
+func (d *Deployments) DeleteProject(ctx context.Context, actor auth.Actor, project string) (string, error) {
 	if err := ValidateName("project", project); err != nil {
 		return "", err
 	}
-	return d.Store.Update(ctx, CommitMessage("delete project", project, user), func(tx Tx) error {
+	return d.Store.Update(ctx, CommitMessage("delete project", project, actor), func(tx Tx) error {
 		return tx.Remove(ProjectDir(project))
 	})
 }
@@ -655,8 +656,8 @@ func (d *Deployments) ReadCatalog(ctx context.Context) (map[string]any, error) {
 
 // UpdateCatalog applies change to the latest catalog and writes it back. A
 // missing catalog starts empty.
-func (d *Deployments) UpdateCatalog(ctx context.Context, user, target string, change func(catalog map[string]any) error) (string, error) {
-	return d.Store.Update(ctx, CommitMessage("update catalog", target, user), func(tx Tx) error {
+func (d *Deployments) UpdateCatalog(ctx context.Context, actor auth.Actor, target string, change func(catalog map[string]any) error) (string, error) {
+	return d.Store.Update(ctx, CommitMessage("update catalog", target, actor), func(tx Tx) error {
 		catalog := map[string]any{}
 		raw, err := tx.ReadFile(CatalogPath)
 		switch {

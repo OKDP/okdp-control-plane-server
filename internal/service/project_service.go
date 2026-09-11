@@ -55,7 +55,7 @@ func (s *DefaultProjectService) CreateProject(ctx context.Context, project *mode
 	if s.deployments == nil {
 		return nil
 	}
-	if _, err := s.deployments.PutProject(ctx, auth.ActorName(ctx), gitops.Project{Name: project.Name, Description: project.Description}); err != nil {
+	if _, err := s.deployments.PutProject(ctx, auth.ActorFrom(ctx), gitops.Project{Name: project.Name, Description: project.Description}); err != nil {
 		if rollbackErr := s.repo.Delete(ctx, project.Name); rollbackErr != nil {
 			logrus.WithError(rollbackErr).WithField("project", project.Name).Warn("Could not remove the namespace of a project Git refused")
 		}
@@ -71,7 +71,7 @@ func (s *DefaultProjectService) UpdateProject(ctx context.Context, project *mode
 	if err != nil || s.deployments == nil {
 		return updated, err
 	}
-	if _, err := s.deployments.PutProject(ctx, auth.ActorName(ctx), gitops.Project{Name: updated.Name, Description: updated.Description}); err != nil {
+	if _, err := s.deployments.PutProject(ctx, auth.ActorFrom(ctx), gitops.Project{Name: updated.Name, Description: updated.Description}); err != nil {
 		return nil, fmt.Errorf("failed to update the project in the deployments repository: %w", err)
 	}
 	return updated, nil
@@ -81,7 +81,7 @@ func (s *DefaultProjectService) UpdateProject(ctx context.Context, project *mode
 // GitOps engine uninstalls its releases, then its Namespace.
 func (s *DefaultProjectService) DeleteProject(ctx context.Context, name string) error {
 	if s.deployments != nil {
-		if _, err := s.deployments.DeleteProject(ctx, auth.ActorName(ctx), name); err != nil {
+		if _, err := s.deployments.DeleteProject(ctx, auth.ActorFrom(ctx), name); err != nil {
 			return fmt.Errorf("failed to remove the project from the deployments repository: %w", err)
 		}
 	}

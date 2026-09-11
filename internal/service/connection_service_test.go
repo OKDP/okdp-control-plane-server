@@ -11,6 +11,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/watch"
 
+	"github.com/okdp/okdp-control-plane-server/internal/auth"
 	"github.com/okdp/okdp-control-plane-server/internal/gitops"
 	"github.com/okdp/okdp-control-plane-server/internal/models"
 	"github.com/okdp/okdp-control-plane-server/internal/repository"
@@ -310,7 +311,7 @@ func TestDeleteRefusesAConnectionAnInstanceLayersIn(t *testing.T) {
 	svc, env, _ := newServiceUnderTest(t)
 	_, err := svc.Create(context.Background(), "demo", postgresRequest())
 	require.NoError(t, err)
-	_, err = env.deployments.CreateInstance(context.Background(), "alice", gitops.InstanceState{
+	_, err = env.deployments.CreateInstance(context.Background(), auth.Actor{Username: "alice"}, gitops.InstanceState{
 		Instance: gitops.Instance{Name: "hive", Project: "demo", Service: "hive-metastore", Chart: "oci://r/hive-metastore", Version: "1.0.0", Connections: []string{"warehouse"}},
 	})
 	require.NoError(t, err)

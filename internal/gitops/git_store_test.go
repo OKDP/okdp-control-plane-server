@@ -62,7 +62,7 @@ func TestGitStoreWritesToAnEmptyRemoteAndReadsBack(t *testing.T) {
 		writer := newStore(t, url, onDisk)
 		ctx := context.Background()
 
-		rev, err := writer.Update(ctx, "okdp: deploy demo/hive by alice", func(tx Tx) error {
+		rev, err := writer.Update(ctx, CommitMessage("deploy", "demo/hive", alice), func(tx Tx) error {
 			return tx.WriteFile("projects/demo/services/hive/instance.yaml", []byte("name: hive\n"))
 		})
 		if err != nil || rev == "" {
@@ -89,7 +89,7 @@ func TestGitStoreWritesToAnEmptyRemoteAndReadsBack(t *testing.T) {
 			t.Fatalf("main branch not pushed: %v", err)
 		}
 		commit, _ := repo.CommitObject(head.Hash())
-		if commit.Message != "okdp: deploy demo/hive by alice" || commit.Author.Name != "tester" {
+		if commit.Message != "okdp: deploy demo/hive by alice\n\nCo-Authored-By: Alice Martin <alice@example.com>" || commit.Author.Name != "tester" {
 			t.Fatalf("commit = %q by %q", commit.Message, commit.Author.Name)
 		}
 		if _, err := commit.File("gitops/projects/demo/services/hive/instance.yaml"); err != nil {

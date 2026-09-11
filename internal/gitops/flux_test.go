@@ -114,14 +114,14 @@ func TestServerWritesOnTheReferenceTreeChangeNothing(t *testing.T) {
 	d := NewDeployments(store, nil)
 	ctx := context.Background()
 
-	if _, _, err := d.UpdateInstance(ctx, "alice", "example", "hello", func(*InstanceState) error { return nil }); err != nil {
+	if _, _, err := d.UpdateInstance(ctx, alice, "example", "hello", func(*InstanceState) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	conn, err := d.GetConnection(ctx, "example", "example-s3")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.PutProject(ctx, "alice", Project{Name: "example", Description: "Example project used to test both GitOps engines with a public chart."}); err != nil {
+	if _, err := d.PutProject(ctx, alice, Project{Name: "example", Description: "Example project used to test both GitOps engines with a public chart."}); err != nil {
 		t.Fatal(err)
 	}
 	after := store.Files()
@@ -153,12 +153,12 @@ func TestRenderFluxLeavesTheServerOutputAlone(t *testing.T) {
 	store := NewMemoryStore(nil)
 	d := NewDeployments(store, nil)
 	ctx := context.Background()
-	if _, err := d.PutProject(ctx, "alice", Project{Name: "demo", Description: "Demo"}); err != nil {
+	if _, err := d.PutProject(ctx, alice, Project{Name: "demo", Description: "Demo"}); err != nil {
 		t.Fatal(err)
 	}
 	for _, c := range []string{"warehouse", "lake"} {
 		conn := Connection{Name: c, Project: "demo", Contract: "hive", Values: map[string]any{"thriftUri": "thrift://" + c + ":9083"}}
-		if _, err := d.PutConnection(ctx, "alice", conn, true); err != nil {
+		if _, err := d.PutConnection(ctx, alice, conn, true); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -167,7 +167,7 @@ func TestRenderFluxLeavesTheServerOutputAlone(t *testing.T) {
 			Values: map[string]any{"workers": float64(2)}},
 		{Instance: Instance{Name: "hive", Project: "demo", Service: "hive-metastore", Chart: "oci://quay.io/okdp/platform-charts/hive-metastore", Version: "4.0.1-p02"}},
 	} {
-		if _, err := d.CreateInstance(ctx, "alice", st); err != nil {
+		if _, err := d.CreateInstance(ctx, alice, st); err != nil {
 			t.Fatal(err)
 		}
 	}

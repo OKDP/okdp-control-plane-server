@@ -16,6 +16,11 @@ import (
 	"fmt"
 	"path"
 	"strings"
+	"sync"
+	"unicode"
+
+	"github.com/okdp/okdp-control-plane-server/internal/auth"
+	"github.com/sirupsen/logrus"
 )
 
 // ErrNotFound is returned when a desired-state file does not exist.
@@ -79,10 +84,70 @@ func cleanPath(p string) (string, error) {
 }
 
 // CommitMessage builds the commit message of a console action, as the shared
-// contract fixes it: "okdp: <action> <project>/<instance> by <user>".
-func CommitMessage(action, target, user string) string {
+// contract fixes it: "okdp: <action> <project>/<instance> by <user>". The
+// logged-in user is also named as co-author, in a trailer Git hosts link to
+// their account:
+//
+//	okdp: deploy demo/trino by alice
+//
+//	Co-Authored-By: Alice Martin <alice@example.com>
+//
+// The trailer needs an email: without one (a token lacking the email claim, or
+// authentication disabled) it is left out and a warning is logged once per
+// user. Name and email are sanitised so a crafted claim cannot add lines.
+func CommitMessage(action, target string, actor auth.Actor) string {
+	user := stripUnsafe(actor.Username)
 	if user == "" {
 		user = "unknown"
 	}
-	return fmt.Sprintf("okdp: %s %s by %s", action, target, user)
+	subject := fmt.Sprintf("okdp: %s %s by %s", action, target, user)
+
+	email := stripUnsafe(actor.Email)
+	if !looksLikeEmail(email) {
+		warnNoCoAuthor(user, actor.Email)
+		return subject
+	}
+	name := stripUnsafe(actor.Name)
+	if name == "" {
+		name = user
+	}
+	return fmt.Sprintf("%s\n\nCo-Authored-By: %s <%s>", subject, name, email)
+}
+
+// stripUnsafe removes what could break out of a trailer line or its <email>
+// part: control characters (CR and LF included), '<' and '>'.
+func stripUnsafe(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if r == '<' || r == '>' || unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, s)
+	return strings.TrimSpace(s)
+}
+
+// looksLikeEmail accepts exactly one '@' with something on both sides and no
+// white space.
+func looksLikeEmail(s string) bool {
+	local, domain, ok := strings.Cut(s, "@")
+	return ok && local != "" && domain != "" &&
+		!strings.Contains(domain, "@") &&
+		!strings.ContainsFunc(s, unicode.IsSpace)
+}
+
+// warnedActors remembers who was already reported as lacking an email.
+var warnedActors sync.Map
+
+func warnNoCoAuthor(user, email string) {
+	if _, seen := warnedActors.LoadOrStore(user, struct{}{}); seen {
+		return
+	}
+	reason := "the token has no email claim (Keycloak: add the \"email\" client scope)"
+	switch {
+	case email != "":
+		reason = "its email claim is not a valid address"
+	case user == "anonymous":
+		reason = "no logged-in user (authentication disabled)"
+	}
+	logrus.Warnf("gitops: commits by %q carry no Co-Authored-By trailer: %s", user, reason)
 }
