@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -404,6 +405,23 @@ func (s *DefaultServiceService) DeployService(ctx context.Context, project strin
 	return &instance, nil
 }
 
+// errStaleValidation reports that the declaration changed between the
+// validation of a patch and its write.
+var errStaleValidation = errors.New("the instance changed while its parameters were validated")
+
+// maxValidationReplays bounds how many times a patch is validated again
+// because the declaration kept changing under it.
+const maxValidationReplays = 3
+
+// UpdateServiceParameters applies a JSON Merge Patch to the parameters of an
+// instance (and its chart version when req.Tag is set).
+//
+// Validation reads the catalog and the chart schema, through the deployments
+// repository: it must not run inside UpdateInstance, whose callback holds the
+// store's write lock (a read there waits for itself). The patch is validated
+// against the current declaration first; the write then re-applies it to the
+// latest declaration and only proceeds when that declaration is the one that
+// was validated, otherwise the whole validation runs again.
 func (s *DefaultServiceService) UpdateServiceParameters(ctx context.Context, project, name string, req models.ServiceUpdateRequest) (*models.ServiceInstance, error) {
 	connections, err := s.deployments.ListConnections(ctx, project)
 	if err != nil {
@@ -411,31 +429,51 @@ func (s *DefaultServiceService) UpdateServiceParameters(ctx context.Context, pro
 	}
 	known := connectionNames(connections)
 
-	state, revision, err := s.deployments.UpdateInstance(ctx, auth.ActorFrom(ctx), project, name, func(st *gitops.InstanceState) error {
+	for attempt := 0; ; attempt++ {
+		current, err := s.deployments.GetInstance(ctx, project, name)
+		if err != nil {
+			return nil, gitError(err, name)
+		}
+		version := current.Instance.Version
 		if req.Tag != "" {
-			st.Instance.Version = req.Tag
+			version = req.Tag
 		}
 		// JSON Merge Patch (RFC 7386): a submitted key replaces the stored
 		// one, null deletes it, objects merge recursively, arrays replace.
-		st.Values = MergePatch(st.Values, req.Parameters)
-		if err := s.validateParameters(ctx, st.Instance.Service, st.Instance.Version, st.Values); err != nil {
-			return err
+		values := MergePatch(current.Values, req.Parameters)
+		if err := s.validateParameters(ctx, current.Instance.Service, version, values); err != nil {
+			return nil, err
 		}
-		st.Instance.Connections = referencedConnections(st.Values, known)
-		return nil
-	})
-	if err != nil {
-		return nil, gitError(err, name)
-	}
-	s.changes.Notify(project, name, "MODIFIED")
 
-	instance, err := s.GetService(ctx, project, name)
-	if err != nil {
-		fallback := s.assemble(*state, repository.EngineStatus{}, nil, nil, nil)
-		instance = &fallback
+		state, revision, err := s.deployments.UpdateInstance(ctx, auth.ActorFrom(ctx), project, name, func(st *gitops.InstanceState) error {
+			if st.Instance.Service != current.Instance.Service || st.Instance.Version != current.Instance.Version ||
+				!reflect.DeepEqual(st.Values, current.Values) {
+				return errStaleValidation
+			}
+			st.Instance.Version = version
+			st.Values = MergePatch(st.Values, req.Parameters)
+			st.Instance.Connections = referencedConnections(st.Values, known)
+			return nil
+		})
+		if errors.Is(err, errStaleValidation) {
+			if attempt < maxValidationReplays {
+				continue
+			}
+			return nil, fmt.Errorf("%w: %v", gitops.ErrConflict, err)
+		}
+		if err != nil {
+			return nil, gitError(err, name)
+		}
+		s.changes.Notify(project, name, "MODIFIED")
+
+		instance, err := s.GetService(ctx, project, name)
+		if err != nil {
+			fallback := s.assemble(*state, repository.EngineStatus{}, nil, nil, nil)
+			instance = &fallback
+		}
+		instance.Revision = revision
+		return instance, nil
 	}
-	instance.Revision = revision
-	return instance, nil
 }
 
 func (s *DefaultServiceService) DeleteService(ctx context.Context, project, name string) error {
