@@ -7,11 +7,13 @@ import (
 
 	"github.com/okdp/okdp-control-plane-server/internal/api/handlers"
 	"github.com/okdp/okdp-control-plane-server/internal/api/middleware"
+	"github.com/okdp/okdp-control-plane-server/internal/auth"
 	"github.com/okdp/okdp-control-plane-server/internal/config"
 )
 
-// SetupRouter initializes the Gin router and defines routes
-func SetupRouter(cfg *config.Config, capabilitiesHandler *handlers.CapabilitiesHandler, projectHandler *handlers.ProjectHandler, identityHandler *handlers.IdentityHandler, secretStoreHandler *handlers.SecretStoreHandler, externalSecretHandler *handlers.ExternalSecretHandler, serviceHandler *handlers.ServiceHandler, sparkHandler *handlers.SparkHandler, connectionHandler *handlers.ConnectionHandler) *gin.Engine {
+// SetupRouter initializes the Gin router and defines routes. A nil verifier
+// serves the API without token verification, which only AUTH_DISABLED produces.
+func SetupRouter(cfg *config.Config, verifier auth.Verifier, capabilitiesHandler *handlers.CapabilitiesHandler, projectHandler *handlers.ProjectHandler, identityHandler *handlers.IdentityHandler, secretStoreHandler *handlers.SecretStoreHandler, externalSecretHandler *handlers.ExternalSecretHandler, serviceHandler *handlers.ServiceHandler, sparkHandler *handlers.SparkHandler, connectionHandler *handlers.ConnectionHandler) *gin.Engine {
 	r := gin.New() // Use New() to skip default logger/recovery (we add them manually)
 
 	// Middleware
@@ -29,6 +31,11 @@ func SetupRouter(cfg *config.Config, capabilitiesHandler *handlers.CapabilitiesH
 
 	// API Routes
 	api := r.Group("/api")
+	if verifier != nil {
+		// On the group, not per route: what is added below is authenticated
+		// unless the middleware lists it as public.
+		api.Use(middleware.RequireAuthentication(verifier))
+	}
 	{
 		// Platform capabilities (UI feature discovery)
 		api.GET("/capabilities", capabilitiesHandler.GetCapabilities)

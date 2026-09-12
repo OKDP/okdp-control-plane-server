@@ -9,6 +9,7 @@ import (
 
 	"github.com/okdp/okdp-control-plane-server/internal/api/handlers"
 	"github.com/okdp/okdp-control-plane-server/internal/api/router"
+	"github.com/okdp/okdp-control-plane-server/internal/auth"
 	"github.com/okdp/okdp-control-plane-server/internal/config"
 	"github.com/okdp/okdp-control-plane-server/internal/repository"
 	"github.com/okdp/okdp-control-plane-server/internal/repository/provisioning"
@@ -29,6 +30,14 @@ import (
 
 // @host            localhost:8093
 // @BasePath        /
+
+// @securityDefinitions.apikey BearerAuth
+// @in                         header
+// @name                       Authorization
+// @description                OIDC access token, as "Bearer <token>". Required on
+// @description                every /api route except /api/capabilities.
+
+// @security                   BearerAuth
 func main() {
 	// Load Configuration
 	cfg, err := config.Load()
@@ -138,7 +147,9 @@ func main() {
 	// nothing pointing back here.
 	checkIdentityConfiguration(context.Background(), contextRepo, identityRepo)
 
-	r := router.SetupRouter(cfg, capabilitiesHandler, projectHandler, identityHandler, secretStoreHandler, externalSecretHandler, serviceHandler, sparkHandler, connectionHandler)
+	verifier := buildTokenVerifier(context.Background(), cfg, contextRepo)
+
+	r := router.SetupRouter(cfg, verifier, capabilitiesHandler, projectHandler, identityHandler, secretStoreHandler, externalSecretHandler, serviceHandler, sparkHandler, connectionHandler)
 
 	// Start Server
 	//
@@ -214,4 +225,37 @@ func checkIdentityConfiguration(ctx context.Context, contextRepo repository.Cont
 	}
 
 	logrus.WithField("provisioningProvider", provider).Info("Identity configuration accepted")
+}
+
+// buildTokenVerifier resolves the issuer the API will trust, or returns nil
+// when the deployment asked to run without verification.
+func buildTokenVerifier(ctx context.Context, cfg *config.Config, contextRepo repository.ContextRepository) auth.Verifier {
+	if cfg.OIDC.Disabled {
+		logrus.Warn("AUTH_DISABLED is set: the API accepts unauthenticated requests. Never do this outside local development.")
+		return nil
+	}
+
+	issuer, err := auth.ResolveIssuer(ctx, cfg.OIDC.Issuer, contextRepo.GetOidcIssuer)
+	if err != nil {
+		logrus.Fatalf("Failed to resolve the OIDC issuer: %v", err)
+	}
+
+	insecure, err := contextRepo.GetOidcInsecureSkipVerify(ctx)
+	if err != nil {
+		logrus.WithError(err).Warn("Could not read oidc.insecureSkipVerify, verifying the issuer certificate")
+	}
+	if insecure {
+		logrus.Warn("oidc.insecureSkipVerify is set: the issuer's certificate is not checked. Trust its CA in the pod instead, anywhere that is not a sandbox.")
+	}
+
+	verifier, err := auth.NewVerifier(ctx, auth.Config{
+		Issuer:             issuer,
+		InsecureSkipVerify: insecure,
+	})
+	if err != nil {
+		logrus.Fatalf("Failed to initialize token verification: %v", err)
+	}
+
+	logrus.WithField("issuer", issuer).Info("API token verification enabled")
+	return verifier
 }

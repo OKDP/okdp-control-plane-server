@@ -3135,4 +3135,14 @@ paths:
       summary: Update a user
       tags:
       - identity
+security:
+- BearerAuth: []
+securityDefinitions:
+  BearerAuth:
+    description: |-
+      OIDC access token, as "Bearer <token>". Required on
+      every /api route except /api/capabilities.
+    in: header
+    name: Authorization
+    type: apiKey
 swagger: "2.0"
