@@ -31,6 +31,8 @@ type OIDCConfig struct {
 	// It overrides the issuer the platform Context declares. Empty is the
 	// normal case: the Context is where that setting lives.
 	Issuer string
+	// ClientID overrides the client id the platform Context declares.
+	ClientID string
 	// Disabled leaves the API open to anyone who can reach the port.
 	Disabled bool
 }
@@ -51,6 +53,7 @@ func Load() (*Config, error) {
 		ReleaseTimeout:    getEnv("RELEASE_TIMEOUT", "10m"),
 		OIDC: OIDCConfig{
 			Issuer:   strings.TrimSpace(getEnv("OIDC_ISSUER", "")),
+			ClientID: strings.TrimSpace(getEnv("OIDC_CLIENT_ID", "")),
 			Disabled: getEnv("AUTH_DISABLED", "") == "true",
 		},
 	}
