@@ -165,3 +165,72 @@ func TestUpdateCatalogKeepsTheCommentsOfTheFile(t *testing.T) {
 		}
 	}
 }
+
+// Projects are the project.yaml files, whoever wrote them: one written by
+// hand lists and reads like one the console created.
+func TestProjectsAreTheProjectFiles(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemoryStore(map[string]string{
+		"projects/demo/project.yaml":                "# written by hand\nname: demo\ndescription: Demo\nowner: data-team\n",
+		"projects/demo/services/hive/instance.yaml": "name: hive\n",
+		"projects/legacy/services/x/instance.yaml":  "name: x\n",
+		"projects/broken/project.yaml":              "name: [\n",
+		"projects/Not_A_Name/project.yaml":          "name: nope\n",
+	})
+	d := NewDeployments(store, nil)
+
+	projects, err := d.ListProjects(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Project{{Name: "broken"}, {Name: "demo", Description: "Demo"}}
+	if len(projects) != len(want) || projects[0] != want[0] || projects[1] != want[1] {
+		t.Fatalf("projects = %+v, want %+v", projects, want)
+	}
+	if p, err := d.GetProject(ctx, "demo"); err != nil || *p != want[1] {
+		t.Fatalf("get demo = %+v, %v", p, err)
+	}
+	for _, name := range []string{"legacy", "nope", "../demo"} {
+		if _, err := d.GetProject(ctx, name); !errors.Is(err, ErrNotFound) {
+			t.Errorf("get %s: %v, want ErrNotFound", name, err)
+		}
+	}
+
+	if _, err := d.CreateProject(ctx, alice, Project{Name: "demo"}); !errors.Is(err, ErrExists) {
+		t.Fatalf("create demo: %v, want ErrExists", err)
+	}
+	if _, err := d.CreateProject(ctx, alice, Project{Name: "legacy", Description: "Adopted"}); err != nil {
+		t.Fatalf("a directory without project.yaml is adopted: %v", err)
+	}
+	if got := store.Files()["projects/legacy/project.yaml"]; got != "name: legacy\ndescription: Adopted\n" {
+		t.Errorf("legacy project.yaml = %q", got)
+	}
+
+	if _, err := d.UpdateProject(ctx, alice, Project{Name: "demo", Description: "Demo, edited"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.Files()["projects/demo/project.yaml"]; got != "# written by hand\nname: demo\ndescription: Demo, edited\nowner: data-team\n" {
+		t.Errorf("the update must keep the other keys and comments: %q", got)
+	}
+	if _, err := d.UpdateProject(ctx, alice, Project{Name: "demo"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.Files()["projects/demo/project.yaml"]; got != "# written by hand\nname: demo\nowner: data-team\n" {
+		t.Errorf("an empty description removes the key: %q", got)
+	}
+	if _, err := d.UpdateProject(ctx, alice, Project{Name: "missing"}); !errors.Is(err, ErrNotFound) {
+		t.Errorf("update missing: %v, want ErrNotFound", err)
+	}
+
+	if _, err := d.DeleteProject(ctx, alice, "demo"); err != nil {
+		t.Fatal(err)
+	}
+	for p := range store.Files() {
+		if strings.HasPrefix(p, "projects/demo/") {
+			t.Errorf("%s survived the delete", p)
+		}
+	}
+	if _, err := d.DeleteProject(ctx, alice, "demo"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("second delete: %v, want ErrNotFound", err)
+	}
+}

@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/okdp/okdp-control-plane-server/internal/auth"
+	"github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v3"
 )
 
@@ -594,10 +595,134 @@ func (d *Deployments) DeleteConnection(ctx context.Context, actor auth.Actor, pr
 
 // --- Projects ---
 
-// Project is projects/<p>/project.yaml.
+// Project is projects/<p>/project.yaml. A project exists when that file
+// does, whoever wrote it: the console and a person editing Git declare
+// projects the same way. The directory is the identity, and the namespace
+// the project deploys into.
 type Project struct {
 	Name        string `yaml:"name"`
 	Description string `yaml:"description,omitempty"`
+}
+
+// readProject reads projects/<name>/project.yaml. Keys other than
+// description are the file author's and are ignored; a file that is not a
+// YAML mapping still declares the project, without description.
+func readProject(r Reader, name string) (*Project, error) {
+	raw, err := r.ReadFile(ProjectFilePath(name))
+	if err != nil {
+		return nil, err
+	}
+	p := &Project{Name: name}
+	values, err := DecodeValues(raw)
+	if err != nil {
+		return p, fmt.Errorf("%s: %w", ProjectFilePath(name), err)
+	}
+	if description, ok := values["description"].(string); ok {
+		p.Description = description
+	}
+	return p, nil
+}
+
+// ListProjects returns the projects declared in the repository (the
+// directories of projects/ holding a project.yaml), sorted by name. A
+// project.yaml that does not parse still lists its project, without
+// description, so one bad file does not hide every project.
+func (d *Deployments) ListProjects(ctx context.Context) ([]Project, error) {
+	out := []Project{}
+	err := d.Store.View(ctx, func(r Reader) error {
+		names, err := r.ReadDir(ProjectsDir)
+		if err != nil {
+			return err
+		}
+		for _, name := range names {
+			if ValidateName("project", name) != nil || !r.Exists(ProjectFilePath(name)) {
+				continue
+			}
+			p, err := readProject(r, name)
+			if p == nil {
+				return err
+			}
+			if err != nil {
+				logrus.WithError(err).Warn("Listing a project whose project.yaml does not parse")
+			}
+			out = append(out, *p)
+		}
+		return nil
+	})
+	return out, err
+}
+
+// GetProject returns one project, or an error wrapping ErrNotFound.
+func (d *Deployments) GetProject(ctx context.Context, name string) (*Project, error) {
+	if err := ValidateName("project", name); err != nil {
+		return nil, fmt.Errorf("project %s: %w", name, ErrNotFound)
+	}
+	var out *Project
+	err := d.Store.View(ctx, func(r Reader) error {
+		p, err := readProject(r, name)
+		if p != nil && err != nil {
+			logrus.WithError(err).Warn("Serving a project whose project.yaml does not parse")
+			err = nil
+		}
+		out = p
+		return err
+	})
+	return out, err
+}
+
+// CreateProject writes the project.yaml of a new project, or fails with
+// ErrExists when the project is already declared. A directory without
+// project.yaml (written before the file existed) is adopted.
+func (d *Deployments) CreateProject(ctx context.Context, actor auth.Actor, p Project) (string, error) {
+	if err := ValidateName("project", p.Name); err != nil {
+		return "", err
+	}
+	data, err := MarshalYAML(p)
+	if err != nil {
+		return "", err
+	}
+	return d.Store.Update(ctx, NewCommit("create project", p.Name, actor), func(tx Tx) error {
+		if tx.Exists(ProjectFilePath(p.Name)) {
+			return fmt.Errorf("project %s: %w", p.Name, ErrExists)
+		}
+		if err := tx.WriteFile(ProjectFilePath(p.Name), data); err != nil {
+			return err
+		}
+		return d.renderProject(tx, p.Name)
+	})
+}
+
+// UpdateProject changes the description of a declared project, or fails
+// with ErrNotFound. The other keys and the comments of project.yaml are
+// kept; an empty description removes the key.
+func (d *Deployments) UpdateProject(ctx context.Context, actor auth.Actor, p Project) (string, error) {
+	if err := ValidateName("project", p.Name); err != nil {
+		return "", fmt.Errorf("project %s: %w", p.Name, ErrNotFound)
+	}
+	return d.Store.Update(ctx, NewCommit("update project", p.Name, actor), func(tx Tx) error {
+		raw, err := tx.ReadFile(ProjectFilePath(p.Name))
+		if err != nil {
+			return err
+		}
+		doc, err := DecodeValues(raw)
+		if err != nil || doc == nil {
+			doc = map[string]any{}
+		}
+		doc["name"] = p.Name
+		if p.Description == "" {
+			delete(doc, "description")
+		} else {
+			doc["description"] = p.Description
+		}
+		data, err := mergeIntoDocument(raw, doc)
+		if err != nil {
+			return err
+		}
+		if bytes.Equal(data, raw) {
+			return nil
+		}
+		return tx.WriteFile(ProjectFilePath(p.Name), data)
+	})
 }
 
 // PutProject writes project.yaml, creating the project directory if needed.
@@ -617,12 +742,16 @@ func (d *Deployments) PutProject(ctx context.Context, actor auth.Actor, p Projec
 	})
 }
 
-// DeleteProject removes a project and everything it declares.
+// DeleteProject removes a project and everything it declares, or fails with
+// ErrNotFound when the repository has no such project directory.
 func (d *Deployments) DeleteProject(ctx context.Context, actor auth.Actor, project string) (string, error) {
 	if err := ValidateName("project", project); err != nil {
-		return "", err
+		return "", fmt.Errorf("project %s: %w", project, ErrNotFound)
 	}
 	return d.Store.Update(ctx, NewCommit("delete project", project, actor), func(tx Tx) error {
+		if !tx.Exists(ProjectDir(project)) {
+			return fmt.Errorf("project %s: %w", project, ErrNotFound)
+		}
 		return tx.Remove(ProjectDir(project))
 	})
 }

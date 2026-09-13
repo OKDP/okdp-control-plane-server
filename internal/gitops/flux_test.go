@@ -121,7 +121,7 @@ func TestServerWritesOnTheReferenceTreeChangeNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.PutProject(ctx, alice, Project{Name: "example", Description: "Example project used to test both GitOps engines with a public chart."}); err != nil {
+	if _, err := d.UpdateProject(ctx, alice, Project{Name: "example", Description: "Example project used to test both GitOps engines with a public chart."}); err != nil {
 		t.Fatal(err)
 	}
 	after := store.Files()
@@ -153,7 +153,7 @@ func TestRenderFluxLeavesTheServerOutputAlone(t *testing.T) {
 	store := NewMemoryStore(nil)
 	d := NewDeployments(store, nil)
 	ctx := context.Background()
-	if _, err := d.PutProject(ctx, alice, Project{Name: "demo", Description: "Demo"}); err != nil {
+	if _, err := d.CreateProject(ctx, alice, Project{Name: "demo", Description: "Demo"}); err != nil {
 		t.Fatal(err)
 	}
 	for _, c := range []string{"warehouse", "lake"} {
