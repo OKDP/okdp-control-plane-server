@@ -1,21 +1,8 @@
 package models
 
 import (
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
-
-// projectDescriptionAnnot is the annotation carrying the project description
-// on the Kubernetes Namespace that backs the project.
-const projectDescriptionAnnot = "okdp.io/description"
-
-// FromNamespaceToProject converts a Namespace to a Project model.
-func FromNamespaceToProject(ns *corev1.Namespace) Project {
-	return Project{
-		Name:        ns.Name,
-		Description: ns.Annotations[projectDescriptionAnnot],
-	}
-}
 
 // FromUnstructuredToSparkAppInstance converts a SparkApplication unstructured to a SparkAppInstance model
 func FromUnstructuredToSparkAppInstance(u *unstructured.Unstructured) SparkAppInstance {

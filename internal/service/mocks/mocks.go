@@ -7,48 +7,21 @@ import (
 	"github.com/okdp/okdp-control-plane-server/internal/repository"
 	"github.com/okdp/okdp-control-plane-server/internal/repository/crd"
 	"github.com/stretchr/testify/mock"
-	"k8s.io/apimachinery/pkg/watch"
 )
 
-// ProjectRepository Mock
-type ProjectRepository struct {
+// ProjectNamespaceRepository Mock
+type ProjectNamespaceRepository struct {
 	mock.Mock
 }
 
-func (m *ProjectRepository) List(ctx context.Context) ([]models.Project, error) {
-	args := m.Called(ctx)
-	return args.Get(0).([]models.Project), args.Error(1)
-}
-
-func (m *ProjectRepository) Get(ctx context.Context, name string) (*models.Project, error) {
-	args := m.Called(ctx, name)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(*models.Project), args.Error(1)
-}
-
-func (m *ProjectRepository) Create(ctx context.Context, project *models.Project) error {
+func (m *ProjectNamespaceRepository) CreateNamespace(ctx context.Context, project *models.Project) (bool, error) {
 	args := m.Called(ctx, project)
-	return args.Error(0)
+	return args.Bool(0), args.Error(1)
 }
 
-func (m *ProjectRepository) Update(ctx context.Context, project *models.Project) (*models.Project, error) {
-	args := m.Called(ctx, project)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(*models.Project), args.Error(1)
-}
-
-func (m *ProjectRepository) Delete(ctx context.Context, name string) error {
+func (m *ProjectNamespaceRepository) DeleteNamespace(ctx context.Context, name string) (bool, error) {
 	args := m.Called(ctx, name)
-	return args.Error(0)
-}
-
-func (m *ProjectRepository) Watch(ctx context.Context) (watch.Interface, error) {
-	args := m.Called(ctx)
-	return args.Get(0).(watch.Interface), args.Error(1)
+	return args.Bool(0), args.Error(1)
 }
 
 // SecretStoreRepository Mock

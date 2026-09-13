@@ -8,7 +8,6 @@ import (
 	"github.com/okdp/okdp-control-plane-server/internal/models"
 	"github.com/okdp/okdp-control-plane-server/internal/service"
 	"github.com/sirupsen/logrus"
-	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
@@ -26,7 +25,7 @@ func NewProjectHandler(service service.ProjectService) *ProjectHandler {
 
 // ListProjects godoc
 // @Summary      List all projects
-// @Description  Get a list of all projects (backed by Kubernetes Namespaces)
+// @Description  List the projects declared in the deployments repository (projects/<p>/project.yaml), whether written by the console or by hand in Git
 // @Tags         projects
 // @Accept       json
 // @Produce      json
@@ -44,7 +43,7 @@ func (h *ProjectHandler) ListProjects(c *gin.Context) {
 
 // GetProject godoc
 // @Summary      Get a project
-// @Description  Get a single project by name
+// @Description  Get a project declared in the deployments repository (projects/<name>/project.yaml)
 // @Tags         projects
 // @Accept       json
 // @Produce      json
@@ -71,13 +70,14 @@ func (h *ProjectHandler) GetProject(c *gin.Context) {
 
 // CreateProject godoc
 // @Summary      Create a project
-// @Description  Create a new project (materialized as a Kubernetes Namespace)
+// @Description  Create a project: commits projects/<name>/project.yaml and creates the project Namespace. 409 when the project is already declared, or when a Namespace of that name exists and is not a project's
 // @Tags         projects
 // @Accept       json
 // @Produce      json
 // @Param        project body models.Project true "Project Object"
 // @Success      201  {object}  models.Project
-// @Failure      400  {object}  map[string]string
+// @Failure      400  {object}  map[string]string "Invalid project name"
+// @Failure      409  {object}  map[string]string "Project or Namespace already exists"
 // @Failure      500  {object}  map[string]string
 // @Router       /api/projects [post]
 func (h *ProjectHandler) CreateProject(c *gin.Context) {
@@ -88,6 +88,14 @@ func (h *ProjectHandler) CreateProject(c *gin.Context) {
 	}
 
 	if err := h.service.CreateProject(c.Request.Context(), &project); err != nil {
+		switch {
+		case apierrors.IsBadRequest(err):
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		case apierrors.IsAlreadyExists(err):
+			c.JSON(http.StatusConflict, gin.H{"error": "Project '" + project.Name + "' already exists, or its namespace exists and is not a project's"})
+			return
+		}
 		logrus.Errorf("Failed to create project: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -97,7 +105,7 @@ func (h *ProjectHandler) CreateProject(c *gin.Context) {
 
 // UpdateProject godoc
 // @Summary      Update a project
-// @Description  Update a project's mutable metadata (currently its description)
+// @Description  Update a project's mutable metadata (currently its description) in projects/<name>/project.yaml; the file's other keys are kept
 // @Tags         projects
 // @Accept       json
 // @Produce      json
@@ -133,7 +141,7 @@ func (h *ProjectHandler) UpdateProject(c *gin.Context) {
 
 // DeleteProject godoc
 // @Summary      Delete a project
-// @Description  Delete a project by name
+// @Description  Delete a project: removes projects/<name>/ from the deployments repository (the GitOps engine uninstalls its releases), then its Namespace if the console created it
 // @Tags         projects
 // @Accept       json
 // @Produce      json
@@ -158,7 +166,7 @@ func (h *ProjectHandler) DeleteProject(c *gin.Context) {
 
 // StreamProjects godoc
 // @Summary      Stream project updates
-// @Description  Stream project updates using Server-Sent Events (SSE)
+// @Description  Stream project updates using Server-Sent Events (SSE): an ADDED event per existing project, then ADDED/MODIFIED/DELETED as project.yaml files change in the deployments repository (read every few seconds, at once after a console change)
 // @Tags         projects
 // @Produce      text/event-stream
 // @Success      200  {string}  string  "stream"
@@ -171,12 +179,11 @@ func (h *ProjectHandler) StreamProjects(c *gin.Context) {
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("Transfer-Encoding", "chunked")
 
-	watcher, err := h.service.WatchProjects(c.Request.Context())
+	events, err := h.service.WatchProjects(c.Request.Context())
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	defer watcher.Stop()
 
 	keepalive := time.NewTicker(30 * time.Second)
 	defer keepalive.Stop()
@@ -193,22 +200,11 @@ func (h *ProjectHandler) StreamProjects(c *gin.Context) {
 				return
 			}
 			c.Writer.Flush()
-		case event, ok := <-watcher.ResultChan():
+		case event, ok := <-events:
 			if !ok {
 				return
 			}
-
-			ns, ok := event.Object.(*corev1.Namespace)
-			if !ok {
-				continue
-			}
-
-			payload := gin.H{
-				"type":   event.Type,
-				"object": models.FromNamespaceToProject(ns),
-			}
-
-			c.SSEvent("message", payload)
+			c.SSEvent("message", event)
 			c.Writer.Flush()
 		}
 	}

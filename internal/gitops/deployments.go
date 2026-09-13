@@ -725,23 +725,6 @@ func (d *Deployments) UpdateProject(ctx context.Context, actor auth.Actor, p Pro
 	})
 }
 
-// PutProject writes project.yaml, creating the project directory if needed.
-func (d *Deployments) PutProject(ctx context.Context, actor auth.Actor, p Project) (string, error) {
-	if err := ValidateName("project", p.Name); err != nil {
-		return "", err
-	}
-	data, err := MarshalYAML(p)
-	if err != nil {
-		return "", err
-	}
-	return d.Store.Update(ctx, NewCommit("update project", p.Name, actor), func(tx Tx) error {
-		if err := tx.WriteFile(ProjectFilePath(p.Name), data); err != nil {
-			return err
-		}
-		return d.renderProject(tx, p.Name)
-	})
-}
-
 // DeleteProject removes a project and everything it declares, or fails with
 // ErrNotFound when the repository has no such project directory.
 func (d *Deployments) DeleteProject(ctx context.Context, actor auth.Actor, project string) (string, error) {

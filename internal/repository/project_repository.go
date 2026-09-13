@@ -8,134 +8,82 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes"
 )
 
-var namespaceGR = schema.GroupResource{Group: "", Resource: "namespaces"}
-
 const (
+	// ProjectLabel marks a Namespace the console created for a project. The
+	// projects themselves are the project.yaml files of the deployments
+	// repository; the label only says the namespace is the console's to delete.
 	ProjectLabel            = "okdp.io/project"
 	ProjectDescriptionAnnot = "okdp.io/description"
 )
 
-type ProjectRepository interface {
-	Create(ctx context.Context, project *models.Project) error
-	Get(ctx context.Context, name string) (*models.Project, error)
-	List(ctx context.Context) ([]models.Project, error)
-	Update(ctx context.Context, project *models.Project) (*models.Project, error)
-	Delete(ctx context.Context, name string) error
-	Watch(ctx context.Context) (watch.Interface, error)
+// ProjectNamespaceRepository manages the Namespace a project deploys into.
+// The project itself is declared in Git (projects/<p>/project.yaml); its
+// Namespace is runtime state: the engines create it on the first
+// deployment, and the console creates it up front so a new project can hold
+// Secrets before any service is deployed.
+type ProjectNamespaceRepository interface {
+	// CreateNamespace creates the Namespace of a new project, labelled
+	// okdp.io/project. created is false when a Namespace labelled for this
+	// project already exists. A Namespace that exists without the label is not
+	// a project's (kube-system, a platform namespace): AlreadyExists.
+	CreateNamespace(ctx context.Context, project *models.Project) (created bool, err error)
+	// DeleteNamespace deletes the Namespace of a project when the console
+	// created it (it carries the okdp.io/project label). A missing Namespace,
+	// or one without the label, is left alone: deleted is false.
+	DeleteNamespace(ctx context.Context, name string) (deleted bool, err error)
 }
 
-type k8sProjectRepository struct {
+type k8sProjectNamespaceRepository struct {
 	client kubernetes.Interface
 }
 
-// NewProjectRepository creates a project repository backed by Kubernetes Namespaces.
-// A project is materialized as a Namespace carrying the label okdp.io/project=<name>
-// and the annotation okdp.io/description=<description>.
-func NewProjectRepository(client kubernetes.Interface) ProjectRepository {
-	return &k8sProjectRepository{client: client}
+// NewProjectNamespaceRepository manages project Namespaces through the Kubernetes API.
+func NewProjectNamespaceRepository(client kubernetes.Interface) ProjectNamespaceRepository {
+	return &k8sProjectNamespaceRepository{client: client}
 }
 
-func (r *k8sProjectRepository) Create(ctx context.Context, project *models.Project) error {
+func (r *k8sProjectNamespaceRepository) CreateNamespace(ctx context.Context, project *models.Project) (bool, error) {
 	ns := &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: project.Name,
-			Labels: map[string]string{
-				ProjectLabel: project.Name,
-			},
-			Annotations: map[string]string{
-				ProjectDescriptionAnnot: project.Description,
-			},
+			Name:        project.Name,
+			Labels:      map[string]string{ProjectLabel: project.Name},
+			Annotations: map[string]string{ProjectDescriptionAnnot: project.Description},
 		},
 	}
-
 	_, err := r.client.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
-	return err
+	if err == nil {
+		return true, nil
+	}
+	if !apierrors.IsAlreadyExists(err) {
+		return false, err
+	}
+	existing, getErr := r.client.CoreV1().Namespaces().Get(ctx, project.Name, metav1.GetOptions{})
+	if getErr != nil {
+		return false, getErr
+	}
+	if existing.Labels[ProjectLabel] == "" {
+		return false, err
+	}
+	return false, nil
 }
 
-func (r *k8sProjectRepository) Get(ctx context.Context, name string) (*models.Project, error) {
+func (r *k8sProjectNamespaceRepository) DeleteNamespace(ctx context.Context, name string) (bool, error) {
 	ns, err := r.client.CoreV1().Namespaces().Get(ctx, name, metav1.GetOptions{})
-	if err != nil {
-		return nil, err
+	if apierrors.IsNotFound(err) {
+		return false, nil
 	}
-
+	if err != nil {
+		return false, err
+	}
 	if ns.Labels[ProjectLabel] == "" {
-		return nil, apierrors.NewNotFound(namespaceGR, name)
+		return false, nil
 	}
-
-	return namespaceToProject(ns), nil
-}
-
-func (r *k8sProjectRepository) List(ctx context.Context) ([]models.Project, error) {
-	list, err := r.client.CoreV1().Namespaces().List(ctx, metav1.ListOptions{
-		LabelSelector: ProjectLabel,
-	})
-	if err != nil {
-		return nil, err
+	err = r.client.CoreV1().Namespaces().Delete(ctx, name, metav1.DeleteOptions{})
+	if apierrors.IsNotFound(err) {
+		return false, nil
 	}
-
-	projects := make([]models.Project, 0, len(list.Items))
-	for i := range list.Items {
-		projects = append(projects, *namespaceToProject(&list.Items[i]))
-	}
-	return projects, nil
-}
-
-// Update mutates the project metadata (currently its description) on the
-// backing Namespace. Only Namespaces that are OKDP projects (carrying the
-// okdp.io/project label) are updatable; anything else is reported as not found.
-func (r *k8sProjectRepository) Update(ctx context.Context, project *models.Project) (*models.Project, error) {
-	ns, err := r.client.CoreV1().Namespaces().Get(ctx, project.Name, metav1.GetOptions{})
-	if err != nil {
-		return nil, err
-	}
-
-	if ns.Labels[ProjectLabel] == "" {
-		return nil, apierrors.NewNotFound(namespaceGR, project.Name)
-	}
-
-	if ns.Annotations == nil {
-		ns.Annotations = map[string]string{}
-	}
-	ns.Annotations[ProjectDescriptionAnnot] = project.Description
-
-	updated, err := r.client.CoreV1().Namespaces().Update(ctx, ns, metav1.UpdateOptions{})
-	if err != nil {
-		return nil, err
-	}
-
-	return namespaceToProject(updated), nil
-}
-
-// Delete removes the backing Namespace. Only Namespaces that are OKDP projects
-// (carrying the okdp.io/project label) are deletable. Anything else is reported
-// as not found.
-func (r *k8sProjectRepository) Delete(ctx context.Context, name string) error {
-	ns, err := r.client.CoreV1().Namespaces().Get(ctx, name, metav1.GetOptions{})
-	if err != nil {
-		return err
-	}
-
-	if ns.Labels[ProjectLabel] == "" {
-		return apierrors.NewNotFound(namespaceGR, name)
-	}
-
-	return r.client.CoreV1().Namespaces().Delete(ctx, name, metav1.DeleteOptions{})
-}
-
-func (r *k8sProjectRepository) Watch(ctx context.Context) (watch.Interface, error) {
-	return r.client.CoreV1().Namespaces().Watch(ctx, metav1.ListOptions{
-		LabelSelector: ProjectLabel,
-	})
-}
-
-func namespaceToProject(ns *corev1.Namespace) *models.Project {
-	return &models.Project{
-		Name:        ns.Name,
-		Description: ns.Annotations[ProjectDescriptionAnnot],
-	}
+	return err == nil, err
 }

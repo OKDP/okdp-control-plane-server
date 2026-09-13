@@ -40,7 +40,7 @@ func SetupRouter(cfg *config.Config, verifier auth.Verifier, capabilitiesHandler
 		// Platform capabilities (UI feature discovery)
 		api.GET("/capabilities", capabilitiesHandler.GetCapabilities)
 
-		// Projects (backed by Kubernetes Namespaces)
+		// Projects (projects/<p>/project.yaml in the deployments repository)
 		api.GET("/projects", projectHandler.ListProjects)
 		api.GET("/projects/stream", projectHandler.StreamProjects)
 		api.POST("/projects", projectHandler.CreateProject)

@@ -90,10 +90,11 @@ func main() {
 	}
 	descriptors := repository.NewDescriptorRepository(k8sTypedClient)
 
-	// Initialize Project stack (projects are Kubernetes Namespaces carrying the
-	// label okdp.io/project, declared in Git by projects/<p>/project.yaml)
-	projectRepo := repository.NewProjectRepository(k8sTypedClient)
-	projectService := service.NewDefaultProjectService(projectRepo, deployments)
+	// Initialize Project stack: projects are the projects/<p>/project.yaml
+	// files of the deployments repository; the console also creates (and
+	// deletes) the Namespace of the projects it creates.
+	projectNamespaces := repository.NewProjectNamespaceRepository(k8sTypedClient)
+	projectService := service.NewDefaultProjectService(projectNamespaces, deployments)
 	projectHandler := handlers.NewProjectHandler(projectService)
 
 	// Platform configuration: the platform values (global.okdp) and the
