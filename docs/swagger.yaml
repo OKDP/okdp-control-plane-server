@@ -1343,7 +1343,8 @@ paths:
     get:
       consumes:
       - application/json
-      description: Get a list of all projects (backed by Kubernetes Namespaces)
+      description: List the projects declared in the deployments repository (projects/<p>/project.yaml),
+        whether written by the console or by hand in Git
       produces:
       - application/json
       responses:
@@ -1365,7 +1366,9 @@ paths:
     post:
       consumes:
       - application/json
-      description: Create a new project (materialized as a Kubernetes Namespace)
+      description: 'Create a project: commits projects/<name>/project.yaml and creates
+        the project Namespace. 409 when the project is already declared, or when a
+        Namespace of that name exists and is not a project''s'
       parameters:
       - description: Project Object
         in: body
@@ -1381,7 +1384,13 @@ paths:
           schema:
             $ref: '#/definitions/models.Project'
         "400":
-          description: Bad Request
+          description: Invalid project name
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Project or Namespace already exists
           schema:
             additionalProperties:
               type: string
@@ -1399,7 +1408,9 @@ paths:
     delete:
       consumes:
       - application/json
-      description: Delete a project by name
+      description: 'Delete a project: removes projects/<name>/ from the deployments
+        repository (the GitOps engine uninstalls its releases), then its Namespace
+        if the console created it'
       parameters:
       - description: Project Name
         in: path
@@ -1429,7 +1440,7 @@ paths:
     get:
       consumes:
       - application/json
-      description: Get a single project by name
+      description: Get a project declared in the deployments repository (projects/<name>/project.yaml)
       parameters:
       - description: Project Name
         in: path
@@ -1462,6 +1473,7 @@ paths:
       consumes:
       - application/json
       description: Update a project's mutable metadata (currently its description)
+        in projects/<name>/project.yaml; the file's other keys are kept
       parameters:
       - description: Project Name
         in: path
@@ -2921,7 +2933,10 @@ paths:
       - secret-stores
   /api/projects/stream:
     get:
-      description: Stream project updates using Server-Sent Events (SSE)
+      description: 'Stream project updates using Server-Sent Events (SSE): an ADDED
+        event per existing project, then ADDED/MODIFIED/DELETED as project.yaml files
+        change in the deployments repository (read every few seconds, at once after
+        a console change)'
       produces:
       - text/event-stream
       responses:

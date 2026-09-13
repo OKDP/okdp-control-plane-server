@@ -72,7 +72,7 @@ What the server writes (relative to `GITOPS_PATH`):
 
 ```
 platform/catalog.yaml                          # console service catalog
-projects/<project>/project.yaml
+projects/<project>/project.yaml                # {name, description, …}: declares the project
 projects/<project>/kustomization.yaml          # Flux only, generated: services + connection ConfigMaps
 projects/<project>/connections/<name>.yaml     # external connection (credentials stay in a Secret)
 projects/<project>/services/<instance>/instance.yaml
@@ -80,6 +80,17 @@ projects/<project>/services/<instance>/values.yaml  # the submitted parameters o
 projects/<project>/services/<instance>/helmrelease.yaml   # Flux only, generated
 projects/<project>/services/<instance>/kustomization.yaml # Flux only, generated
 ```
+
+Projects are the `projects/<project>/project.yaml` files (the namespace is the project
+name), whoever wrote them: a project declared by hand in Git is listed, served and edited
+by the console like one the console created, and `/api/projects/stream` reports the
+files as they change (read every few seconds). Creating a project from the console also
+creates its Namespace (label `okdp.io/project`) so it can hold Secrets before any
+deployment, and refuses a name that is already a Namespace without that label
+(`kube-system`, …). Deleting a project removes `projects/<project>/` (the engine
+uninstalls its releases), then the Namespace only if it carries the label; a namespace
+the engine created is left, as when the directory is removed by hand. An update rewrites
+`description` and keeps the other keys and the comments of the file.
 
 Commits read `okdp: <action> <project>/<instance> by <user>`. The logged-in user is the
 commit author; the configured GitOps identity (`GITOPS_AUTHOR_NAME` / `GITOPS_AUTHOR_EMAIL`)
@@ -287,7 +298,7 @@ point `KUBECONFIG` at a valid config. Then check the logs and permissions:
 
 ```sh
 kubectl logs -n okdp-system -l app.kubernetes.io/name=okdp-control-plane-server
-kubectl auth can-i list namespaces
+kubectl auth can-i get namespaces
 ```
 
 ### API calls fail only in the browser (CORS)

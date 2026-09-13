@@ -463,7 +463,7 @@ const docTemplate = `{
         },
         "/api/projects": {
             "get": {
-                "description": "Get a list of all projects (backed by Kubernetes Namespaces)",
+                "description": "List the projects declared in the deployments repository (projects/\u003cp\u003e/project.yaml), whether written by the console or by hand in Git",
                 "consumes": [
                     "application/json"
                 ],
@@ -496,7 +496,7 @@ const docTemplate = `{
                 }
             },
             "post": {
-                "description": "Create a new project (materialized as a Kubernetes Namespace)",
+                "description": "Create a project: commits projects/\u003cname\u003e/project.yaml and creates the project Namespace. 409 when the project is already declared, or when a Namespace of that name exists and is not a project's",
                 "consumes": [
                     "application/json"
                 ],
@@ -526,7 +526,16 @@ const docTemplate = `{
                         }
                     },
                     "400": {
-                        "description": "Bad Request",
+                        "description": "Invalid project name",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Project or Namespace already exists",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -548,7 +557,7 @@ const docTemplate = `{
         },
         "/api/projects/stream": {
             "get": {
-                "description": "Stream project updates using Server-Sent Events (SSE)",
+                "description": "Stream project updates using Server-Sent Events (SSE): an ADDED event per existing project, then ADDED/MODIFIED/DELETED as project.yaml files change in the deployments repository (read every few seconds, at once after a console change)",
                 "produces": [
                     "text/event-stream"
                 ],
@@ -577,7 +586,7 @@ const docTemplate = `{
         },
         "/api/projects/{name}": {
             "get": {
-                "description": "Get a single project by name",
+                "description": "Get a project declared in the deployments repository (projects/\u003cname\u003e/project.yaml)",
                 "consumes": [
                     "application/json"
                 ],
@@ -625,7 +634,7 @@ const docTemplate = `{
                 }
             },
             "put": {
-                "description": "Update a project's mutable metadata (currently its description)",
+                "description": "Update a project's mutable metadata (currently its description) in projects/\u003cname\u003e/project.yaml; the file's other keys are kept",
                 "consumes": [
                     "application/json"
                 ],
@@ -691,7 +700,7 @@ const docTemplate = `{
                 }
             },
             "delete": {
-                "description": "Delete a project by name",
+                "description": "Delete a project: removes projects/\u003cname\u003e/ from the deployments repository (the GitOps engine uninstalls its releases), then its Namespace if the console created it",
                 "consumes": [
                     "application/json"
                 ],
