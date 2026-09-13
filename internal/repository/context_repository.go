@@ -58,7 +58,10 @@ type ContextRepository interface {
 	// GetOidcIssuer returns the issuer whose tokens the API accepts, "" when the Context names none.
 	GetOidcIssuer(ctx context.Context) (string, error)
 
-	// GetOidcInsecureSkipVerify reports whether the issuer's certificate istaken on trust (from spec.context.oidc.insecureSkipVerify).
+	// GetOidcClientID returns the client a token must be issued for, "" when the Context names none.
+	GetOidcClientID(ctx context.Context) (string, error)
+
+	// GetOidcInsecureSkipVerify reports whether the issuer's certificate is taken on trust (from spec.context.oidc.insecureSkipVerify).
 	GetOidcInsecureSkipVerify(ctx context.Context) (bool, error)
 
 	// GetIdentityProvisioningProvider returns the OIDC client provisioning backend
@@ -331,6 +334,16 @@ func (r *k8sContextRepository) GetOidcIssuer(ctx context.Context) (string, error
 	}
 	issuer, _, _ := unstructured.NestedString(u.Object, "spec", "context", "oidc", "issuerUri")
 	return issuer, nil
+}
+
+// GetOidcClientID reads the client id from the modern Context layout.
+func (r *k8sContextRepository) GetOidcClientID(ctx context.Context) (string, error) {
+	u, err := r.getContext(ctx)
+	if err != nil {
+		return "", err
+	}
+	clientID, _, _ := unstructured.NestedString(u.Object, "spec", "context", "identity", "oidc", "clientId")
+	return clientID, nil
 }
 
 // GetOidcInsecureSkipVerify reads the platform's answer to a self-signed issuer
