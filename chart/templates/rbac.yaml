@@ -8,11 +8,12 @@ metadata:
   labels:
     {{- include "okdp-control-plane-server.labels" . | nindent 4 }}
 rules:
-  # Projects are namespaces labelled okdp.io/project. update/patch are needed
-  # to edit a project's description (stored as the okdp.io/description annotation).
+  # Projects are projects/<p>/project.yaml in Git. The server creates the
+  # namespace of a project it creates (label okdp.io/project) and deletes only
+  # namespaces carrying that label.
   - apiGroups: [""]
     resources: ["namespaces"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+    verbs: ["get", "create", "delete"]
   # Secrets (SecretStore and connection credentials), pods + logs (service inspection)
   - apiGroups: [""]
     resources: ["secrets"]
