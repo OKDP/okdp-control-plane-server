@@ -21,6 +21,17 @@ var (
 	errMalformedHeader = errors.New("the Authorization header must be 'Bearer <token>'")
 )
 
+// identityKey is used to store the authenticated caller's identity in the request context.
+const identityKey = "identity"
+
+// CallerIdentity returns the identity of the authenticated caller.
+// It returns nil if the request has not been authenticated.
+func CallerIdentity(c *gin.Context) *auth.Identity {
+	identity, _ := c.Get(identityKey)
+	actor, _ := identity.(*auth.Identity)
+	return actor
+}
+
 // RequireAuthentication rejects any request without a token this platform's
 // issuer signed.
 func RequireAuthentication(verifier auth.Verifier) gin.HandlerFunc {
@@ -36,7 +47,8 @@ func RequireAuthentication(verifier auth.Verifier) gin.HandlerFunc {
 			return
 		}
 
-		if err := verifier.Verify(c.Request.Context(), rawToken); err != nil {
+		identity, err := verifier.Verify(c.Request.Context(), rawToken)
+		if err != nil {
 			// The reason stays in the log: naming the failed check tells an
 			// attacker which one to work on.
 			logrus.WithError(err).WithField("path", c.Request.URL.Path).Warn("Rejected a bearer token")
@@ -44,6 +56,7 @@ func RequireAuthentication(verifier auth.Verifier) gin.HandlerFunc {
 			return
 		}
 
+		c.Set(identityKey, identity)
 		c.Next()
 	}
 }

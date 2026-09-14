@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/okdp/okdp-control-plane-server/internal/auth"
 	"github.com/okdp/okdp-control-plane-server/internal/config"
 )
 
@@ -17,8 +18,8 @@ import (
 // request with no Authorization header never reaches the verifier at all.
 type refuseAllVerifier struct{}
 
-func (refuseAllVerifier) Verify(context.Context, string) error {
-	return errors.New("no token accepted in this test")
+func (refuseAllVerifier) Verify(context.Context, string) (*auth.Identity, error) {
+	return nil, errors.New("no token accepted in this test")
 }
 
 // Handlers are nil on purpose: a route that slipped past the middleware would

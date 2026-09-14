@@ -17,9 +17,15 @@ import (
 // Bounds the discovery call at startup and each later key refresh.
 const issuerTimeout = 30 * time.Second
 
-// Verifier reports whether a raw bearer token is one this platform issued.
+// Verifier validates a bearer token and returns the identity it represents.
 type Verifier interface {
-	Verify(ctx context.Context, rawToken string) error
+	Verify(ctx context.Context, rawToken string) (*Identity, error)
+}
+
+// Identity represents the user identified by a verified token.
+type Identity struct {
+	Subject  string
+	Username string
 }
 
 // Config describes the identity provider to trust.
@@ -35,11 +41,13 @@ type oidcVerifier struct {
 	clientID string
 }
 
-// azpClaims reads the two claims providers use to name the client, beyond aud:
-// RFC 9068 also defines client_id, and Keycloak fills azp instead.
-type azpClaims struct {
-	Azp      string `json:"azp"`
-	ClientID string `json:"client_id"`
+// idClaims contains the claims needed by Verify to identify the client and user.
+// RFC 9068 uses client_id, while Keycloak uses azp.
+type idClaims struct {
+	Azp               string `json:"azp"`
+	ClientID          string `json:"client_id"`
+	PreferredUsername string `json:"preferred_username"`
+	Email             string `json:"email"`
 }
 
 // NewVerifier resolves the issuer's discovery document.
@@ -70,25 +78,30 @@ func NewVerifier(ctx context.Context, cfg Config) (Verifier, error) {
 	}, nil
 }
 
-func (v *oidcVerifier) Verify(ctx context.Context, rawToken string) error {
+func (v *oidcVerifier) Verify(ctx context.Context, rawToken string) (*Identity, error) {
 	token, err := v.verifier.Verify(ctx, rawToken)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	for _, aud := range token.Audience {
-		if aud == v.clientID {
-			return nil
-		}
-	}
-	var claims azpClaims
+	var claims idClaims
 	if err := token.Claims(&claims); err != nil {
-		return fmt.Errorf("could not read the token claims: %w", err)
+		return nil, fmt.Errorf("could not read the token claims: %w", err)
 	}
-	if claims.Azp == v.clientID || claims.ClientID == v.clientID {
-		return nil
+
+	named := claims.ClientID == v.clientID || claims.Azp == v.clientID
+	for _, aud := range token.Audience {
+		named = named || aud == v.clientID
 	}
-	return errors.New("the token was not issued for this client")
+	if !named {
+		return nil, errors.New("the token was not issued for this client")
+	}
+
+	username := claims.PreferredUsername
+	if username == "" {
+		username = claims.Email
+	}
+	return &Identity{Subject: token.Subject, Username: username}, nil
 }
 
 // ResolveIssuer prefers the environment override, then what the platform
