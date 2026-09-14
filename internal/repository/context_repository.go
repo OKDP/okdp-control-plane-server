@@ -336,11 +336,14 @@ func (r *k8sContextRepository) GetOidcIssuer(ctx context.Context) (string, error
 	return issuer, nil
 }
 
-// GetOidcClientID reads the client id from the modern Context layout.
+// GetOidcClientID mirrors GetOidcIssuer's two layouts.
 func (r *k8sContextRepository) GetOidcClientID(ctx context.Context) (string, error) {
 	u, err := r.getContext(ctx)
 	if err != nil {
 		return "", err
+	}
+	if clientID, _, _ := unstructured.NestedString(u.Object, "spec", "context", "oidc", "clientId"); clientID != "" {
+		return clientID, nil
 	}
 	clientID, _, _ := unstructured.NestedString(u.Object, "spec", "context", "identity", "oidc", "clientId")
 	return clientID, nil

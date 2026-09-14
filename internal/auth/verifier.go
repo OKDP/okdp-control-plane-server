@@ -44,6 +44,10 @@ type azpClaims struct {
 
 // NewVerifier resolves the issuer's discovery document.
 func NewVerifier(ctx context.Context, cfg Config) (Verifier, error) {
+	if cfg.ClientID == "" {
+		return nil, errors.New("no OIDC client id: a token would authenticate without proving it was issued for this API")
+	}
+
 	// go-oidc otherwise falls back to http.DefaultClient, which has no timeout.
 	client := &http.Client{Timeout: issuerTimeout}
 	if cfg.InsecureSkipVerify {
@@ -59,9 +63,7 @@ func NewVerifier(ctx context.Context, cfg Config) (Verifier, error) {
 		return nil, fmt.Errorf("could not reach the OIDC issuer %q: %w", cfg.Issuer, err)
 	}
 
-	// The audience is not checked: Keycloak puts the resource server in `aud`
-	// and the asking client in `azp`, so the library's check rejects tokens
-	// that are legitimately ours. Signature, issuer and expiry are.
+	// SkipClientIDCheck: Verify checks aud/azp/client_id itself, below.
 	return &oidcVerifier{
 		verifier: provider.Verifier(&oidc.Config{SkipClientIDCheck: true}),
 		clientID: cfg.ClientID,
@@ -72,9 +74,6 @@ func (v *oidcVerifier) Verify(ctx context.Context, rawToken string) error {
 	token, err := v.verifier.Verify(ctx, rawToken)
 	if err != nil {
 		return err
-	}
-	if v.clientID == "" {
-		return nil
 	}
 
 	for _, aud := range token.Audience {
@@ -110,10 +109,18 @@ func ResolveIssuer(ctx context.Context, override string, fromContext func(contex
 	return issuer, nil
 }
 
-// ResolveClientID prefers the environment override, then the platform Context
+// ResolveClientID mirrors ResolveIssuer.
 func ResolveClientID(ctx context.Context, override string, fromContext func(context.Context) (string, error)) (string, error) {
 	if override != "" {
 		return override, nil
 	}
-	return fromContext(ctx)
+
+	clientID, err := fromContext(ctx)
+	if err != nil {
+		return "", fmt.Errorf("could not read the OIDC client id from the platform Context: %w", err)
+	}
+	if clientID == "" {
+		return "", errors.New("no OIDC client id: the platform Context declares none and OIDC_CLIENT_ID is unset")
+	}
+	return clientID, nil
 }
