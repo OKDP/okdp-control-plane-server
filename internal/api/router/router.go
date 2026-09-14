@@ -48,16 +48,11 @@ func SetupRouter(cfg *config.Config, verifier auth.Verifier, capabilitiesHandler
 		api.PUT("/projects/:name", projectHandler.UpdateProject)
 		api.DELETE("/projects/:name", projectHandler.DeleteProject)
 
-		// Identity. Two independent conditions, both required: the configured
-		// provider must be kubauth, and its CRDs must actually be installed. A
-		// cluster can declare the provider without carrying them. Guarded once
-		// here rather than in each handler, so a route added later cannot slip
-		// through unguarded.
-		identity := api.Group("/v1/identity",
-			capabilitiesHandler.RequireIdentityAPI(
-				func(c *gin.Context) bool { return identityHandler.Available(c.Request.Context()) },
-			),
-		)
+		// Identity: users and groups in the platform Keycloak realm, through
+		// the Admin REST API. Guarded once here rather than in each handler, so
+		// a route added later cannot slip through unguarded: without Keycloak
+		// admin credentials the whole group answers 501.
+		identity := api.Group("/v1/identity", identityHandler.RequireAPI())
 		{
 			// Users
 			identity.GET("/users", identityHandler.ListUsers)

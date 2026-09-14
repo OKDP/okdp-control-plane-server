@@ -21,6 +21,26 @@ type Config struct {
 	// GitOps configures the deployments repository, the only desired-state
 	// store, and the engine reconciling it.
 	GitOps GitOpsConfig
+
+	// Keycloak Admin REST API, backing user and group management
+	// (/api/v1/identity). The client is a confidential service account of the
+	// realm holding the roles view-users, query-users, manage-users and
+	// query-groups of the realm's management client (realm-management, or
+	// master-realm when the realm is master). User management is off while
+	// KeycloakClientSecret is empty.
+	//
+	// KeycloakURL (base URL, without /realms/...) and KeycloakRealm override
+	// the platform issuer; empty, both are read from the issuer the API
+	// verifies tokens against (OIDC_ISSUER, else the platform values), which
+	// has the form <url>/realms/<realm>.
+	KeycloakURL          string
+	KeycloakRealm        string
+	KeycloakClientID     string
+	KeycloakClientSecret string
+	// KeycloakTLSInsecure skips the certificate check of the Keycloak
+	// endpoint (sandboxes). global.okdp.oidc.insecureSkipVerify has the same
+	// effect when the endpoint comes from the platform issuer.
+	KeycloakTLSInsecure bool
 }
 
 // Engines reconciling the deployments repository.
@@ -101,6 +121,11 @@ func Load() (*Config, error) {
 			ReleasesNamespace:     getEnv("GITOPS_RELEASES_NAMESPACE", "okdp-releases"),
 			ArgoCDNamespace:       getEnv("ARGOCD_NAMESPACE", "argocd"),
 		},
+		KeycloakURL:          strings.TrimRight(strings.TrimSpace(getEnv("KEYCLOAK_URL", "")), "/"),
+		KeycloakRealm:        strings.TrimSpace(getEnv("KEYCLOAK_REALM", "")),
+		KeycloakClientID:     strings.TrimSpace(getEnv("KEYCLOAK_CLIENT_ID", "okdp-control-plane")),
+		KeycloakClientSecret: getEnv("KEYCLOAK_CLIENT_SECRET", ""),
+		KeycloakTLSInsecure:  getEnv("KEYCLOAK_TLS_INSECURE", "") == "true",
 	}
 
 	for _, h := range strings.Split(getEnv("INSECURE_OCI_REGISTRIES", ""), ",") {

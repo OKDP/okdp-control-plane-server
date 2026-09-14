@@ -263,7 +263,23 @@ its `configuration:` values (see [`chart/values.yaml`](chart/values.yaml)).
 | `GITOPS_RELEASES_NAMESPACE` | Flux HelmReleases and values ConfigMaps, `okdp-platform-values` included | `okdp-releases` | No |
 | `ARGOCD_NAMESPACE` | Argo CD Applications | `argocd` | No |
 | `INSECURE_OCI_REGISTRIES` | Registry hosts reached over plain HTTP to read chart schemas (sandboxes) | | No |
+| `KEYCLOAK_CLIENT_ID` | Keycloak service-account client of the platform realm (chart: `keycloak.credentialsSecret`, key `client_id`) | `okdp-control-plane` | No |
+| `KEYCLOAK_CLIENT_SECRET` | Its secret (chart: `keycloak.credentialsSecret`, key `client_secret`). Unset: user and group management is off | | No |
+| `KEYCLOAK_URL` / `KEYCLOAK_REALM` | Keycloak base URL and realm of the Admin API | from the platform OIDC issuer `<url>/realms/<realm>` | No |
+| `KEYCLOAK_TLS_INSECURE` | Skip the Keycloak certificate check (sandboxes only) | `false` | No |
 | `EXCLUDED_SIDECAR_PREFIXES` | Container name prefixes excluded from pod/metrics views (comma-separated) | `istio-proxy,istio-init,dynatrace-,linkerd-proxy,envoy,vault-agent` | No |
+
+Users and groups (`/api/v1/identity`, the console's Identity pages) are managed in the
+platform Keycloak realm through its Admin REST API. The client named by `KEYCLOAK_CLIENT_ID`
+must be confidential, with service accounts enabled, and its service account must hold the
+roles `view-users`, `query-users`, `manage-users` and `query-groups` of the realm's
+management client: `realm-management` in a regular realm, but `master-realm` in the
+`master` realm (there, `realm-management` does not exist; each realm `<r>` has a
+`<r>-realm` client in `master`).
+Without `KEYCLOAK_CLIENT_SECRET` the identity routes answer `501` and `/api/capabilities`
+reports `identity.userManagement: false`. The `comment` and `uid` of a user are Keycloak
+user attributes: on Keycloak 24+ the realm user profile must allow them (unmanaged
+attributes enabled, or both attributes declared), otherwise Keycloak drops them.
 
 > For the full chart values (image, service, resources, RBAC), see
 > [`chart/values.yaml`](chart/values.yaml).

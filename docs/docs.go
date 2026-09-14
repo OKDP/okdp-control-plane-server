@@ -26,7 +26,7 @@ const docTemplate = `{
     "paths": {
         "/api/capabilities": {
             "get": {
-                "description": "Capabilities the platform is configured with (identity provider, user management, OIDC client provisioning), so the UI can adapt",
+                "description": "Capabilities the platform is configured with (user management through Keycloak, console OIDC client, OIDC client provisioning backend), so the UI can adapt",
                 "produces": [
                     "application/json"
                 ],
@@ -2900,7 +2900,7 @@ const docTemplate = `{
         },
         "/api/v1/identity/groups": {
             "get": {
-                "description": "Get all groups from Kubauth",
+                "description": "Get all groups from the identity provider (Keycloak)",
                 "consumes": [
                     "application/json"
                 ],
@@ -2924,7 +2924,7 @@ const docTemplate = `{
                 }
             },
             "post": {
-                "description": "Create a new group in Kubauth",
+                "description": "Create a new group in the identity provider (Keycloak)",
                 "consumes": [
                     "application/json"
                 ],
@@ -2958,7 +2958,7 @@ const docTemplate = `{
         },
         "/api/v1/identity/groups/{name}": {
             "put": {
-                "description": "Update a group in Kubauth",
+                "description": "Update a group in the identity provider (Keycloak)",
                 "consumes": [
                     "application/json"
                 ],
@@ -2997,7 +2997,7 @@ const docTemplate = `{
                 }
             },
             "delete": {
-                "description": "Delete a group from Kubauth",
+                "description": "Delete a group from the identity provider (Keycloak)",
                 "consumes": [
                     "application/json"
                 ],
@@ -3026,7 +3026,7 @@ const docTemplate = `{
         },
         "/api/v1/identity/users": {
             "get": {
-                "description": "Get all users from Kubauth",
+                "description": "Get all users from the identity provider (Keycloak)",
                 "consumes": [
                     "application/json"
                 ],
@@ -3050,7 +3050,7 @@ const docTemplate = `{
                 }
             },
             "post": {
-                "description": "Create a new user in Kubauth",
+                "description": "Create a new user in the identity provider (Keycloak)",
                 "consumes": [
                     "application/json"
                 ],
@@ -3114,7 +3114,7 @@ const docTemplate = `{
                 }
             },
             "put": {
-                "description": "Update a user in Kubauth",
+                "description": "Update a user in the identity provider (Keycloak)",
                 "consumes": [
                     "application/json"
                 ],
@@ -3153,7 +3153,7 @@ const docTemplate = `{
                 }
             },
             "delete": {
-                "description": "Delete a user from Kubauth",
+                "description": "Delete a user from the identity provider (Keycloak)",
                 "consumes": [
                     "application/json"
                 ],
@@ -3706,11 +3706,11 @@ const docTemplate = `{
                     ]
                 },
                 "provider": {
-                    "description": "Provider is the configured identity provider: \"external\" (BYO OIDC,\ndefault) or \"kubauth\".",
+                    "description": "Provider is who manages the platform users: \"keycloak\" when this server\nmanages them through the Keycloak Admin API, \"external\" otherwise\n(users are managed in Keycloak directly).",
                     "type": "string"
                 },
                 "userManagement": {
-                    "description": "UserManagement is true when the kubauth-specific user/group management\nAPI (/api/v1/identity) is available.",
+                    "description": "UserManagement is true when the user/group management API\n(/api/v1/identity) is available: the server has Keycloak admin\ncredentials and a realm to apply them to.",
                     "type": "boolean"
                 }
             }
@@ -3830,7 +3830,7 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "provider": {
-                    "description": "Provider is the configured provisioning backend: \"none\" (default),\n\"kubauth\" or \"keycloak\".",
+                    "description": "Provider is the configured provisioning backend: \"none\" (default) or\n\"keycloak\".",
                     "type": "string"
                 }
             }
@@ -4524,25 +4524,25 @@ const docTemplate = `{
                     }
                 },
                 "groups": {
-                    "description": "Groups is a computed field, not directly in the User CRD but useful for API",
+                    "description": "Groups is a computed field (memberships), useful for API",
                     "type": "array",
                     "items": {
                         "type": "string"
                     }
                 },
                 "name": {
-                    "description": "spec.name (Display Name / Full Name)",
+                    "description": "Display Name / Full Name",
                     "type": "string"
                 },
                 "password": {
-                    "description": "Password is write-only, used for creation/update",
+                    "description": "Password is write-only, used for creation/update; credentials are\nmanaged by the identity backend and never stored by this server.",
                     "type": "string"
                 },
                 "uid": {
                     "type": "integer"
                 },
                 "username": {
-                    "description": "metadata.name (ID / Login)",
+                    "description": "ID / Login",
                     "type": "string"
                 }
             }

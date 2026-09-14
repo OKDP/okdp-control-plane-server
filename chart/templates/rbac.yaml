@@ -46,15 +46,6 @@ rules:
   - apiGroups: ["metrics.k8s.io"]
     resources: ["pods"]
     verbs: ["get", "list"]
-  # Identity management (kubauth CRDs)
-  - apiGroups: ["kubauth.kubotal.io"]
-    resources: ["users", "groups", "groupbindings"]
-    verbs: ["get", "list", "watch", "create", "update", "delete"]
-  - apiGroups: ["kubauth.kubotal.io"]
-    resources: ["oidcclients"]
-    # delete: a service being removed takes its OIDC client with it
-    # (service_service.go, DeleteService)
-    verbs: ["get", "list", "delete"]
   # Secret management (External Secrets Operator)
   - apiGroups: ["external-secrets.io"]
     resources: ["secretstores", "externalsecrets"]

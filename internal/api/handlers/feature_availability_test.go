@@ -14,13 +14,13 @@ func init() { gin.SetMode(gin.TestMode) }
 // guarded builds a route group behind the feature guard, as the router does.
 func guarded(available bool) *gin.Engine {
 	engine := gin.New()
-	group := engine.Group("/api/v1/identity", RequireFeature(
+	group := engine.Group("/api/example", RequireFeature(
 		func(c *gin.Context) bool { return available },
-		"kubauth identity",
-		"Identity management is not available on this cluster: the kubauth CRDs are not installed.",
+		"external-secrets",
+		"Vault integration is not available on this cluster: the external-secrets CRDs are not installed.",
 	))
-	group.GET("/users", func(c *gin.Context) { c.JSON(http.StatusOK, []string{"alice"}) })
-	group.POST("/users", func(c *gin.Context) { c.JSON(http.StatusCreated, gin.H{}) })
+	group.GET("/items", func(c *gin.Context) { c.JSON(http.StatusOK, []string{"alice"}) })
+	group.POST("/items", func(c *gin.Context) { c.JSON(http.StatusCreated, gin.H{}) })
 	return engine
 }
 
@@ -34,7 +34,7 @@ func call(engine *gin.Engine, method, path string) *httptest.ResponseRecorder {
 // not a server that broke. 500 sent readers hunting for a fault that was not
 // there, and filled the logs with errors on every page load.
 func TestMissingFeatureAnswers501(t *testing.T) {
-	response := call(guarded(false), http.MethodGet, "/api/v1/identity/users")
+	response := call(guarded(false), http.MethodGet, "/api/example/items")
 
 	if response.Code != http.StatusNotImplemented {
 		t.Fatalf("expected 501, got %d", response.Code)
@@ -49,7 +49,7 @@ func TestMissingFeatureAnswers501(t *testing.T) {
 	if body.Reason != ReasonFeatureNotInstalled {
 		t.Errorf("expected reason %q, got %q", ReasonFeatureNotInstalled, body.Reason)
 	}
-	if body.Feature != "kubauth identity" {
+	if body.Feature != "external-secrets" {
 		t.Errorf("expected the feature to be named, got %q", body.Feature)
 	}
 	if body.Error == "" {
@@ -57,10 +57,10 @@ func TestMissingFeatureAnswers501(t *testing.T) {
 	}
 }
 
-// Writes are guarded too: creating a user against absent CRDs must not reach
+// Writes are guarded too: creating an object against absent CRDs must not reach
 // the handler and fail halfway.
 func TestMissingFeatureGuardsWritesToo(t *testing.T) {
-	response := call(guarded(false), http.MethodPost, "/api/v1/identity/users")
+	response := call(guarded(false), http.MethodPost, "/api/example/items")
 
 	if response.Code != http.StatusNotImplemented {
 		t.Fatalf("expected 501 on a write, got %d", response.Code)
@@ -69,7 +69,7 @@ func TestMissingFeatureGuardsWritesToo(t *testing.T) {
 
 // And the guard must be transparent once the CRDs are there.
 func TestAvailableFeaturePassesThrough(t *testing.T) {
-	response := call(guarded(true), http.MethodGet, "/api/v1/identity/users")
+	response := call(guarded(true), http.MethodGet, "/api/example/items")
 
 	if response.Code != http.StatusOK {
 		t.Fatalf("expected the request to reach the handler, got %d", response.Code)

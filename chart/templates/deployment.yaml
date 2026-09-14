@@ -26,9 +26,20 @@ spec:
           envFrom:
             - configMapRef:
                 name: {{ include "okdp-control-plane-server.fullname" . }}
-          {{- with .Values.proxy }}
-          {{- if or .httpProxy .httpsProxy .noProxy }}
+          {{- $kc := .Values.keycloak.credentialsSecret }}
+          {{- $proxy := .Values.proxy }}
+          {{- if or $kc.name $proxy.httpProxy $proxy.httpsProxy $proxy.noProxy }}
           env:
+            {{- if $kc.name }}
+            # Keycloak Admin API service account (user and group management).
+            - name: KEYCLOAK_CLIENT_ID
+              valueFrom:
+                secretKeyRef: { name: {{ $kc.name | quote }}, key: {{ $kc.clientIdKey | default "client_id" | quote }} }
+            - name: KEYCLOAK_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef: { name: {{ $kc.name | quote }}, key: {{ $kc.clientSecretKey | default "client_secret" | quote }} }
+            {{- end }}
+            {{- with $proxy }}
             {{- if .httpProxy }}
             - { name: HTTP_PROXY,  value: {{ .httpProxy | quote }} }
             - { name: http_proxy,  value: {{ .httpProxy | quote }} }
@@ -41,7 +52,7 @@ spec:
             - { name: NO_PROXY,    value: {{ .noProxy | quote }} }
             - { name: no_proxy,    value: {{ .noProxy | quote }} }
             {{- end }}
-          {{- end }}
+            {{- end }}
           {{- end }}
           ports:
             - name: http

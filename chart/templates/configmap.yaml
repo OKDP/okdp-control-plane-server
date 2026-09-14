@@ -27,3 +27,15 @@ data:
   # Development sandboxes only: registry hosts reached over plain HTTP.
   INSECURE_OCI_REGISTRIES: {{ .Values.configuration.insecureOciRegistries | quote }}
   {{- end }}
+  {{- with .Values.keycloak }}
+  {{- if .url }}
+  KEYCLOAK_URL: {{ .url | quote }}
+  {{- end }}
+  {{- if .realm }}
+  KEYCLOAK_REALM: {{ .realm | quote }}
+  {{- end }}
+  {{- if .tlsInsecure }}
+  # Sandboxes only: the Keycloak certificate is not checked.
+  KEYCLOAK_TLS_INSECURE: "true"
+  {{- end }}
+  {{- end }}

@@ -43,6 +43,31 @@ gitops:
     name: OKDP control plane
     email: okdp-control-plane@okdp.io
 
+# Keycloak Admin REST API, backing user and group management
+# (/api/v1/identity). The client is a confidential service account of the
+# platform realm holding the roles view-users, query-users, manage-users and
+# query-groups of the realm's management client (realm-management, or
+# master-realm when the realm is master). Without credentialsSecret.name, user
+# management is off (the identity routes answer 501 and /api/capabilities
+# reports identity.userManagement: false).
+keycloak:
+  # Keycloak base URL (no /realms/...) and realm (KEYCLOAK_URL,
+  # KEYCLOAK_REALM). Empty: taken from the platform OIDC issuer
+  # (<url>/realms/<realm>).
+  url: ""
+  realm: ""
+  # Secret, in the release namespace, with the service-account client
+  # credentials (KEYCLOAK_CLIENT_ID, KEYCLOAK_CLIENT_SECRET). Same default keys
+  # as global.okdp.identity.provisioning.keycloak.credentialsSecret.
+  credentialsSecret:
+    name: ""
+    clientIdKey: client_id
+    clientSecretKey: client_secret
+  # Skip the certificate check of Keycloak. Sandboxes only
+  # (KEYCLOAK_TLS_INSECURE; global.okdp.oidc.insecureSkipVerify also applies
+  # when the URL comes from the platform issuer).
+  tlsInsecure: false
+
 service:
   type: ClusterIP
   port: 8093

@@ -103,27 +103,26 @@ func main() {
 	contextRepo := repository.NewPlatformRepository(k8sTypedClient, cfg.GitOps.ReleasesNamespace, deployments)
 	catalogWriter := repository.NewCatalogWriterRepository(deployments)
 
-	// Initialize Identity stack. The namespace is read per call from the
-	// platform values, and the discovery client tells whether the kubauth CRDs
-	// are there at all.
-	kubauthNamespace := func(ctx context.Context) string {
-		ns, err := contextRepo.GetKubauthNamespace(ctx)
-		if err == nil {
-			return ns
-		}
-		// Falling back silently would read and write the CRs in a namespace the
-		// kubauth controller does not watch, and answer 200 all along.
-		logrus.WithError(err).Warnf("Could not read the kubauth namespace, falling back to %s", cfg.PlatformNamespace)
-		return cfg.PlatformNamespace
-	}
-	identityRepo := repository.NewIdentityRepository(k8sClient, k8sDiscoveryClient, kubauthNamespace)
+	// Initialize Identity stack: users and groups in the platform Keycloak
+	// realm, through the Admin REST API (KEYCLOAK_*). The realm is located by
+	// KEYCLOAK_URL/KEYCLOAK_REALM, else by the issuer the API verifies tokens
+	// against.
+	identityRepo := repository.NewKeycloakIdentityRepository(cfg, keycloakIssuerSource(cfg, contextRepo))
 	identityService := service.NewDefaultIdentityService(identityRepo)
 	identityHandler := handlers.NewIdentityHandler(identityService)
+	if cfg.KeycloakClientSecret == "" {
+		logrus.Info("KEYCLOAK_CLIENT_SECRET is not set: user and group management (/api/v1/identity) is disabled")
+	} else {
+		logrus.WithFields(logrus.Fields{
+			"url":      cfg.KeycloakURL,
+			"realm":    cfg.KeycloakRealm,
+			"clientId": cfg.KeycloakClientID,
+		}).Info("User and group management backed by the Keycloak Admin API (an empty url/realm follows the platform issuer)")
+	}
 
 	// Initialize Capabilities stack (platform features derived from the
-	// platform values). Built after the identity repository: the identity
-	// capability answers on the same two conditions as the routes, the
-	// configured provider and the CRDs actually being served.
+	// platform values). The identity capability answers on the same condition
+	// as the identity routes.
 	capabilityService := service.NewDefaultCapabilityService(contextRepo, identityRepo.Available)
 	capabilitiesHandler := handlers.NewCapabilitiesHandler(capabilityService)
 
@@ -171,12 +170,10 @@ func main() {
 	connectionService := service.NewDefaultConnectionService(deployments, connectionSecrets, descriptors, serviceService.ListServices, contractCatalog)
 	connectionHandler := handlers.NewConnectionHandler(connectionService)
 
-	// The identity block is checked once, at startup, against what the cluster
-	// actually serves. A platform told to provision clients through kubauth on a
-	// cluster without kubauth would deploy services whose OIDC client is never
-	// created, and fail much later at the point of authenticating a user, with
-	// nothing pointing back here.
-	checkIdentityConfiguration(context.Background(), contextRepo, identityRepo)
+	// The identity block is checked once, at startup. A platform whose
+	// provisioning backend is misconfigured would deploy services fine and fail
+	// much later, when a deleted service leaves its OIDC client behind.
+	checkIdentityConfiguration(context.Background(), contextRepo)
 
 	verifier := buildTokenVerifier(context.Background(), cfg, contextRepo)
 
@@ -208,7 +205,7 @@ func main() {
 // and stays quiet otherwise. Platform values that cannot be read at all are not
 // fatal: they may simply not be there yet on a fresh cluster, and the routes
 // that need them already report their own absence.
-func checkIdentityConfiguration(ctx context.Context, contextRepo repository.PlatformRepository, identityRepo repository.IdentityRepository) {
+func checkIdentityConfiguration(ctx context.Context, contextRepo repository.PlatformRepository) {
 	identity, err := contextRepo.GetIdentity(ctx)
 	if err != nil {
 		// A block that is present and wrong is a configuration error worth
@@ -229,33 +226,39 @@ func checkIdentityConfiguration(ctx context.Context, contextRepo repository.Plat
 		return
 	}
 
-	// Every provider is checked here, not just kubauth: an unsupported value or
-	// an incomplete Keycloak block would otherwise start fine and fail at the
+	// Every provider is checked here: an unsupported value or an incomplete
+	// Keycloak block would otherwise start fine and fail at the
 	// first client cleanup, leaving stale OIDC clients behind.
 	switch provider {
 	case "", provisioning.ProviderNone:
-	case provisioning.ProviderKubauth:
-		if !identityRepo.Available(ctx) {
-			logrus.Fatalf(
-				"identity.provisioning.provider is %q but the kubauth CRDs are not installed on this cluster. "+
-					"Install kubauth, or set it to %q if another mechanism makes the OAuth client Secrets.",
-				provisioning.ProviderKubauth, provisioning.ProviderNone)
-		}
-		if _, err := contextRepo.GetKubauthNamespace(ctx); err != nil {
-			logrus.Fatalf("identity.provisioning.provider is %q but the kubauth namespace is unreadable: %v",
-				provisioning.ProviderKubauth, err)
-		}
 	case provisioning.ProviderKeycloak:
 		if _, err := contextRepo.GetKeycloakProvisioningConfig(ctx); err != nil {
 			logrus.Fatalf("identity.provisioning.provider is %q but its configuration is unusable: %v",
 				provisioning.ProviderKeycloak, err)
 		}
 	default:
-		logrus.Fatalf("identity.provisioning.provider is %q, which is not supported. Use %q, %q or %q.",
-			provider, provisioning.ProviderNone, provisioning.ProviderKubauth, provisioning.ProviderKeycloak)
+		logrus.Fatalf("identity.provisioning.provider is %q, which is not supported. Use %q or %q.",
+			provider, provisioning.ProviderNone, provisioning.ProviderKeycloak)
 	}
 
 	logrus.WithField("provisioningProvider", provider).Info("Identity configuration accepted")
+}
+
+// keycloakIssuerSource locates the Keycloak realm when KEYCLOAK_URL or
+// KEYCLOAK_REALM is unset: it is the issuer the API trusts (OIDC_ISSUER, else
+// the platform values), with the platform's oidc.insecureSkipVerify.
+func keycloakIssuerSource(cfg *config.Config, contextRepo repository.PlatformRepository) repository.KeycloakIssuerSource {
+	return func(ctx context.Context) (string, bool, error) {
+		issuer, err := auth.ResolveIssuer(ctx, cfg.OIDC.Issuer, contextRepo.GetOidcIssuer)
+		if err != nil {
+			return "", false, err
+		}
+		insecure, err := contextRepo.GetOidcInsecureSkipVerify(ctx)
+		if err != nil {
+			insecure = false
+		}
+		return issuer, insecure, nil
+	}
 }
 
 // buildTokenVerifier resolves the issuer the API will trust, or returns nil

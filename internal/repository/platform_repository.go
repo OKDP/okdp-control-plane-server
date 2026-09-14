@@ -40,15 +40,6 @@ type PlatformRepository interface {
 	// (global.okdp.oidc.clientProvisioning).
 	GetIdentity(ctx context.Context) (*models.PlatformIdentity, error)
 
-	// GetKubauthNamespace returns the namespace kubauth resources live in. It is
-	// only meaningful when clients are provisioned by kubauth.
-	GetKubauthNamespace(ctx context.Context) (string, error)
-
-	// GetIdentityProvider returns the identity provider the platform is wired to
-	// (global.okdp.identity.provider, "" when unset, meaning external).
-	// The kubauth-specific Identity API is only exposed when it is "kubauth".
-	GetIdentityProvider(ctx context.Context) (string, error)
-
 	// GetIdentityOidcConfig returns the OIDC client the console UI should
 	// authenticate with (global.okdp.identity.oidc, nil when the platform
 	// values do not publish one).
@@ -234,10 +225,9 @@ func (r *platformRepository) GetIngressSuffix(ctx context.Context) (string, erro
 	return suffix, nil
 }
 
-// GetIdentity reads platform.identity. An absent block means the platform was
-// never told, and the safe reading is that somebody else makes the client
-// Secrets: provisioning them ourselves would post CRs on a cluster that never
-// asked for them.
+// GetIdentity reads oidc.clientProvisioning. An absent block means the platform
+// was never told, and the safe reading is that the clients already exist in
+// Keycloak (existing).
 func (r *platformRepository) GetIdentity(ctx context.Context) (*models.PlatformIdentity, error) {
 	v, err := r.values(ctx)
 	if err != nil {
@@ -248,53 +238,11 @@ func (r *platformRepository) GetIdentity(ctx context.Context) (*models.PlatformI
 		// Legacy path, kept while platform values migrate to the single oidc block.
 		provisioning, _, _ = unstructured.NestedString(v, "identity", "clientProvisioning")
 	}
-	identity := &models.PlatformIdentity{
-		ClientProvisioning: provisioning,
-		KubauthNamespace:   kubauthNamespaceOf(v),
-	}
+	identity := &models.PlatformIdentity{ClientProvisioning: provisioning}
 	if identity.ClientProvisioning == "" {
 		identity.ClientProvisioning = models.ClientProvisioningExisting
 	}
 	return identity, identity.Validate()
-}
-
-// GetKubauthNamespace answers where the kubauth CRs live, whichever key the
-// platform values declare it under. Whether clients are provisioned through kubauth is
-// the provisioning provider's decision: gating the namespace on a second field
-// is how the two ended up contradicting each other.
-func (r *platformRepository) GetKubauthNamespace(ctx context.Context) (string, error) {
-	v, err := r.values(ctx)
-	if err != nil {
-		return "", err
-	}
-	namespace := kubauthNamespaceOf(v)
-	if namespace == "" {
-		return "", fmt.Errorf("identity.kubauth.namespace not found in the platform values (global.okdp)")
-	}
-	return namespace, nil
-}
-
-// kubauthNamespaceOf reads the kubauth namespace, most current key first.
-func kubauthNamespaceOf(v map[string]interface{}) string {
-	for _, path := range [][]string{
-		{"identity", "kubauth", "namespace"},
-		{"oidc", "kubauth", "namespace"},
-		{"identity", "kubauthNamespace"},
-	} {
-		if namespace, _, _ := unstructured.NestedString(v, path...); namespace != "" {
-			return namespace
-		}
-	}
-	return ""
-}
-
-func (r *platformRepository) GetIdentityProvider(ctx context.Context) (string, error) {
-	v, err := r.values(ctx)
-	if err != nil {
-		return "", err
-	}
-	provider, _, _ := unstructured.NestedString(v, "identity", "provider")
-	return provider, nil
 }
 
 func (r *platformRepository) GetIdentityOidcConfig(ctx context.Context) (*models.IdentityOidcConfig, error) {
@@ -353,10 +301,10 @@ func (r *platformRepository) GetOidcInsecureSkipVerify(ctx context.Context) (boo
 	return insecure, nil
 }
 
-// GetIdentityProvisioningProvider names the backend that makes and unmakes the
-// OAuth clients. Platform values that only carry the older oidc.clientProvisioning
-// block are honored: their kubauth mode means the same thing here, and anything
-// else means the platform provisions no client of its own.
+// GetIdentityProvisioningProvider names the backend that unmakes the OAuth
+// clients (global.okdp.identity.provisioning.provider). Unset means the platform
+// provisions no client of its own: with oidc.clientProvisioning existing or dcr,
+// the clients are made in Keycloak beforehand or by the packages themselves.
 func (r *platformRepository) GetIdentityProvisioningProvider(ctx context.Context) (string, error) {
 	v, err := r.values(ctx)
 	if err != nil {
@@ -365,14 +313,6 @@ func (r *platformRepository) GetIdentityProvisioningProvider(ctx context.Context
 	provider, _, _ := unstructured.NestedString(v, "identity", "provisioning", "provider")
 	if provider != "" {
 		return provider, nil
-	}
-
-	identity, err := r.GetIdentity(ctx)
-	if err != nil {
-		return "", err
-	}
-	if identity.ProvisionsWithKubauth() {
-		return provisioning.ProviderKubauth, nil
 	}
 	return provisioning.ProviderNone, nil
 }

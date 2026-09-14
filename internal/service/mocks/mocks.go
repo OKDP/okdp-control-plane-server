@@ -117,13 +117,13 @@ func (m *IdentityRepository) GetUser(ctx context.Context, name string) (*models.
 	return args.Get(0).(*models.User), args.Error(1)
 }
 
-func (m *IdentityRepository) CreateUser(ctx context.Context, user *crd.User) error {
+func (m *IdentityRepository) CreateUser(ctx context.Context, user *models.User) error {
 	args := m.Called(ctx, user)
 	return args.Error(0)
 }
 
-func (m *IdentityRepository) UpdateUser(ctx context.Context, user *crd.User) error {
-	args := m.Called(ctx, user)
+func (m *IdentityRepository) UpdateUser(ctx context.Context, name string, user *models.User) error {
+	args := m.Called(ctx, name, user)
 	return args.Error(0)
 }
 
@@ -145,13 +145,13 @@ func (m *IdentityRepository) GetGroup(ctx context.Context, name string) (*models
 	return args.Get(0).(*models.Group), args.Error(1)
 }
 
-func (m *IdentityRepository) CreateGroup(ctx context.Context, group *crd.Group) error {
+func (m *IdentityRepository) CreateGroup(ctx context.Context, group *models.Group) error {
 	args := m.Called(ctx, group)
 	return args.Error(0)
 }
 
-func (m *IdentityRepository) UpdateGroup(ctx context.Context, group *crd.Group) error {
-	args := m.Called(ctx, group)
+func (m *IdentityRepository) UpdateGroup(ctx context.Context, name string, group *models.Group) error {
+	args := m.Called(ctx, name, group)
 	return args.Error(0)
 }
 
@@ -165,13 +165,8 @@ func (m *IdentityRepository) ListGroupBindings(ctx context.Context, userFilter s
 	return args.Get(0).([]models.GroupBinding), args.Error(1)
 }
 
-func (m *IdentityRepository) CreateGroupBinding(ctx context.Context, binding *crd.GroupBinding) error {
-	args := m.Called(ctx, binding)
-	return args.Error(0)
-}
-
-func (m *IdentityRepository) DeleteGroupBinding(ctx context.Context, name string) error {
-	args := m.Called(ctx, name)
+func (m *IdentityRepository) CreateGroupBinding(ctx context.Context, user, group string) error {
+	args := m.Called(ctx, user, group)
 	return args.Error(0)
 }
 

@@ -2,18 +2,17 @@ package models
 
 // User represents an identity user for API responses/requests
 type User struct {
-	Name     string   `json:"name"`     // spec.name (Display Name / Full Name)
-	Username string   `json:"username"` // metadata.name (ID / Login)
+	Name     string   `json:"name"`     // Display Name / Full Name
+	Username string   `json:"username"` // ID / Login
 	Email    []string `json:"email,omitempty"`
 	Comment  string   `json:"comment,omitempty"`
 	Disabled bool     `json:"disabled,omitempty"`
 	UID      int      `json:"uid,omitempty"`
-	// Groups is a computed field, not directly in the User CRD but useful for API
+	// Groups is a computed field (memberships), useful for API
 	Groups []string `json:"groups,omitempty"`
-	// Password is write-only, used for creation/update
+	// Password is write-only, used for creation/update; credentials are
+	// managed by the identity backend and never stored by this server.
 	Password string `json:"password,omitempty"`
-	// Internal: used to preserve hash during update if password not changed
-	PasswordHash string `json:"-"`
 }
 
 // Group represents an identity group for API responses/requests

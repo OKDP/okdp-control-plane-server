@@ -6,14 +6,12 @@ import (
 
 	"github.com/okdp/okdp-control-plane-server/internal/models"
 	"github.com/okdp/okdp-control-plane-server/internal/repository"
-	"github.com/okdp/okdp-control-plane-server/internal/repository/crd"
-
-	"golang.org/x/crypto/bcrypt"
 )
 
 type IdentityService interface {
-	// Available reports whether the kubauth CRDs are installed, so the API can
-	// say the feature is absent instead of failing on every call.
+	// Available reports whether the identity backend (the Keycloak Admin
+	// API) is configured, so the API can say the feature is absent instead
+	// of failing on every call.
 	Available(ctx context.Context) bool
 
 	// Users
@@ -98,47 +96,15 @@ func (s *defaultIdentityService) GetUser(ctx context.Context, name string) (*mod
 }
 
 func (s *defaultIdentityService) CreateUser(ctx context.Context, user *models.User) error {
-	// 1. Hash password if provided
-	var passwordHash string
-	if user.Password != "" {
-		hash, err := bcrypt.GenerateFromPassword([]byte(user.Password), bcrypt.DefaultCost)
-		if err != nil {
-			return fmt.Errorf("failed to hash password: %w", err)
-		}
-		passwordHash = string(hash)
-	}
-
-	// 2. Map DTO to CRD
-	crdUser := &crd.User{
-		Spec: crd.UserSpec{
-			Name:         user.Name, // Display Name
-			Emails:       user.Email,
-			PasswordHash: passwordHash,
-			Comment:      user.Comment,
-			Disabled:     &user.Disabled,
-		},
-	}
-	// Explicitly set the resource name (ID)
-	crdUser.Name = user.Username
-
-	if user.UID > 0 {
-		crdUser.Spec.Uid = &user.UID
-	}
-
-	if err := s.repo.CreateUser(ctx, crdUser); err != nil {
+	// Credentials are managed by the identity backend (user.Password is
+	// passed through and never stored by this server).
+	if err := s.repo.CreateUser(ctx, user); err != nil {
 		return err
 	}
 
-	// 3. Create Group Bindings if groups provided
+	// Create group memberships if groups provided
 	for _, groupName := range user.Groups {
-		err := s.repo.CreateGroupBinding(ctx, &crd.GroupBinding{
-			Spec: crd.GroupBindingSpec{
-				User:  user.Username,
-				Group: groupName,
-			},
-		})
-		if err != nil {
-			// Log error but continue? For now return error
+		if err := s.repo.CreateGroupBinding(ctx, user.Username, groupName); err != nil {
 			return fmt.Errorf("user created but failed to bind group %s: %w", groupName, err)
 		}
 	}
@@ -147,88 +113,9 @@ func (s *defaultIdentityService) CreateUser(ctx context.Context, user *models.Us
 }
 
 func (s *defaultIdentityService) UpdateUser(ctx context.Context, name string, user *models.User) error {
-	// First get existing to keep fields we might not want to overwrite if not provided?
-	// For now, full update from UI assumed.
-
-	existing, err := s.repo.GetUser(ctx, name)
-	if err != nil {
-		return err
-	}
-
-	var passwordHash string
-	if user.Password != "" {
-		hash, err := bcrypt.GenerateFromPassword([]byte(user.Password), bcrypt.DefaultCost)
-		if err != nil {
-			return fmt.Errorf("failed to hash password: %w", err)
-		}
-		passwordHash = string(hash)
-	} else {
-		// Keep existing password hash presumably?
-		// We'd need to fetch the CRD to get the PasswordHash, but models.User doesn't show it.
-		// Since we don't expose password hash in GetUser model, we can't easily preserve it locally here
-		// unless we fetch CRD in service layer (which we do via repo but repo returns model).
-		// FIX: Repo.GetUser only returns DTO. We rely on Repo.UpdateUser logic or we need to rethink patch.
-		// Let's assume UpdateUser takes the DTO and if Password is empty, it shouldn't clear the hash in CRD.
-		// BUT Repo.UpdateUser overwrites the spec.
-
-		// To fix this cleanly:
-		// 1. Fetch CRD directly in repo or have Service use a repo method "GetCRD" (leaking implementation details)
-		// 2. Just proceed: if password empty in DTO, we assume no change. But we need the old hash.
-		// The repo implementation of UpdateUser receives a CRD object. It gets the resourceVersion.
-		// It overwrites the fields.
-
-		// We can't implement partial update easily without exposing internal state.
-		// Workaround: We will ignore password update if empty in DTO, but we need to retrieve the old one.
-		// Since Repo.GetUser only returns DTO, we can't get the hash.
-
-		// BETTER APPROACH:
-		// Change Repo.UpdateUser to fetch the current CRD, apply changes from the passed *crd.User struct only if fields are set?
-		// Or assume the service should handle this.
-		// Given time constraints: I'll assume UpdateUser in repo handles replacement.
-		// So I MUST fetch the CRD content. But I can't via Repo.
-		// I will modify Repo to let UpdateUser handle the 'merge' logic or fetch the CRD?
-		// Actually, I can just modify Repo.UpdateUser to NOT update password if empty string provided?
-		// No, Repo takes a CRD struct.
-
-		// Let's rely on retrieving the 'existing' DTO, but DTO doesn't have hash.
-		// I will have to add PasswordHash to DTO (hidden from JSON output) or add a separate method `UpdatePassword`.
-		// Let's keep it simple: We need to preserve the hash if not changing.
-		// I'll add `GenericUpdate` or just fetch the CRD inside Repo Update method? No, Repository is dumb.
-
-		// Re-reading code: `repository/identity_repository.go` UpdateUser fetches the object to get ResourceVersion.
-		// I can modify `repository/identity_repository.go` UpdateUser to MERGE the password hash if the new one is empty!
-		// But that puts business logic in repo.
-
-		// Let's add `PasswordHash` to `models.User` with `json:"-"`.
-		// Then `GetUser` fills it.
-	}
-
-	// Pending Refactor: Adding PasswordHash to models.User
-
-	crdUser := &crd.User{
-		Spec: crd.UserSpec{
-			Name:     user.Name, // Display Name
-			Emails:   user.Email,
-			Comment:  user.Comment,
-			Disabled: &user.Disabled,
-			// PasswordHash: preserved from existing or updated if password provided
-		},
-	}
-	if user.UID > 0 {
-		crdUser.Spec.Uid = &user.UID
-	}
-	// Resource name is the ID (Username)
-	crdUser.Name = name
-
-	// Logic to preserve or update password hash
-	if passwordHash != "" {
-		crdUser.Spec.PasswordHash = passwordHash
-	} else {
-		// Use existing.PasswordHash if I can access it
-		crdUser.Spec.PasswordHash = existing.PasswordHash
-	}
-
-	if err := s.repo.UpdateUser(ctx, crdUser); err != nil {
+	// An empty user.Password leaves the current credential untouched; the
+	// backend owns credential storage.
+	if err := s.repo.UpdateUser(ctx, name, user); err != nil {
 		return err
 	}
 
@@ -252,16 +139,18 @@ func (s *defaultIdentityService) UpdateUser(ctx context.Context, name string, us
 	// 2. Add new
 	for g := range newGroupMap {
 		if !currentGroupMap[g] {
-			s.repo.CreateGroupBinding(ctx, &crd.GroupBinding{
-				Spec: crd.GroupBindingSpec{User: name, Group: g},
-			})
+			if err := s.repo.CreateGroupBinding(ctx, name, g); err != nil {
+				return fmt.Errorf("user updated but failed to bind group %s: %w", g, err)
+			}
 		}
 	}
 
 	// 3. Remove old
 	for g := range currentGroupMap {
 		if !newGroupMap[g] {
-			s.repo.DeleteGroupBindingByRef(ctx, name, g)
+			if err := s.repo.DeleteGroupBindingByRef(ctx, name, g); err != nil {
+				return fmt.Errorf("user updated but failed to unbind group %s: %w", g, err)
+			}
 		}
 	}
 
@@ -269,13 +158,7 @@ func (s *defaultIdentityService) UpdateUser(ctx context.Context, name string, us
 }
 
 func (s *defaultIdentityService) DeleteUser(ctx context.Context, name string) error {
-	// First clean bindings
-	bindings, err := s.repo.ListGroupBindings(ctx, name)
-	if err == nil {
-		for _, b := range bindings {
-			s.repo.DeleteGroupBindingByRef(ctx, name, b.Group)
-		}
-	}
+	// The backend cascades group memberships on user deletion.
 	return s.repo.DeleteUser(ctx, name)
 }
 
@@ -290,26 +173,11 @@ func (s *defaultIdentityService) GetGroup(ctx context.Context, name string) (*mo
 }
 
 func (s *defaultIdentityService) CreateGroup(ctx context.Context, group *models.Group) error {
-	crdGroup := &crd.Group{
-		Spec: crd.GroupSpec{
-			Comment: group.Description, // mapping description to comment
-		},
-	}
-	// Name needs to be set in metadata
-	crdGroup.Name = group.Name
-
-	return s.repo.CreateGroup(ctx, crdGroup)
+	return s.repo.CreateGroup(ctx, group)
 }
 
 func (s *defaultIdentityService) UpdateGroup(ctx context.Context, name string, group *models.Group) error {
-	crdGroup := &crd.Group{
-		Spec: crd.GroupSpec{
-			Comment: group.Description,
-		},
-	}
-	crdGroup.Name = name
-
-	return s.repo.UpdateGroup(ctx, crdGroup)
+	return s.repo.UpdateGroup(ctx, name, group)
 }
 
 func (s *defaultIdentityService) DeleteGroup(ctx context.Context, name string) error {
@@ -319,9 +187,7 @@ func (s *defaultIdentityService) DeleteGroup(ctx context.Context, name string) e
 // --- Bindings ---
 
 func (s *defaultIdentityService) AssignUserToGroup(ctx context.Context, user, group string) error {
-	return s.repo.CreateGroupBinding(ctx, &crd.GroupBinding{
-		Spec: crd.GroupBindingSpec{User: user, Group: group},
-	})
+	return s.repo.CreateGroupBinding(ctx, user, group)
 }
 
 func (s *defaultIdentityService) RemoveUserFromGroup(ctx context.Context, user, group string) error {

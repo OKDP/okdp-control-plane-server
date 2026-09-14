@@ -72,14 +72,7 @@ func TestDeleteUser(t *testing.T) {
 	ctx := context.Background()
 	username := "user1"
 
-	// Mock deleting bindings first
-	mockRepo.On("ListGroupBindings", ctx, username).Return([]models.GroupBinding{
-		{User: username, Group: "g1"},
-	}, nil)
-
-	mockRepo.On("DeleteGroupBindingByRef", ctx, username, "g1").Return(nil)
-
-	// Mock deleting user
+	// The identity backend cascades group memberships on user deletion.
 	mockRepo.On("DeleteUser", ctx, username).Return(nil)
 
 	err := service.DeleteUser(ctx, username)
