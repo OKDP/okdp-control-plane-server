@@ -242,10 +242,7 @@ func buildTokenVerifier(ctx context.Context, cfg *config.Config, contextRepo rep
 
 	clientID, err := auth.ResolveClientID(ctx, cfg.OIDC.ClientID, contextRepo.GetOidcClientID)
 	if err != nil {
-		logrus.WithError(err).Warn("Could not read the OIDC client id from the platform Context")
-	}
-	if clientID == "" {
-		logrus.Warn("No OIDC client id configured: any token from this realm authenticates, not only the console's own. Set identity.oidc.clientId on the platform Context or OIDC_CLIENT_ID.")
+		logrus.Fatalf("Failed to resolve the OIDC client id: %v", err)
 	}
 
 	insecure, err := contextRepo.GetOidcInsecureSkipVerify(ctx)

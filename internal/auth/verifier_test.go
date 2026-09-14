@@ -153,18 +153,11 @@ func TestVerifyAcceptsTheClientFromWhicheverClaimNamesIt(t *testing.T) {
 	}
 }
 
-// No client id configured means the check is skipped, not that every token
-// fails: not every deployment publishes one yet.
-func TestVerifySkipsTheClientCheckWhenNoneIsConfigured(t *testing.T) {
+func TestNewVerifierRejectsNoClientID(t *testing.T) {
 	idp := newFakeIDP(t)
-	verifier, err := NewVerifier(context.Background(), Config{Issuer: idp.server.URL})
-	require.NoError(t, err)
+	_, err := NewVerifier(context.Background(), Config{Issuer: idp.server.URL})
 
-	c := idp.claims()
-	c["aud"] = "anything-at-all"
-
-	err = verifier.Verify(context.Background(), idp.mint(t, c))
-	assert.NoError(t, err)
+	require.Error(t, err)
 }
 
 func TestResolveClientIDPrefersTheEnvironmentOverride(t *testing.T) {
@@ -183,14 +176,12 @@ func TestResolveClientIDFallsBackToTheContext(t *testing.T) {
 	assert.Equal(t, "from-context", clientID)
 }
 
-// Unlike the issuer, an empty client id is not an error: the caller treats it
-// as "skip the check" rather than refusing to start.
-func TestResolveClientIDIsEmptyWhenTheContextNamesNone(t *testing.T) {
-	clientID, err := ResolveClientID(context.Background(), "",
+func TestNoClientIDAnywhereIsAnError(t *testing.T) {
+	_, err := ResolveClientID(context.Background(), "",
 		func(context.Context) (string, error) { return "", nil })
 
-	require.NoError(t, err)
-	assert.Empty(t, clientID)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "OIDC_CLIENT_ID")
 }
 
 // The rejection must not repeat the expected client id: it is exactly what an
