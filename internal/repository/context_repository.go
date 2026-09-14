@@ -55,6 +55,15 @@ type ContextRepository interface {
 	// Context does not publish one).
 	GetIdentityOidcConfig(ctx context.Context) (*models.IdentityOidcConfig, error)
 
+	// GetOidcIssuer returns the issuer whose tokens the API accepts, "" when the Context names none.
+	GetOidcIssuer(ctx context.Context) (string, error)
+
+	// GetOidcClientID returns the client a token must be issued for, "" when the Context names none.
+	GetOidcClientID(ctx context.Context) (string, error)
+
+	// GetOidcInsecureSkipVerify reports whether the issuer's certificate is taken on trust (from spec.context.oidc.insecureSkipVerify).
+	GetOidcInsecureSkipVerify(ctx context.Context) (bool, error)
+
 	// GetIdentityProvisioningProvider returns the OIDC client provisioning backend
 	// (from spec.context.identity.provisioning.provider, "" when unset, meaning none).
 	GetIdentityProvisioningProvider(ctx context.Context) (string, error)
@@ -311,6 +320,44 @@ func (r *k8sContextRepository) GetIdentityOidcConfig(ctx context.Context) (*mode
 		ClientID:  clientID,
 		Scope:     scope,
 	}, nil
+}
+
+// GetOidcIssuer reads the issuer from the Context, so a platform declaring its
+// identity provider does not repeat it in the server's environment.
+func (r *k8sContextRepository) GetOidcIssuer(ctx context.Context) (string, error) {
+	u, err := r.getContext(ctx)
+	if err != nil {
+		return "", err
+	}
+	if authority, _, _ := unstructured.NestedString(u.Object, "spec", "context", "identity", "oidc", "authority"); authority != "" {
+		return authority, nil
+	}
+	issuer, _, _ := unstructured.NestedString(u.Object, "spec", "context", "oidc", "issuerUri")
+	return issuer, nil
+}
+
+// GetOidcClientID mirrors GetOidcIssuer's two layouts.
+func (r *k8sContextRepository) GetOidcClientID(ctx context.Context) (string, error) {
+	u, err := r.getContext(ctx)
+	if err != nil {
+		return "", err
+	}
+	if clientID, _, _ := unstructured.NestedString(u.Object, "spec", "context", "oidc", "clientId"); clientID != "" {
+		return clientID, nil
+	}
+	clientID, _, _ := unstructured.NestedString(u.Object, "spec", "context", "identity", "oidc", "clientId")
+	return clientID, nil
+}
+
+// GetOidcInsecureSkipVerify reads the platform's answer to a self-signed issuer
+// certificate, the setting the Keycloak provisioner already honors.
+func (r *k8sContextRepository) GetOidcInsecureSkipVerify(ctx context.Context) (bool, error) {
+	u, err := r.getContext(ctx)
+	if err != nil {
+		return false, err
+	}
+	insecure, _, _ := unstructured.NestedBool(u.Object, "spec", "context", "oidc", "insecureSkipVerify")
+	return insecure, nil
 }
 
 // GetIdentityProvisioningProvider names the backend that makes and unmakes the

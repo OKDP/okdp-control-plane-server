@@ -121,3 +121,66 @@ func TestGetPlatformServicesLabelAndExposesUI(t *testing.T) {
 		t.Errorf("trino ExposesUI = %v, want nil when unset", *trino.ExposesUI)
 	}
 }
+
+// The sandbox shape: no identity.oidc block, but the platform-wide one every
+// service package already reads names the realm.
+func TestGetOidcIssuerFallsBackToThePlatformBlock(t *testing.T) {
+	repo := newContextWith(t, map[string]interface{}{
+		"oidc": map[string]interface{}{"issuerUri": "https://keycloak.okdp.sandbox/realms/master"},
+	})
+
+	issuer, err := repo.GetOidcIssuer(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if issuer != "https://keycloak.okdp.sandbox/realms/master" {
+		t.Errorf("issuer = %q, want the platform oidc.issuerUri", issuer)
+	}
+}
+
+// When the platform publishes the console client, that block wins: it is the
+// client the console's tokens are actually issued to.
+func TestGetOidcIssuerPrefersTheConsoleBlock(t *testing.T) {
+	repo := newContextWith(t, map[string]interface{}{
+		"identity": map[string]interface{}{"oidc": map[string]interface{}{
+			"authority": "https://keycloak.example.org/realms/okdp",
+			"clientId":  "okdp-console",
+		}},
+		"oidc": map[string]interface{}{"issuerUri": "https://keycloak.example.org/realms/platform"},
+	})
+
+	issuer, err := repo.GetOidcIssuer(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if issuer != "https://keycloak.example.org/realms/okdp" {
+		t.Errorf("issuer = %q, want the identity.oidc.authority", issuer)
+	}
+}
+
+// A Context naming no issuer is not an error here: the caller decides, and it
+// may have an override in the environment.
+func TestGetOidcIssuerIsEmptyWhenTheContextNamesNone(t *testing.T) {
+	repo := newContextWith(t, map[string]interface{}{})
+
+	issuer, err := repo.GetOidcIssuer(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if issuer != "" {
+		t.Errorf("issuer = %q, want empty", issuer)
+	}
+}
+
+func TestGetOidcInsecureSkipVerify(t *testing.T) {
+	// Absent means the certificate is checked: the safe reading of silence.
+	repo := newContextWith(t, map[string]interface{}{"oidc": map[string]interface{}{"issuerUri": "https://idp"}})
+	if insecure, err := repo.GetOidcInsecureSkipVerify(context.Background()); err != nil || insecure {
+		t.Errorf("insecure = %v (err %v), want false when the Context is silent", insecure, err)
+	}
+
+	repo = newContextWith(t, map[string]interface{}{"oidc": map[string]interface{}{"insecureSkipVerify": true}})
+	if insecure, err := repo.GetOidcInsecureSkipVerify(context.Background()); err != nil || !insecure {
+		t.Errorf("insecure = %v (err %v), want true", insecure, err)
+	}
+}

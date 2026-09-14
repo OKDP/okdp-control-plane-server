@@ -4551,5 +4551,18 @@
                 }
             }
         }
-    }
+    },
+    "securityDefinitions": {
+        "BearerAuth": {
+            "description": "OIDC access token, as \"Bearer \u003ctoken\u003e\". Required on\nevery /api route except /api/capabilities.",
+            "type": "apiKey",
+            "name": "Authorization",
+            "in": "header"
+        }
+    },
+    "security": [
+        {
+            "BearerAuth": []
+        }
+    ]
 }

@@ -23,6 +23,18 @@ type Config struct {
 	// InsecureOCIRegistries lists registry hosts reached over plain HTTP
 	// a development-sandbox affordance for local registries without TLS.
 	InsecureOCIRegistries []string
+	// OIDC configures the verification of the console's bearer token.
+	OIDC OIDCConfig
+}
+
+type OIDCConfig struct {
+	// It overrides the issuer the platform Context declares. Empty is the
+	// normal case: the Context is where that setting lives.
+	Issuer string
+	// ClientID overrides the client id the platform Context declares.
+	ClientID string
+	// Disabled leaves the API open to anyone who can reach the port.
+	Disabled bool
 }
 
 const defaultSidecarPrefixes = "istio-proxy,istio-init,dynatrace-,linkerd-proxy,envoy,vault-agent"
@@ -39,6 +51,11 @@ func Load() (*Config, error) {
 		ContextNamespace:  getEnv("CONTEXT_NAMESPACE", ""),
 		ReleaseInterval:   getEnv("RELEASE_INTERVAL", "30m"),
 		ReleaseTimeout:    getEnv("RELEASE_TIMEOUT", "10m"),
+		OIDC: OIDCConfig{
+			Issuer:   strings.TrimSpace(getEnv("OIDC_ISSUER", "")),
+			ClientID: strings.TrimSpace(getEnv("OIDC_CLIENT_ID", "")),
+			Disabled: getEnv("AUTH_DISABLED", "") == "true",
+		},
 	}
 
 	if cfg.ContextNamespace == "" {
