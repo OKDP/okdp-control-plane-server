@@ -125,7 +125,7 @@ func TestVerifyRejectsATokenIssuedForAnotherClient(t *testing.T) {
 	c := idp.claims()
 	c["aud"] = "some-other-app"
 
-	err = verifier.Verify(context.Background(), idp.mint(t, c))
+	_, err = verifier.Verify(context.Background(), idp.mint(t, c))
 	assert.Error(t, err)
 }
 
@@ -147,7 +147,7 @@ func TestVerifyAcceptsTheClientFromWhicheverClaimNamesIt(t *testing.T) {
 			for k, v := range extra {
 				c[k] = v
 			}
-			err := verifier.Verify(context.Background(), idp.mint(t, c))
+			_, err := verifier.Verify(context.Background(), idp.mint(t, c))
 			assert.NoError(t, err)
 		})
 	}
@@ -194,7 +194,22 @@ func TestARejectedAudienceDoesNotNameTheExpectedClient(t *testing.T) {
 	c := idp.claims()
 	c["aud"] = "some-other-app"
 
-	err = verifier.Verify(context.Background(), idp.mint(t, c))
+	_, err = verifier.Verify(context.Background(), idp.mint(t, c))
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "okdp-ui")
+}
+
+func TestVerifyReturnsTheSubjectAndUsername(t *testing.T) {
+	idp := newFakeIDP(t)
+	verifier, err := NewVerifier(context.Background(), Config{Issuer: idp.server.URL, ClientID: "okdp-ui"})
+	require.NoError(t, err)
+
+	c := idp.claims()
+	c["aud"] = "okdp-ui"
+	c["preferred_username"] = "alice"
+
+	identity, err := verifier.Verify(context.Background(), idp.mint(t, c))
+	require.NoError(t, err)
+	assert.Equal(t, "e5a0-1234", identity.Subject)
+	assert.Equal(t, "alice", identity.Username)
 }

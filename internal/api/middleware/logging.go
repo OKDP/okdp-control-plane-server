@@ -20,14 +20,19 @@ func RequestLogger() gin.HandlerFunc {
 		method := c.Request.Method
 		clientIP := c.ClientIP()
 
-		entry := logrus.WithFields(logrus.Fields{
+		fields := logrus.Fields{
 			"status":   statusCode,
 			"method":   method,
 			"path":     path,
 			"ip":       clientIP,
 			"latency":  latency.String(), // Text output is cleaner than ns
 			"duration": latency,
-		})
+		}
+		if actor := CallerIdentity(c); actor != nil {
+			fields["actorSubject"] = actor.Subject
+			fields["actorUsername"] = actor.Username
+		}
+		entry := logrus.WithFields(fields)
 
 		if len(c.Errors) > 0 {
 			entry.Error(c.Errors.String())

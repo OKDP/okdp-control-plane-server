@@ -9,6 +9,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/okdp/okdp-control-plane-server/internal/auth"
 )
 
 // Accepts exactly one token, so a test can tell "no token" from "wrong token".
@@ -16,11 +18,11 @@ type stubVerifier struct {
 	accepted string
 }
 
-func (s stubVerifier) Verify(_ context.Context, rawToken string) error {
+func (s stubVerifier) Verify(_ context.Context, rawToken string) (*auth.Identity, error) {
 	if rawToken != s.accepted {
-		return errors.New("signature mismatch")
+		return nil, errors.New("signature mismatch")
 	}
-	return nil
+	return &auth.Identity{Subject: "e5a0-1234", Username: "alice"}, nil
 }
 
 func newTestRouter(verifier stubVerifier) *gin.Engine {
@@ -30,7 +32,10 @@ func newTestRouter(verifier stubVerifier) *gin.Engine {
 	api := r.Group("/api")
 	api.Use(RequireAuthentication(verifier))
 	api.GET("/capabilities", func(c *gin.Context) { c.Status(http.StatusOK) })
-	api.GET("/projects", func(c *gin.Context) { c.Status(http.StatusOK) })
+	api.GET("/projects", func(c *gin.Context) {
+		identity := CallerIdentity(c)
+		c.JSON(http.StatusOK, gin.H{"username": identity.Username})
+	})
 
 	return r
 }
@@ -85,4 +90,12 @@ func TestCapabilitiesStaysReachableWithoutAToken(t *testing.T) {
 	response := call(r, http.MethodGet, "/api/capabilities", "")
 
 	assert.Equal(t, http.StatusOK, response.Code)
+}
+
+func TestCallerIdentityIsSetOnAnAuthenticatedRequest(t *testing.T) {
+	r := newTestRouter(stubVerifier{accepted: "good"})
+
+	response := call(r, http.MethodGet, "/api/projects", "Bearer good")
+
+	assert.JSONEq(t, `{"username":"alice"}`, response.Body.String())
 }
