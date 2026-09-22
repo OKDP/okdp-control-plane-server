@@ -616,11 +616,11 @@ func (s *DefaultServiceService) enrichWithURL(ctx context.Context, instances []m
 	if err != nil {
 		return
 	}
-	// Only expose a URL when an Ingress actually routes to the service. A
-	// service with no web UI (e.g. an operator) gets no URL, so the UI shows
-	// no dead "Open" link. Ingresses are listed once per namespace and reused
-	// across that namespace's instances.
-	hostsByNS := map[string]map[string]bool{}
+	// Get the URL only if the Ingress belongs to this instance.
+	// This avoids matching an Ingress from another instance with a similar name,
+	// such as "kafka" and "kafka-console".
+	// Ingresses are loaded once per namespace and reused by all instances.
+	hostsByNS := map[string]map[string]string{}
 	for i := range instances {
 		ns := instances[i].TargetNamespace
 		if ns == "" {
@@ -631,8 +631,12 @@ func (s *DefaultServiceService) enrichWithURL(ctx context.Context, instances []m
 			hosts = s.namespaceIngressHosts(ctx, ns)
 			hostsByNS[ns] = hosts
 		}
+		names, err := s.releaseInstanceNames(ctx, ns, instances[i].ReleaseName)
+		if err != nil {
+			continue
+		}
 		for _, host := range candidateHosts(&instances[i], suffix) {
-			if hosts[host] {
+			if owner, exists := hosts[host]; exists && slices.Contains(names, owner) {
 				instances[i].URL = "https://" + host
 				break
 			}
@@ -649,9 +653,13 @@ func (s *DefaultServiceService) setURLIfExposed(ctx context.Context, instance *m
 	if err != nil || instance == nil || instance.TargetNamespace == "" {
 		return
 	}
+	names, err := s.releaseInstanceNames(ctx, instance.TargetNamespace, instance.ReleaseName)
+	if err != nil {
+		return
+	}
 	hosts := s.namespaceIngressHosts(ctx, instance.TargetNamespace)
 	for _, host := range candidateHosts(instance, suffix) {
-		if hosts[host] {
+		if owner, exists := hosts[host]; exists && slices.Contains(names, owner) {
 			instance.URL = "https://" + host
 			return
 		}
@@ -695,22 +703,26 @@ func candidateHosts(instance *models.ServiceInstance, suffix string) []string {
 	return hosts
 }
 
-// namespaceIngressHosts returns the set of hosts served by Ingresses in a
-// namespace (empty on error, so a lookup failure never fabricates a URL).
-func (s *DefaultServiceService) namespaceIngressHosts(ctx context.Context, namespace string) map[string]bool {
+// namespaceIngressHosts maps each host served by an Ingress in a namespace to
+// the HelmRelease that owns it (empty on error, so a lookup failure never fabricates a URL).
+func (s *DefaultServiceService) namespaceIngressHosts(ctx context.Context, namespace string) map[string]string {
 	ingressGVR := schema.GroupVersionResource{Group: "networking.k8s.io", Version: "v1", Resource: "ingresses"}
 	list, err := s.k8sClient.Resource(ingressGVR).Namespace(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return map[string]bool{}
+		return map[string]string{}
 	}
 	return ingressHostsFromItems(list.Items)
 }
 
-// ingressHostsFromItems extracts the set of spec.rules[].host values from a
-// list of Ingress objects.
-func ingressHostsFromItems(items []unstructured.Unstructured) map[string]bool {
-	hosts := map[string]bool{}
+// Maps each Ingress host to its HelmRelease.
+// Ingresses without a HelmRelease owner are ignored.
+func ingressHostsFromItems(items []unstructured.Unstructured) map[string]string {
+	hosts := map[string]string{}
 	for i := range items {
+		owner := items[i].GetLabels()["helm.toolkit.fluxcd.io/name"]
+		if owner == "" {
+			continue
+		}
 		rules, _, _ := unstructured.NestedSlice(items[i].Object, "spec", "rules")
 		for _, r := range rules {
 			rm, ok := r.(map[string]any)
@@ -718,7 +730,7 @@ func ingressHostsFromItems(items []unstructured.Unstructured) map[string]bool {
 				continue
 			}
 			if host, ok := rm["host"].(string); ok && host != "" {
-				hosts[host] = true
+				hosts[host] = owner
 			}
 		}
 	}
