@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -380,28 +381,29 @@ func (s *DefaultServiceService) GetService(ctx context.Context, project, name st
 	// is nothing useful to show on a healthy service, and scanning events has a
 	// non-trivial API cost per request.
 	if instance.Status != "Ready" {
-		instance.StatusMessage = s.latestWarningMessage(ctx, instance.TargetNamespace, instance.ReleaseName)
+		instance.StatusMessage = s.latestWarningMessage(ctx, project, instance.ReleaseName)
 	}
 	return instance, nil
 }
 
 // latestWarningMessage scans Warning events in a namespace and returns the
-// most recent message whose involvedObject name is related to the given
-// release (prefix match). Used to turn a stuck KuboCD release into an
-// actionable UI error like "Deployment.apps is invalid: memory request must
-// be less than or equal to memory limit of 1". Returns "" if no relevant
-// event exists or the API call fails, so callers should treat empty as "no
-// additional context available".
-func (s *DefaultServiceService) latestWarningMessage(ctx context.Context, namespace, releaseName string) string {
-	if namespace == "" || releaseName == "" {
+// most recent message whose involvedObject name is related to the given release.
+func (s *DefaultServiceService) latestWarningMessage(ctx context.Context, project, releaseName string) string {
+	if project == "" || releaseName == "" {
 		return ""
 	}
+	names, err := s.releaseInstanceNames(ctx, project, releaseName)
+	if err != nil {
+		logrus.WithError(err).Debugf("latestWarningMessage: instance names failed for %s", releaseName)
+		return ""
+	}
+
 	eventsGVR := schema.GroupVersionResource{Version: "v1", Resource: "events"}
-	events, err := s.k8sClient.Resource(eventsGVR).Namespace(namespace).List(ctx, metav1.ListOptions{
+	events, err := s.k8sClient.Resource(eventsGVR).Namespace(project).List(ctx, metav1.ListOptions{
 		FieldSelector: "type=Warning",
 	})
 	if err != nil {
-		logrus.WithError(err).Debugf("latestWarningMessage: event list failed in %s", namespace)
+		logrus.WithError(err).Debugf("latestWarningMessage: event list failed in %s", project)
 		return ""
 	}
 
@@ -411,9 +413,7 @@ func (s *DefaultServiceService) latestWarningMessage(ctx context.Context, namesp
 	)
 	for _, e := range events.Items {
 		involvedName, _, _ := unstructured.NestedString(e.Object, "involvedObject", "name")
-		// HelmReleases and deployed workloads are named "<releaseName>-*"
-		// (e.g. "redjohn-jupyterhub-main", "redjohn-jupyterhub-hub").
-		if involvedName == "" || !strings.HasPrefix(involvedName, releaseName) {
+		if !matchesInstance(involvedName, names) {
 			continue
 		}
 		ts := pickEventTimestamp(e.Object)
@@ -751,8 +751,11 @@ func (s *DefaultServiceService) enrichWithPodHealth(ctx context.Context, instanc
 			continue
 		}
 
-		prefix := instances[i].ReleaseName + "-"
-		instances[i].Status = s.checkPodHealth(pods, prefix, instances[i].Status)
+		names, err := s.releaseInstanceNames(ctx, ns, instances[i].ReleaseName)
+		if err != nil {
+			continue
+		}
+		instances[i].Status = s.checkPodHealth(pods, names, instances[i].Status)
 	}
 }
 
@@ -769,13 +772,16 @@ func (s *DefaultServiceService) EnrichPodHealth(ctx context.Context, instance *m
 	if err != nil {
 		return
 	}
-	prefix := instance.ReleaseName + "-"
-	instance.Status = s.checkPodHealth(podList.Items, prefix, instance.Status)
+	names, err := s.releaseInstanceNames(ctx, instance.TargetNamespace, instance.ReleaseName)
+	if err != nil {
+		return
+	}
+	instance.Status = s.checkPodHealth(podList.Items, names, instance.Status)
 }
 
-func (s *DefaultServiceService) checkPodHealth(pods []unstructured.Unstructured, prefix, currentStatus string) string {
+func (s *DefaultServiceService) checkPodHealth(pods []unstructured.Unstructured, names []string, currentStatus string) string {
 	for _, pod := range pods {
-		if !strings.HasPrefix(pod.GetName(), prefix) {
+		if !matchesInstance(pod.GetName(), names) {
 			continue
 		}
 		containerStatuses, _, _ := unstructured.NestedSlice(pod.Object, "status", "containerStatuses")
@@ -879,29 +885,63 @@ func (s *DefaultServiceService) isInfraSidecar(containerName string) bool {
 	return false
 }
 
+func (s *DefaultServiceService) releaseInstanceNames(ctx context.Context, project, releaseName string) ([]string, error) {
+	release, err := s.releaseRepo.Get(ctx, project, releaseName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get release: %w", err)
+	}
+
+	helmReleases, err := s.k8sClient.Resource(crd.GetHelmReleaseGVR()).Namespace(project).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list helm releases: %w", err)
+	}
+
+	var names []string
+	for _, hr := range helmReleases.Items {
+		for _, ref := range hr.GetOwnerReferences() {
+			if ref.UID == release.UID {
+				names = append(names, hr.GetName())
+				break
+			}
+		}
+	}
+	if len(names) == 0 {
+		return nil, fmt.Errorf("no helm release owned by %s", releaseName)
+	}
+	return names, nil
+}
+
+func (s *DefaultServiceService) releaseInstanceSelector(ctx context.Context, project, releaseName string) (string, error) {
+	names, err := s.releaseInstanceNames(ctx, project, releaseName)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("app.kubernetes.io/instance in (%s)", strings.Join(names, ",")), nil
+}
+
+func matchesInstance(name string, instanceNames []string) bool {
+	for _, n := range instanceNames {
+		if name == n || strings.HasPrefix(name, n+"-") {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *DefaultServiceService) ListPods(ctx context.Context, project, serviceName string) ([]models.Pod, error) {
 	releaseName := fmt.Sprintf("%s-%s", project, serviceName)
 
+	selector, err := s.releaseInstanceSelector(ctx, project, releaseName)
+	if err != nil {
+		return nil, err
+	}
+
 	podGVR := schema.GroupVersionResource{Version: "v1", Resource: "pods"}
 	podList, err := s.k8sClient.Resource(podGVR).Namespace(project).List(ctx, metav1.ListOptions{
-		LabelSelector: fmt.Sprintf("app.kubernetes.io/instance=%s", releaseName),
+		LabelSelector: selector,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list pods: %w", err)
-	}
-
-	// Fallback to prefix matching if label selector returns nothing
-	if len(podList.Items) == 0 {
-		allPods, err := s.k8sClient.Resource(podGVR).Namespace(project).List(ctx, metav1.ListOptions{})
-		if err != nil {
-			return nil, fmt.Errorf("failed to list pods (fallback): %w", err)
-		}
-		prefix := releaseName + "-"
-		for _, pod := range allPods.Items {
-			if strings.HasPrefix(pod.GetName(), prefix) {
-				podList.Items = append(podList.Items, pod)
-			}
-		}
 	}
 
 	var result []models.Pod
@@ -1082,19 +1122,14 @@ func (s *DefaultServiceService) GetProjectMetrics(ctx context.Context, project s
 
 	metrics := make(map[string]*models.ServiceMetrics, len(instances))
 	for _, inst := range instances {
-		releaseName := fmt.Sprintf("%s-%s", project, inst.Name)
-		prefix := releaseName + "-"
+		names, err := s.releaseInstanceNames(ctx, project, inst.ReleaseName)
+		if err != nil {
+			continue
+		}
 		var pods []unstructured.Unstructured
 		for _, pod := range allPods.Items {
-			if pod.GetLabels()["app.kubernetes.io/instance"] == releaseName {
+			if slices.Contains(names, pod.GetLabels()["app.kubernetes.io/instance"]) {
 				pods = append(pods, pod)
-			}
-		}
-		if len(pods) == 0 {
-			for _, pod := range allPods.Items {
-				if strings.HasPrefix(pod.GetName(), prefix) {
-					pods = append(pods, pod)
-				}
 			}
 		}
 		metrics[inst.Name] = buildServiceMetrics(pods, metricsByPod)
@@ -1219,25 +1254,17 @@ func buildServiceMetrics(pods []unstructured.Unstructured, metricsByPod map[stri
 func (s *DefaultServiceService) GetServiceMetrics(ctx context.Context, project, serviceName string) (*models.ServiceMetrics, error) {
 	releaseName := fmt.Sprintf("%s-%s", project, serviceName)
 
-	// 1. Fetch the pods of the service (same selection logic as ListPods).
+	selector, err := s.releaseInstanceSelector(ctx, project, releaseName)
+	if err != nil {
+		return nil, err
+	}
+
 	podGVR := schema.GroupVersionResource{Version: "v1", Resource: "pods"}
 	podList, err := s.k8sClient.Resource(podGVR).Namespace(project).List(ctx, metav1.ListOptions{
-		LabelSelector: fmt.Sprintf("app.kubernetes.io/instance=%s", releaseName),
+		LabelSelector: selector,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list pods: %w", err)
-	}
-	if len(podList.Items) == 0 {
-		allPods, err := s.k8sClient.Resource(podGVR).Namespace(project).List(ctx, metav1.ListOptions{})
-		if err != nil {
-			return nil, fmt.Errorf("failed to list pods (fallback): %w", err)
-		}
-		prefix := releaseName + "-"
-		for _, pod := range allPods.Items {
-			if strings.HasPrefix(pod.GetName(), prefix) {
-				podList.Items = append(podList.Items, pod)
-			}
-		}
 	}
 
 	metricsByPod := s.listPodMetricsByName(ctx, project)
