@@ -13,7 +13,7 @@ import (
 
 // SetupRouter initializes the Gin router and defines routes. A nil verifier
 // serves the API without token verification, which only AUTH_DISABLED produces.
-func SetupRouter(cfg *config.Config, verifier auth.Verifier, capabilitiesHandler *handlers.CapabilitiesHandler, projectHandler *handlers.ProjectHandler, identityHandler *handlers.IdentityHandler, secretStoreHandler *handlers.SecretStoreHandler, externalSecretHandler *handlers.ExternalSecretHandler, serviceHandler *handlers.ServiceHandler, sparkHandler *handlers.SparkHandler, connectionHandler *handlers.ConnectionHandler) *gin.Engine {
+func SetupRouter(cfg *config.Config, verifier auth.Verifier, capabilitiesHandler *handlers.CapabilitiesHandler, projectHandler *handlers.ProjectHandler, identityHandler *handlers.IdentityHandler, secretStoreHandler *handlers.SecretStoreHandler, externalSecretHandler *handlers.ExternalSecretHandler, serviceHandler *handlers.ServiceHandler, sparkHandler *handlers.SparkHandler, connectionHandler *handlers.ConnectionHandler, sqlHandler *handlers.SqlHandler) *gin.Engine {
 	r := gin.New() // Use New() to skip default logger/recovery (we add them manually)
 
 	// Middleware
@@ -119,6 +119,7 @@ func SetupRouter(cfg *config.Config, verifier auth.Verifier, capabilitiesHandler
 			connections.GET("/internal", connectionHandler.ListInternalConnections)
 			connections.GET("/selectable", connectionHandler.ListSelectable)
 			connections.GET("/:connName/consumers", connectionHandler.ListConsumers)
+			connections.POST("/:connName/sql", sqlHandler.ExecuteOnConnection)
 			connections.POST("", connectionHandler.CreateConnection)
 			connections.POST("/test", connectionHandler.TestConnection)
 			connections.PUT("/:connName", connectionHandler.UpdateConnection)
@@ -148,6 +149,7 @@ func SetupRouter(cfg *config.Config, verifier auth.Verifier, capabilitiesHandler
 			services.GET("/:serviceName/pods", serviceHandler.ListPods)
 			services.GET("/:serviceName/pods/:podName/logs", serviceHandler.GetPodLogs)
 			services.GET("/:serviceName/metrics", serviceHandler.GetServiceMetrics)
+			services.POST("/:serviceName/sql", sqlHandler.ExecuteQuery)
 		}
 		api.GET("/projects/:name/metrics", requireProject, serviceHandler.GetProjectMetrics)
 

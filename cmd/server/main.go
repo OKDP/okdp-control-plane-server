@@ -170,6 +170,17 @@ func main() {
 	connectionService := service.NewDefaultConnectionService(deployments, connectionSecrets, descriptors, serviceService.ListServices, contractCatalog)
 	connectionHandler := handlers.NewConnectionHandler(connectionService)
 
+	// SQL editor: statements run on a deployed engine (Trino) at the URL of its
+	// instance descriptor with the caller's bearer token, or on a PostgreSQL
+	// connection of the project with its credentials Secret. Engine
+	// certificates are taken on trust when the platform does so for its issuer.
+	sqlConnections := service.SqlConnectionSource{Get: deployments.GetConnection, Secrets: connectionSecrets}
+	sqlService := service.NewDefaultSqlService(serviceService.GetService, sqlConnections, func(ctx context.Context) bool {
+		insecure, err := contextRepo.GetOidcInsecureSkipVerify(ctx)
+		return err == nil && insecure
+	})
+	sqlHandler := handlers.NewSqlHandler(sqlService)
+
 	// The identity block is checked once, at startup. A platform whose
 	// provisioning backend is misconfigured would deploy services fine and fail
 	// much later, when a deleted service leaves its OIDC client behind.
@@ -177,7 +188,7 @@ func main() {
 
 	verifier := buildTokenVerifier(context.Background(), cfg, contextRepo)
 
-	r := router.SetupRouter(cfg, verifier, capabilitiesHandler, projectHandler, identityHandler, secretStoreHandler, externalSecretHandler, serviceHandler, sparkHandler, connectionHandler)
+	r := router.SetupRouter(cfg, verifier, capabilitiesHandler, projectHandler, identityHandler, secretStoreHandler, externalSecretHandler, serviceHandler, sparkHandler, connectionHandler, sqlHandler)
 
 	// Start Server
 	//

@@ -84,6 +84,13 @@ func (f *fakeSecrets) InspectSecret(_ context.Context, namespace, name string) (
 	return repository.SecretContent{Keys: keys, Managed: f.managed[namespace+"/"+name]}, true, nil
 }
 
+func (f *fakeSecrets) ReadSecret(_ context.Context, namespace, name string) (map[string][]byte, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	data, ok := f.secrets[namespace+"/"+name]
+	return data, ok, nil
+}
+
 // fakeDescriptors serves fixed instance descriptors.
 type fakeDescriptors struct {
 	list []repository.Descriptor

@@ -25,6 +25,10 @@ type ConnectionSecretRepository interface {
 	// connection runs before it is stored. Returns false when the Secret does
 	// not exist.
 	InspectSecret(ctx context.Context, namespace, name string) (SecretContent, bool, error)
+	// ReadSecret returns the data of a credentials Secret, for the server's own
+	// use (the SQL editor logs in with it). Never sent to a client. Returns
+	// false when the Secret does not exist.
+	ReadSecret(ctx context.Context, namespace, name string) (map[string][]byte, bool, error)
 }
 
 // SecretContent is what a Secret exposes to those checks: the keys it carries,
@@ -68,6 +72,20 @@ func (r *k8sConnectionSecretRepository) InspectSecret(ctx context.Context, names
 		Keys:    keys,
 		Managed: secret.Labels[crd.LabelManagedBy] == crd.ManagedByValue,
 	}, true, nil
+}
+
+func (r *k8sConnectionSecretRepository) ReadSecret(ctx context.Context, namespace, name string) (map[string][]byte, bool, error) {
+	if namespace == "" {
+		return nil, false, fmt.Errorf("a namespace is required to read credentials")
+	}
+	secret, err := r.typedClient.CoreV1().Secrets(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	return secret.Data, true, nil
 }
 
 // ErrForeignSecret is returned when the credentials name is already taken by a

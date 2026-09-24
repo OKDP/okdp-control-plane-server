@@ -1141,6 +1141,81 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/projects/{name}/connections/{connName}/sql": {
+            "post": {
+                "description": "Runs a statement batch on a database-server connection of the project (engine postgresql) with the connection's credentials, writes included: every project member acts as the connection's database user. Several statements separated by ';' run in one implicit transaction; the result is the last statement that returned columns, with the command tag of the last statement. Rows past maxRows are dropped (not cancelled). SQL errors (errorName = SQLSTATE) and the 2-minute timeout answer 200 with ` + "`" + `error` + "`" + ` set.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "sql"
+                ],
+                "summary": "Execute SQL on an external database connection",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Connection name",
+                        "name": "connName",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "SQL Query Request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/models.SqlQueryRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.SqlQueryResult"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "502": {
+                        "description": "Bad Gateway",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/projects/{name}/metrics": {
             "get": {
                 "description": "One call returns the aggregated CPU/memory usage and limits of each deployed instance, keyed by instance name.",
@@ -1638,7 +1713,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "integer",
-                        "description": "Number of lines from the end (default 100)",
+                        "description": "Number of lines from the end (default 100, at most 10000)",
                         "name": "tailLines",
                         "in": "query"
                     },
@@ -1656,8 +1731,92 @@ const docTemplate = `{
                             "type": "string"
                         }
                     },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
                     "500": {
                         "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/projects/{name}/services/{serviceName}/sql": {
+            "post": {
+                "description": "Proxies the statement to the service instance (Trino only), forwarding the caller's bearer token. Engine-side SQL errors answer 200 with ` + "`" + `error` + "`" + ` set.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "sql"
+                ],
+                "summary": "Execute a SQL query on a deployed SQL engine",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Service instance name",
+                        "name": "serviceName",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "SQL Query Request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/models.SqlQueryRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.SqlQueryResult"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "502": {
+                        "description": "Bad Gateway",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -2090,7 +2249,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "integer",
-                        "description": "Number of lines from the end (default 100)",
+                        "description": "Number of lines from the end (default 100, at most 10000)",
                         "name": "tailLines",
                         "in": "query"
                     },
@@ -4497,6 +4656,86 @@ const docTemplate = `{
                 },
                 "uiAddress": {
                     "type": "string"
+                }
+            }
+        },
+        "models.SqlColumn": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.SqlQueryError": {
+            "type": "object",
+            "properties": {
+                "columnNumber": {
+                    "type": "integer"
+                },
+                "errorName": {
+                    "type": "string"
+                },
+                "lineNumber": {
+                    "type": "integer"
+                },
+                "message": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.SqlQueryRequest": {
+            "type": "object",
+            "required": [
+                "query"
+            ],
+            "properties": {
+                "maxRows": {
+                    "description": "MaxRows caps the number of result rows returned (default 1000).",
+                    "type": "integer"
+                },
+                "query": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.SqlQueryResult": {
+            "type": "object",
+            "properties": {
+                "columns": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.SqlColumn"
+                    }
+                },
+                "commandTag": {
+                    "description": "CommandTag is the PostgreSQL command tag of the last statement\n(e.g. \"INSERT 0 5\"). Empty for Trino.",
+                    "type": "string"
+                },
+                "elapsedMs": {
+                    "type": "integer"
+                },
+                "error": {
+                    "$ref": "#/definitions/models.SqlQueryError"
+                },
+                "queryId": {
+                    "type": "string"
+                },
+                "rowCount": {
+                    "type": "integer"
+                },
+                "rows": {
+                    "type": "array",
+                    "items": {
+                        "type": "array",
+                        "items": {}
+                    }
+                },
+                "truncated": {
+                    "type": "boolean"
                 }
             }
         },

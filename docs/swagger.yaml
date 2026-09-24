@@ -971,6 +971,61 @@ definitions:
       uiAddress:
         type: string
     type: object
+  models.SqlColumn:
+    properties:
+      name:
+        type: string
+      type:
+        type: string
+    type: object
+  models.SqlQueryError:
+    properties:
+      columnNumber:
+        type: integer
+      errorName:
+        type: string
+      lineNumber:
+        type: integer
+      message:
+        type: string
+    type: object
+  models.SqlQueryRequest:
+    properties:
+      maxRows:
+        description: MaxRows caps the number of result rows returned (default 1000).
+        type: integer
+      query:
+        type: string
+    required:
+    - query
+    type: object
+  models.SqlQueryResult:
+    properties:
+      columns:
+        items:
+          $ref: '#/definitions/models.SqlColumn'
+        type: array
+      commandTag:
+        description: |-
+          CommandTag is the PostgreSQL command tag of the last statement
+          (e.g. "INSERT 0 5"). Empty for Trino.
+        type: string
+      elapsedMs:
+        type: integer
+      error:
+        $ref: '#/definitions/models.SqlQueryError'
+      queryId:
+        type: string
+      rowCount:
+        type: integer
+      rows:
+        items:
+          items: {}
+          type: array
+        type: array
+      truncated:
+        type: boolean
+    type: object
   models.TestConnectionResponse:
     properties:
       message:
@@ -1702,6 +1757,62 @@ paths:
       summary: Services of the project bound to a connection
       tags:
       - connections
+  /api/projects/{name}/connections/{connName}/sql:
+    post:
+      consumes:
+      - application/json
+      description: 'Runs a statement batch on a database-server connection of the
+        project (engine postgresql) with the connection''s credentials, writes included:
+        every project member acts as the connection''s database user. Several statements
+        separated by '';'' run in one implicit transaction; the result is the last
+        statement that returned columns, with the command tag of the last statement.
+        Rows past maxRows are dropped (not cancelled). SQL errors (errorName = SQLSTATE)
+        and the 2-minute timeout answer 200 with `error` set.'
+      parameters:
+      - description: Project name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Connection name
+        in: path
+        name: connName
+        required: true
+        type: string
+      - description: SQL Query Request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.SqlQueryRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.SqlQueryResult'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "502":
+          description: Bad Gateway
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Execute SQL on an external database connection
+      tags:
+      - sql
   /api/projects/{name}/connections/internal:
     get:
       description: Connections provided by the services already deployed in the project
@@ -2103,7 +2214,7 @@ paths:
         in: query
         name: container
         type: string
-      - description: Number of lines from the end (default 100)
+      - description: Number of lines from the end (default 100, at most 10000)
         in: query
         name: tailLines
         type: integer
@@ -2118,6 +2229,12 @@ paths:
           description: log output
           schema:
             type: string
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
         "500":
           description: Internal Server Error
           schema:
@@ -2127,6 +2244,58 @@ paths:
       summary: Get pod logs
       tags:
       - services
+  /api/projects/{name}/services/{serviceName}/sql:
+    post:
+      consumes:
+      - application/json
+      description: Proxies the statement to the service instance (Trino only), forwarding
+        the caller's bearer token. Engine-side SQL errors answer 200 with `error`
+        set.
+      parameters:
+      - description: Project name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Service instance name
+        in: path
+        name: serviceName
+        required: true
+        type: string
+      - description: SQL Query Request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.SqlQueryRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.SqlQueryResult'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "502":
+          description: Bad Gateway
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Execute a SQL query on a deployed SQL engine
+      tags:
+      - sql
   /api/projects/{name}/services/stream:
     get:
       description: 'Stream service status updates using Server-Sent Events (SSE):
@@ -2362,7 +2531,7 @@ paths:
         in: query
         name: container
         type: string
-      - description: Number of lines from the end (default 100)
+      - description: Number of lines from the end (default 100, at most 10000)
         in: query
         name: tailLines
         type: integer

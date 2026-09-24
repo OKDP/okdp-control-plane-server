@@ -231,3 +231,12 @@ func (m *ConnectionSecretRepository) InspectSecret(ctx context.Context, namespac
 	}
 	return content, args.Bool(1), args.Error(2)
 }
+
+func (m *ConnectionSecretRepository) ReadSecret(ctx context.Context, namespace, name string) (map[string][]byte, bool, error) {
+	args := m.Called(ctx, namespace, name)
+	var data map[string][]byte
+	if raw := args.Get(0); raw != nil {
+		data = raw.(map[string][]byte)
+	}
+	return data, args.Bool(1), args.Error(2)
+}
