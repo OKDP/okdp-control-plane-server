@@ -36,6 +36,10 @@ func SetupRouter(cfg *config.Config, verifier auth.Verifier, capabilitiesHandler
 		// unless the middleware lists it as public.
 		api.Use(middleware.RequireAuthentication(verifier))
 	}
+	// After authentication, before any group middleware: an object name that
+	// could leave its directory never reaches a store (RequireProject
+	// included).
+	api.Use(middleware.ValidatePathNames())
 	{
 		// Platform capabilities (UI feature discovery)
 		api.GET("/capabilities", capabilitiesHandler.GetCapabilities)

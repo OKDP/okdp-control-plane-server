@@ -234,3 +234,51 @@ func TestProjectsAreTheProjectFiles(t *testing.T) {
 		t.Errorf("second delete: %v, want ErrNotFound", err)
 	}
 }
+
+// ServiceDir("demo", "..") is the project directory itself: a delete by that
+// name used to remove every instance and connection of the project. A name
+// that is not a DNS label is not found, and the repository is left alone.
+func TestDotSegmentNamesAreNotFound(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemoryStore(nil)
+	d := NewDeployments(store, nil)
+	if _, err := d.PutConnection(ctx, alice, Connection{Name: "lake", Project: "demo", Contract: "s3"}, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.CreateInstance(ctx, alice, trino()); err != nil {
+		t.Fatal(err)
+	}
+	before := store.Files()
+	commits := len(store.Messages)
+
+	for _, name := range []string{"..", ".", "trino/..", "../demo", ""} {
+		if _, err := d.DeleteInstance(ctx, alice, "demo", name); !errors.Is(err, ErrNotFound) {
+			t.Errorf("DeleteInstance(%q): %v, want ErrNotFound", name, err)
+		}
+		if _, _, err := d.UpdateInstance(ctx, alice, "demo", name, func(*InstanceState) error { return nil }); !errors.Is(err, ErrNotFound) {
+			t.Errorf("UpdateInstance(%q): %v, want ErrNotFound", name, err)
+		}
+		if _, err := d.GetInstance(ctx, "demo", name); !errors.Is(err, ErrNotFound) {
+			t.Errorf("GetInstance(%q): %v, want ErrNotFound", name, err)
+		}
+		if _, err := d.DeleteConnection(ctx, alice, "demo", name); !errors.Is(err, ErrNotFound) {
+			t.Errorf("DeleteConnection(%q): %v, want ErrNotFound", name, err)
+		}
+		if _, err := d.GetConnection(ctx, "demo", name); !errors.Is(err, ErrNotFound) {
+			t.Errorf("GetConnection(%q): %v, want ErrNotFound", name, err)
+		}
+	}
+	if _, err := d.DeleteInstance(ctx, alice, "..", "demo"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("DeleteInstance in project \"..\": %v, want ErrNotFound", err)
+	}
+
+	after := store.Files()
+	if len(after) != len(before) || len(store.Messages) != commits {
+		t.Fatalf("the repository changed: %d files -> %d, %d commits -> %d", len(before), len(after), commits, len(store.Messages))
+	}
+	for p, content := range before {
+		if after[p] != content {
+			t.Errorf("%s changed", p)
+		}
+	}
+}

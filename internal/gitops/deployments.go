@@ -67,6 +67,18 @@ func (e *ErrInUse) Error() string {
 	return fmt.Sprintf("%s is still used by %s", e.What, strings.Join(e.Users, ", "))
 }
 
+// checkRef refuses a project or object name that cannot be one: joined into
+// a path, ".." or "." would address another directory (ServiceDir(p, "..") is
+// the project itself, and removing it removes every instance). Such a name is
+// not found, the way GetProject answers. The API refuses these names first;
+// this is the last line, for every caller.
+func checkRef(kind, project, name string) error {
+	if ValidateName("project", project) != nil || ValidateName(kind, name) != nil {
+		return fmt.Errorf("%s %s/%s: %w", kind, project, name, ErrNotFound)
+	}
+	return nil
+}
+
 // --- Instances ---
 
 func readInstance(r Reader, project, name string) (*InstanceState, error) {
@@ -125,6 +137,9 @@ func (d *Deployments) ListInstances(ctx context.Context, project string) ([]Inst
 
 // GetInstance returns one instance, or an error wrapping ErrNotFound.
 func (d *Deployments) GetInstance(ctx context.Context, project, name string) (*InstanceState, error) {
+	if err := checkRef("instance", project, name); err != nil {
+		return nil, err
+	}
 	var out *InstanceState
 	err := d.Store.View(ctx, func(r Reader) error {
 		var err error
@@ -240,6 +255,9 @@ func (d *Deployments) CreateInstance(ctx context.Context, actor auth.Actor, st I
 // UpdateInstance applies change to the latest declaration of an instance and
 // writes it back. change may run more than once when the write is replayed.
 func (d *Deployments) UpdateInstance(ctx context.Context, actor auth.Actor, project, name string, change func(st *InstanceState) error) (*InstanceState, string, error) {
+	if err := checkRef("instance", project, name); err != nil {
+		return nil, "", err
+	}
 	var result *InstanceState
 	rev, err := d.Store.Update(ctx, NewCommit("update", project+"/"+name, actor), func(tx Tx) error {
 		st, err := readInstance(tx, project, name)
@@ -259,6 +277,9 @@ func (d *Deployments) UpdateInstance(ctx context.Context, actor auth.Actor, proj
 // DeleteInstance removes an instance directory. The engine prunes what it
 // had deployed.
 func (d *Deployments) DeleteInstance(ctx context.Context, actor auth.Actor, project, name string) (string, error) {
+	if err := checkRef("instance", project, name); err != nil {
+		return "", err
+	}
 	target := project + "/" + name
 	return d.Store.Update(ctx, NewCommit("delete", target, actor), func(tx Tx) error {
 		dir := ServiceDir(project, name)
@@ -405,6 +426,9 @@ func (d *Deployments) ListConnections(ctx context.Context, project string) ([]Co
 
 // GetConnection returns one external connection, or an error wrapping ErrNotFound.
 func (d *Deployments) GetConnection(ctx context.Context, project, name string) (*Connection, error) {
+	if err := checkRef("connection", project, name); err != nil {
+		return nil, err
+	}
 	var out *Connection
 	err := d.Store.View(ctx, func(r Reader) error {
 		raw, err := r.ReadFile(ConnectionPath(project, name))
@@ -566,6 +590,9 @@ func (d *Deployments) PutConnection(ctx context.Context, actor auth.Actor, c Con
 // DeleteConnection removes an external connection. It refuses while an
 // instance still layers it in: both engines would fail to render that instance.
 func (d *Deployments) DeleteConnection(ctx context.Context, actor auth.Actor, project, name string) (string, error) {
+	if err := checkRef("connection", project, name); err != nil {
+		return "", err
+	}
 	target := project + "/" + name
 	return d.Store.Update(ctx, NewCommit("delete connection", target, actor), func(tx Tx) error {
 		if !tx.Exists(ConnectionPath(project, name)) {
