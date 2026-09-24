@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -218,7 +219,7 @@ func (s *DefaultPackageSchemaService) listOCITags(packageRepo, serviceName strin
 	}
 	registryURL := fmt.Sprintf("%s://%s/v2/%s/tags/list", scheme, host, path+"/"+serviceName)
 
-	resp, err := registryGet(registryURL)
+	resp, err := registryGet(registryURL, s.insecureRegistries)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch tags from %s: %w", registryURL, err)
 	}
@@ -244,12 +245,41 @@ func (s *DefaultPackageSchemaService) listOCITags(packageRepo, serviceName strin
 	return tagsResp.Tags, nil
 }
 
+// registryTimeout bounds one registry call (tag listing or token). A registry
+// that accepts the connection and never answers would otherwise pin the
+// request, and the goroutine serving it, forever.
+const registryTimeout = 30 * time.Second
+
+// registryClient is the one client of the registry calls: bounded in time, and
+// never led to another host or down to plain HTTP by a redirect.
+var registryClient = &http.Client{
+	Timeout:       registryTimeout,
+	CheckRedirect: sameOriginRedirects,
+}
+
+func sameOriginRedirects(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return errors.New("stopped after 10 redirects")
+	}
+	first := via[0].URL
+	if req.URL.Host != first.Host || (first.Scheme == "https" && req.URL.Scheme != "https") {
+		return fmt.Errorf("refusing a redirect from %s://%s to %s://%s", first.Scheme, first.Host, req.URL.Scheme, req.URL.Host)
+	}
+	return nil
+}
+
 // registryGet performs a Docker Registry v2 GET, honoring the anonymous
 // bearer-token challenge some registries issue even for public repositories
 // (ghcr.io always does; quay.io serves public reads without it): on 401,
 // fetch a pull token from the advertised realm and replay the request.
-func registryGet(url string) (*http.Response, error) {
-	resp, err := http.Get(url)
+// insecureHosts are the INSECURE_OCI_REGISTRIES, the only hosts whose token
+// realm may be plain HTTP.
+func registryGet(rawURL string, insecureHosts []string) (*http.Response, error) {
+	registry, err := url.Parse(rawURL)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := registryClient.Get(rawURL)
 	if err != nil {
 		return nil, err
 	}
@@ -260,17 +290,54 @@ func registryGet(url string) (*http.Response, error) {
 	challenge := resp.Header.Get("WWW-Authenticate")
 	resp.Body.Close()
 
-	token, err := fetchAnonymousToken(challenge)
+	token, err := fetchAnonymousToken(challenge, registry.Host, insecureOCIHost(registry.Host, insecureHosts))
 	if err != nil {
 		return nil, fmt.Errorf("registry requires authentication and the anonymous token flow failed: %w", err)
 	}
 
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
-	return http.DefaultClient.Do(req)
+	return registryClient.Do(req)
+}
+
+// knownTokenHosts are the token services that live on another host than
+// their registry. Every other registry the platform uses (quay.io, ghcr.io,
+// Harbor, the distribution registry) serves its realm on its own host.
+var knownTokenHosts = map[string]string{
+	"registry-1.docker.io": "auth.docker.io",
+	"docker.io":            "auth.docker.io",
+}
+
+// checkTokenRealm refuses a realm the server should not be sent to: the
+// WWW-Authenticate header is whatever the registry (or anything on its path)
+// says, and following it blindly turns the tag listing into a request to any
+// URL, internal ones included. The realm must be HTTPS (plain HTTP only for a
+// registry declared insecure) and on the registry's own host, or on the known
+// token service of that registry.
+func checkTokenRealm(realm, registryHost string, insecure bool) (*url.URL, error) {
+	u, err := url.Parse(realm)
+	if err != nil || u.Host == "" {
+		return nil, fmt.Errorf("the token realm %q is not an absolute URL", realm)
+	}
+	switch {
+	case u.Scheme == "https":
+	case u.Scheme == "http" && insecure:
+	default:
+		return nil, fmt.Errorf("refusing the token realm %q: it must be https", realm)
+	}
+	registryName := hostname(registryHost)
+	if u.Hostname() != registryName && u.Hostname() != knownTokenHosts[registryName] {
+		return nil, fmt.Errorf("refusing the token realm %q: it is not on the registry host %s", realm, registryName)
+	}
+	return u, nil
+}
+
+// hostname strips the port of a host[:port].
+func hostname(host string) string {
+	return (&url.URL{Host: host}).Hostname()
 }
 
 // parseBearerChallenge extracts the realm and query parameters (service,
@@ -305,13 +372,22 @@ func parseBearerChallenge(header string) (realm string, params url.Values, err e
 // fetchAnonymousToken resolves a bearer challenge by requesting a token from
 // its realm without credentials, registries grant pull tokens anonymously
 // for public repositories.
-func fetchAnonymousToken(challenge string) (string, error) {
+func fetchAnonymousToken(challenge, registryHost string, insecure bool) (string, error) {
 	realm, params, err := parseBearerChallenge(challenge)
 	if err != nil {
 		return "", err
 	}
+	realmURL, err := checkTokenRealm(realm, registryHost, insecure)
+	if err != nil {
+		return "", err
+	}
+	query := realmURL.Query()
+	for key, values := range params {
+		query[key] = values
+	}
+	realmURL.RawQuery = query.Encode()
 
-	resp, err := http.Get(realm + "?" + params.Encode())
+	resp, err := registryClient.Get(realmURL.String())
 	if err != nil {
 		return "", err
 	}

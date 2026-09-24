@@ -262,7 +262,7 @@ its `configuration:` values (see [`chart/values.yaml`](chart/values.yaml)).
 | `GITOPS_ENGINE` | `flux` or `argocd`: whose objects carry render/sync errors | `flux` | No |
 | `GITOPS_RELEASES_NAMESPACE` | Flux HelmReleases and values ConfigMaps, `okdp-platform-values` included | `okdp-releases` | No |
 | `ARGOCD_NAMESPACE` | Argo CD Applications | `argocd` | No |
-| `INSECURE_OCI_REGISTRIES` | Registry hosts reached over plain HTTP to read chart schemas (sandboxes) | | No |
+| `INSECURE_OCI_REGISTRIES` | Registry hosts reached over plain HTTP to read chart schemas (sandboxes); also the only registries whose anonymous-token realm may be plain HTTP | | No |
 | `KEYCLOAK_CLIENT_ID` | Keycloak service-account client of the platform realm (chart: `keycloak.credentialsSecret`, key `client_id`) | `okdp-control-plane` | No |
 | `KEYCLOAK_CLIENT_SECRET` | Its secret (chart: `keycloak.credentialsSecret`, key `client_secret`). Unset: user and group management is off | | No |
 | `KEYCLOAK_URL` / `KEYCLOAK_REALM` | Keycloak base URL and realm of the Admin API | from the platform OIDC issuer `<url>/realms/<realm>` | No |
