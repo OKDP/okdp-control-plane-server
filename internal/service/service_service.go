@@ -72,7 +72,9 @@ type ServiceService interface {
 	GetProfileImages(ctx context.Context) (map[string][]models.ProfileImage, error)
 
 	ListPods(ctx context.Context, project, serviceName string) ([]models.Pod, error)
-	GetPodLogs(ctx context.Context, project, podName, container string, tailLines int64, follow bool) (io.ReadCloser, error)
+	// GetPodLogs streams the logs of a pod of the instance serviceName; a pod
+	// of another instance, or of none, is not found.
+	GetPodLogs(ctx context.Context, project, serviceName, podName, container string, tailLines int64, follow bool) (io.ReadCloser, error)
 	GetServiceMetrics(ctx context.Context, project, serviceName string) (*models.ServiceMetrics, error)
 	GetProjectMetrics(ctx context.Context, project string) (map[string]*models.ServiceMetrics, error)
 }
@@ -1165,7 +1167,21 @@ func (s *DefaultServiceService) isInfraSidecar(containerName string) bool {
 	return false
 }
 
-func (s *DefaultServiceService) GetPodLogs(ctx context.Context, project, podName, container string, tailLines int64, follow bool) (io.ReadCloser, error) {
+func (s *DefaultServiceService) GetPodLogs(ctx context.Context, project, serviceName, podName, container string, tailLines int64, follow bool) (io.ReadCloser, error) {
+	// The pod must be one ListPods shows for this instance. Without the check,
+	// any pod of the namespace is readable through any service name, sidecars
+	// and other tenants' jobs included.
+	pod, err := s.typedClient.CoreV1().Pods(project).Get(ctx, podName, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, apierrors.NewNotFound(corev1.Resource("pods"), podName)
+		}
+		return nil, fmt.Errorf("failed to get pod: %w", err)
+	}
+	if pod.Labels[repository.LabelAppInstance] != gitops.ReleaseName(project, serviceName) {
+		return nil, apierrors.NewNotFound(corev1.Resource("pods"), podName)
+	}
+
 	opts := &corev1.PodLogOptions{
 		Follow: follow,
 	}
