@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"net/http"
+	"os"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/sirupsen/logrus"
 
 	"github.com/okdp/okdp-control-plane-server/internal/api/handlers"
@@ -187,6 +189,12 @@ func main() {
 	checkIdentityConfiguration(context.Background(), contextRepo)
 
 	verifier := buildTokenVerifier(context.Background(), cfg, contextRepo)
+
+	// Release mode unless asked otherwise: debug mode prints every route and
+	// warns on each start, which is noise in a pod. GIN_MODE=debug brings it back.
+	if os.Getenv(gin.EnvGinMode) == "" {
+		gin.SetMode(gin.ReleaseMode)
+	}
 
 	r := router.SetupRouter(cfg, verifier, capabilitiesHandler, projectHandler, identityHandler, secretStoreHandler, externalSecretHandler, serviceHandler, sparkHandler, connectionHandler, sqlHandler)
 

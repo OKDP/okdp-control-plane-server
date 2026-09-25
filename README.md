@@ -252,6 +252,7 @@ its `configuration:` values (see [`chart/values.yaml`](chart/values.yaml)).
 | `PLATFORM_NAMESPACE` | Namespace where the OKDP platform runs | `okdp-system` | No |
 | `ALLOWED_ORIGINS` | Single CORS origin, set verbatim in `Access-Control-Allow-Origin` (the console URL) | `http://localhost:4200` | No |
 | `LOG_LEVEL` | Log verbosity (`debug`, `info`, `warn`, `error`) | `info` | No |
+| `GIN_MODE` | HTTP framework mode (`debug` prints every route) | `release` | No |
 | `GITOPS_REPO_URL` | Deployments repository (`https://…`, `ssh://…`, `git@host:path`, `file://…`) | | **Yes** |
 | `GITOPS_BRANCH` | Branch holding the desired state | `main` | No |
 | `GITOPS_PATH` | Directory of the repository holding the layout | repository root | No |
