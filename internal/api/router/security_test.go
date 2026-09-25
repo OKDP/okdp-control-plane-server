@@ -101,6 +101,33 @@ func testRouterWithoutAuth() *gin.Engine {
 	return SetupRouter(&config.Config{}, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 }
 
+func TestResponsesCarryTheSecurityHeaders(t *testing.T) {
+	r, _ := gitBackedRouter(t)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/projects/demo/services/..", nil)
+	req.Header.Set("Origin", "https://console.example")
+	r.ServeHTTP(w, req)
+	if got := w.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Errorf("X-Content-Type-Options = %q", got)
+	}
+	if got := w.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control on /api = %q", got)
+	}
+	if got := w.Header().Values("Vary"); len(got) == 0 || !strings.Contains(strings.Join(got, ","), "Origin") {
+		t.Errorf("Vary = %v, wanted Origin", got)
+	}
+
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/health", nil))
+	if got := w.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Errorf("X-Content-Type-Options on /health = %q", got)
+	}
+	if got := w.Header().Get("Cache-Control"); got != "" {
+		t.Errorf("Cache-Control on /health = %q, only /api answers are per user", got)
+	}
+}
+
 func TestOversizedBodiesAreRefused(t *testing.T) {
 	r, store := gitBackedRouter(t)
 	body := `{"service":"trino","instanceName":"big","parameters":{"x":"` + strings.Repeat("a", 2<<20) + `"}}`
