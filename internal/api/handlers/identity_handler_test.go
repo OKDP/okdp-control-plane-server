@@ -106,3 +106,34 @@ func TestUpdateUserKeepsTheDisplayName(t *testing.T) {
 		t.Errorf("expected the response to echo the user, got %s", w.Body.String())
 	}
 }
+
+// captureCreate accepts every user.
+type captureCreate struct {
+	fakeIdentityService
+}
+
+func (captureCreate) CreateUser(context.Context, *models.User) error { return nil }
+
+// The password is write-only: neither create nor update may send it back.
+func TestUserResponsesNeverCarryThePassword(t *testing.T) {
+	engine := gin.New()
+	engine.POST("/users", NewIdentityHandler(captureCreate{fakeIdentityService{available: true}}).CreateUser)
+	engine.PUT("/users/:name", NewIdentityHandler(&captureUpdate{fakeIdentityService: fakeIdentityService{available: true}}).UpdateUser)
+
+	for _, call := range []struct{ method, path string }{
+		{http.MethodPost, "/users"},
+		{http.MethodPut, "/users/jdoe"},
+	} {
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(call.method, call.path, strings.NewReader(`{"username":"jdoe","name":"John Doe","password":"s3cr3t-value"}`))
+		req.Header.Set("Content-Type", "application/json")
+		engine.ServeHTTP(w, req)
+
+		if w.Code >= 300 {
+			t.Fatalf("%s %s: %d %s", call.method, call.path, w.Code, w.Body.String())
+		}
+		if strings.Contains(w.Body.String(), "s3cr3t-value") || strings.Contains(w.Body.String(), `"password"`) {
+			t.Errorf("%s %s echoed the password: %s", call.method, call.path, w.Body.String())
+		}
+	}
+}

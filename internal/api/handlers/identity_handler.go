@@ -106,6 +106,9 @@ func (h *IdentityHandler) CreateUser(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	// Write-only: the answer must not carry the password back (logs, proxies,
+	// browser caches).
+	user.Password = ""
 	c.JSON(http.StatusCreated, user)
 }
 
@@ -135,6 +138,7 @@ func (h *IdentityHandler) UpdateUser(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	user.Password = ""
 	c.JSON(http.StatusOK, user)
 }
 
