@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.9.0](https://github.com/OKDP/okdp-control-plane-server/compare/v0.8.0...v0.9.0) (2026-09-25)
+
+
+### Features
+
+* **auth:** log the authenticated caller on every request ([390cf2c](https://github.com/OKDP/okdp-control-plane-server/commit/390cf2c1097e9ad0b0f9d1413e95835c9ae05092))
+* **auth:** make the token's audience check mandatory ([96c84d1](https://github.com/OKDP/okdp-control-plane-server/commit/96c84d13d66201564c3c2a9971c7337edd894740))
+* **auth:** verify the bearer token on every API call ([a1d7774](https://github.com/OKDP/okdp-control-plane-server/commit/a1d77741f3bb6775a184ed8920d8928c4cae8d39))
+* **auth:** verify the token names the console, and cover every route ([11723c5](https://github.com/OKDP/okdp-control-plane-server/commit/11723c597219690b5e2735dd399c689c62c4a24b))
+
+
+### Bug Fixes
+
+* resolve pod/status selection via the Release's owned HelmReleases ([672a10a](https://github.com/OKDP/okdp-control-plane-server/commit/672a10a5015292005d0d04c0a0b374f485c17944))
+* scope the Open-URL Ingress lookup to the instance's own Release ([cb2552c](https://github.com/OKDP/okdp-control-plane-server/commit/cb2552ccc418368fac04044d0d304fa3e9d72acf))
+
 ## [0.8.0](https://github.com/OKDP/okdp-control-plane-server/compare/v0.7.1...v0.8.0) (2026-08-28)
 
 
