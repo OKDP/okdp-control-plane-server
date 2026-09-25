@@ -24,12 +24,16 @@ on:
         required: false
         type: string
 
+permissions:
+  contents: read
+
 jobs:
   build-push:
     runs-on: ubuntu-latest
     permissions:
+      # The gha build cache (cache-from/cache-to type=gha) uses the runner's
+      # ACTIONS_RUNTIME_TOKEN, not GITHUB_TOKEN: no actions: write needed.
       contents: read
-      actions: write   # upload the GitHub Actions build cache
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       # go.mod replaces github.com/okdp/okdp-lib with ../okdp-lib during the
