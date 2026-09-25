@@ -74,6 +74,24 @@ service:
 
 resources: {}
 
+# The server runs as nobody (the image's USER 65534) on a read-only root
+# filesystem: it writes only to the Git clone (/var/cache/okdp/gitops) and
+# /tmp (HOME), both emptyDirs.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65534
+  runAsGroup: 65534
+  fsGroup: 65534
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  capabilities:
+    drop: [ALL]
+
 # Forward proxy the pod must go through to reach anything outside the cluster.
 # Empty means no proxy, which is the case on any sandbox. Rendered as the three
 # environment variables every HTTP client reads.

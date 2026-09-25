@@ -19,10 +19,18 @@ spec:
         {{- include "okdp-control-plane-server.labels" . | nindent 8 }}
     spec:
       serviceAccountName: {{ include "okdp-control-plane-server.fullname" . }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: {{ .Chart.Name }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           envFrom:
             - configMapRef:
                 name: {{ include "okdp-control-plane-server.fullname" . }}
@@ -73,6 +81,10 @@ spec:
             # Git is the store.
             - name: gitops-clone
               mountPath: /var/cache/okdp/gitops
+            # HOME of the image (Git and registry clients) and the temporary
+            # directory: the root filesystem is read-only.
+            - name: tmp
+              mountPath: /tmp
             {{- if .Values.gitops.credentialsSecret }}
             - name: gitops-credentials
               mountPath: /etc/okdp/gitops-credentials
@@ -82,6 +94,8 @@ spec:
             {{- toYaml .Values.resources | nindent 12 }}
       volumes:
         - name: gitops-clone
+          emptyDir: {}
+        - name: tmp
           emptyDir: {}
         {{- if .Values.gitops.credentialsSecret }}
         - name: gitops-credentials
