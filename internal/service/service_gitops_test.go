@@ -169,6 +169,20 @@ func TestDeployRefusesInvalidParametersWithoutCommitting(t *testing.T) {
 	assert.Equal(t, before, len(store.Messages), "nothing may be committed")
 }
 
+// A chart schema that does not compile is not a chart without schema: the
+// parameters cannot be checked, so nothing is committed (fail closed).
+func TestDeployFailsClosedOnASchemaThatDoesNotCompile(t *testing.T) {
+	svc, store := newGitServiceUnderTest(t, stubEngine{}, nil)
+	svc.schemaService = stubSchema{schema: map[string]any{"type": "not-a-type"}}
+	before := len(store.Messages)
+
+	_, err := svc.DeployService(aliceContext(), "demo", models.ServiceRequest{Service: "trino", Parameters: map[string]any{"workers": float64(2)}})
+	require.Error(t, err)
+	assert.False(t, IsValidationError(err), "a broken chart is not the caller's mistake: %v", err)
+	assert.Contains(t, err.Error(), "does not compile")
+	assert.Equal(t, before, len(store.Messages), "nothing may be committed")
+}
+
 func TestUpdateMergesIntoValuesAndMovesTheVersion(t *testing.T) {
 	engine := stubEngine{statuses: map[string]repository.EngineStatus{}}
 	svc, store := newGitServiceUnderTest(t, engine, nil)

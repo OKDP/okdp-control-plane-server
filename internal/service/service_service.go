@@ -1107,26 +1107,31 @@ func (s *DefaultServiceService) validateParameters(ctx context.Context, serviceN
 		return fmt.Errorf("could not fetch schema for %s@%s: %w", serviceName, tag, err)
 	}
 
+	if schemaMap == nil {
+		// No schema at all: nothing to validate against. (A chart without
+		// values.schema.json already fails the fetch above.)
+		return nil
+	}
+
+	// From here on the chart has a schema: one that cannot be used fails the
+	// request (fail closed) rather than committing values nobody checked.
 	schemaJSON, err := json.Marshal(schemaMap)
 	if err != nil {
-		return nil
+		return fmt.Errorf("the schema of %s@%s cannot be encoded: %w", serviceName, tag, err)
 	}
 
 	compiler := jsonschema.NewCompiler()
 	schemaDoc, err := jsonschema.UnmarshalJSON(bytes.NewReader(schemaJSON))
 	if err != nil {
-		logrus.WithError(err).Warn("Failed to unmarshal schema JSON, skipping validation")
-		return nil
+		return fmt.Errorf("the schema of %s@%s cannot be read: %w", serviceName, tag, err)
 	}
 	if err := compiler.AddResource("schema.json", schemaDoc); err != nil {
-		logrus.WithError(err).Warn("Failed to add schema resource, skipping validation")
-		return nil
+		return fmt.Errorf("the schema of %s@%s cannot be loaded: %w", serviceName, tag, err)
 	}
 
 	sch, err := compiler.Compile("schema.json")
 	if err != nil {
-		logrus.WithError(err).Warn("Failed to compile schema, skipping validation")
-		return nil
+		return fmt.Errorf("the schema of %s@%s does not compile: %w", serviceName, tag, err)
 	}
 
 	if params == nil {
