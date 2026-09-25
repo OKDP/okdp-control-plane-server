@@ -188,7 +188,17 @@ func (h *SecretStoreHandler) TestConnection(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, models.TestConnectionResponse{Message: "Connection successful"})
+	c.JSON(http.StatusOK, models.TestConnectionResponse{Message: testConnectionMessage(req)})
+}
+
+// testConnectionMessage says what the test proved. With Kubernetes auth there
+// is no token to present, so only the server was checked: the role is verified
+// by the operator at sync time, and the console must not claim more.
+func testConnectionMessage(req models.SecretStoreRequest) string {
+	if req.Auth != nil && req.Auth.Type == "kubernetes" {
+		return "Vault answered. The Kubernetes role is verified by the operator at sync time."
+	}
+	return "Connection successful"
 }
 
 // GetStatus godoc
