@@ -95,3 +95,19 @@ func TestOCIChartSchemaFetcherPullsFromARegistry(t *testing.T) {
 		t.Fatalf("schema = %v", schema)
 	}
 }
+
+// A few kilobytes of gzip inflate to far more than a chart: the per-file bound
+// refuses the file from its header, before reading it.
+func TestValuesSchemaFromChartArchiveBoundsTheInflatedFiles(t *testing.T) {
+	for _, file := range []string{"x/values.schema.json", "x/Chart.yaml"} {
+		huge := `{"title": "` + strings.Repeat(" ", maxChartFileSize) + `"}`
+		archive := chartArchive(t, map[string]string{file: huge})
+		if len(archive) > maxChartFileSize/10 {
+			t.Fatalf("the test archive is %d bytes, not a bomb", len(archive))
+		}
+		_, err := valuesSchemaFromChartArchive(bytes.NewReader(archive))
+		if err == nil || !strings.Contains(err.Error(), "more than") {
+			t.Errorf("%s: err = %v", file, err)
+		}
+	}
+}

@@ -20,6 +20,7 @@ func SetupRouter(cfg *config.Config, verifier auth.Verifier, capabilitiesHandler
 	r.Use(middleware.RequestLogger())
 	r.Use(gin.Recovery())
 	r.Use(corsMiddleware(cfg))
+	r.Use(middleware.LimitRequestBody(middleware.DefaultMaxBodyBytes))
 
 	// Swagger documentation
 	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))

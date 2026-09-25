@@ -3,6 +3,7 @@ package router
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -98,4 +99,30 @@ func TestObjectNamesInThePathAreValidated(t *testing.T) {
 func testRouterWithoutAuth() *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	return SetupRouter(&config.Config{}, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+}
+
+func TestOversizedBodiesAreRefused(t *testing.T) {
+	r, store := gitBackedRouter(t)
+	body := `{"service":"trino","instanceName":"big","parameters":{"x":"` + strings.Repeat("a", 2<<20) + `"}}`
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/projects/demo/services", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("a declared 2 MiB body answered %d, wanted 413", w.Code)
+	}
+
+	// Chunked: no declared length, the read itself is cut.
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/projects/demo/services", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.ContentLength = -1
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("an undeclared 2 MiB body answered %d, wanted 400", w.Code)
+	}
+	if len(store.Messages) != 0 {
+		t.Fatal("an oversized request was committed")
+	}
 }

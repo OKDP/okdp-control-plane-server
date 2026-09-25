@@ -44,6 +44,14 @@ const helmChartContentMediaType = "application/vnd.cncf.helm.chart.content.v1.ta
 // registry serving gigabytes under that media type is not one.
 const maxChartSize = 32 << 20
 
+// maxChartUncompressedSize bounds what the archive may inflate to, and
+// maxChartFileSize each file read from it: maxChartSize only limits the
+// compressed stream, and a gzip bomb fits in a few kilobytes of it.
+const (
+	maxChartUncompressedSize = 256 << 20
+	maxChartFileSize         = 4 << 20
+)
+
 // OCIChartSchemaFetcher pulls Helm charts from an OCI registry with oras-go,
 // anonymously (public registries grant pull tokens without credentials).
 type OCIChartSchemaFetcher struct {
@@ -102,7 +110,7 @@ func valuesSchemaFromChartArchive(r io.Reader) (*ChartSchema, error) {
 		return nil, fmt.Errorf("the chart is not a gzip archive: %w", err)
 	}
 	defer gz.Close()
-	tr := tar.NewReader(gz)
+	tr := tar.NewReader(io.LimitReader(gz, maxChartUncompressedSize))
 	result := &ChartSchema{}
 	for {
 		hdr, err := tr.Next()
@@ -117,9 +125,12 @@ func valuesSchemaFromChartArchive(r io.Reader) (*ChartSchema, error) {
 		if dir == "" || strings.Count(strings.Trim(dir, "/"), "/") != 0 {
 			continue
 		}
+		if (file == "values.schema.json" || file == "Chart.yaml") && hdr.Size > maxChartFileSize {
+			return nil, fmt.Errorf("%s is %d bytes, more than the %d it may weigh", name, hdr.Size, maxChartFileSize)
+		}
 		switch file {
 		case "values.schema.json":
-			if err := json.NewDecoder(tr).Decode(&result.Schema); err != nil {
+			if err := json.NewDecoder(io.LimitReader(tr, maxChartFileSize)).Decode(&result.Schema); err != nil {
 				return nil, fmt.Errorf("invalid values.schema.json: %w", err)
 			}
 		case "Chart.yaml":
@@ -129,9 +140,9 @@ func valuesSchemaFromChartArchive(r io.Reader) (*ChartSchema, error) {
 					Alias string `yaml:"alias"`
 				} `yaml:"dependencies"`
 			}
-			data, err := io.ReadAll(tr)
+			data, err := readBounded(tr, maxChartFileSize)
 			if err != nil {
-				return nil, err
+				return nil, fmt.Errorf("reading Chart.yaml: %w", err)
 			}
 			if err := yaml.Unmarshal(data, &chart); err != nil {
 				return nil, fmt.Errorf("invalid Chart.yaml: %w", err)

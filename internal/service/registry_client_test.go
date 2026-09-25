@@ -94,3 +94,16 @@ func TestRegistryGetDoesNotFollowARedirectToAnotherHost(t *testing.T) {
 		t.Fatal("the redirect was followed to another host")
 	}
 }
+
+func TestTagListingRefusesAnOversizedAnswer(t *testing.T) {
+	registry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprintf(w, `{"tags":["%s"]}`, strings.Repeat("1", maxRegistryResponse))
+	}))
+	defer registry.Close()
+	host := strings.TrimPrefix(registry.URL, "http://")
+
+	s := &DefaultPackageSchemaService{insecureRegistries: []string{host}}
+	if _, err := s.listOCITags(host+"/okdp", "hive"); err == nil || !strings.Contains(err.Error(), "larger than") {
+		t.Fatalf("err = %v", err)
+	}
+}

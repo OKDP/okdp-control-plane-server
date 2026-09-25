@@ -229,7 +229,7 @@ func (s *DefaultPackageSchemaService) listOCITags(packageRepo, serviceName strin
 		return nil, fmt.Errorf("registry returned status %d for %s", resp.StatusCode, registryURL)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readBounded(resp.Body, maxRegistryResponse)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read registry response: %w", err)
 	}
@@ -250,6 +250,10 @@ func (s *DefaultPackageSchemaService) listOCITags(packageRepo, serviceName strin
 // request, and the goroutine serving it, forever.
 const registryTimeout = 30 * time.Second
 
+// maxRegistryResponse bounds what a tag list or a token answer may weigh: a
+// few kilobytes in practice, never the whole body of whatever answers there.
+const maxRegistryResponse = 4 << 20
+
 // registryClient is the one client of the registry calls: bounded in time, and
 // never led to another host or down to plain HTTP by a redirect.
 var registryClient = &http.Client{
@@ -266,6 +270,18 @@ func sameOriginRedirects(req *http.Request, via []*http.Request) error {
 		return fmt.Errorf("refusing a redirect from %s://%s to %s://%s", first.Scheme, first.Host, req.URL.Scheme, req.URL.Host)
 	}
 	return nil
+}
+
+// readBounded reads at most limit bytes, and fails rather than truncate.
+func readBounded(r io.Reader, limit int64) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("the response is larger than %d bytes", limit)
+	}
+	return data, nil
 }
 
 // registryGet performs a Docker Registry v2 GET, honoring the anonymous
@@ -400,7 +416,7 @@ func fetchAnonymousToken(challenge, registryHost string, insecure bool) (string,
 		Token       string `json:"token"`
 		AccessToken string `json:"access_token"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxRegistryResponse)).Decode(&tokenResp); err != nil {
 		return "", fmt.Errorf("failed to parse token response: %w", err)
 	}
 	if tokenResp.Token != "" {
