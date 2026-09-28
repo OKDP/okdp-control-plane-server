@@ -18,3 +18,6 @@ data:
   # Development sandboxes only: registry hosts reached over plain HTTP.
   INSECURE_OCI_REGISTRIES: {{ .Values.configuration.insecureOciRegistries | quote }}
   {{- end }}
+  {{- if .Values.configuration.registryCredentialsSecret }}
+  REGISTRY_AUTH_FILE: /etc/okdp/registry/.dockerconfigjson
+  {{- end }}

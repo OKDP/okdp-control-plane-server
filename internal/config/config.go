@@ -23,6 +23,8 @@ type Config struct {
 	// InsecureOCIRegistries lists registry hosts reached over plain HTTP
 	// a development-sandbox affordance for local registries without TLS.
 	InsecureOCIRegistries []string
+	// RegistryAuthFile is a dockerconfigjson file with credentials for private package registries. Empty means anonymous access only.
+	RegistryAuthFile string
 	// OIDC configures the verification of the console's bearer token.
 	OIDC OIDCConfig
 }
@@ -51,6 +53,7 @@ func Load() (*Config, error) {
 		ContextNamespace:  getEnv("CONTEXT_NAMESPACE", ""),
 		ReleaseInterval:   getEnv("RELEASE_INTERVAL", "30m"),
 		ReleaseTimeout:    getEnv("RELEASE_TIMEOUT", "10m"),
+		RegistryAuthFile:  getEnv("REGISTRY_AUTH_FILE", ""),
 		OIDC: OIDCConfig{
 			Issuer:   strings.TrimSpace(getEnv("OIDC_ISSUER", "")),
 			ClientID: strings.TrimSpace(getEnv("OIDC_CLIENT_ID", "")),

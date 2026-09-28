@@ -22,6 +22,9 @@ configuration:
   # Comma-separated registry hosts to reach over plain HTTP (dev sandboxes
   # with a local registry). Leave empty in any real deployment.
   insecureOciRegistries: ""
+  # Name of a kubernetes.io/dockerconfigjson Secret, in the release namespace,
+  # holding credentials for private package registries. Empty: anonymous only.
+  registryCredentialsSecret: ""
 
 
 service:

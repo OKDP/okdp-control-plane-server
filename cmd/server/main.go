@@ -118,6 +118,7 @@ func main() {
 	serviceRepo := repository.NewServiceRepository(k8sClient)
 	schemaService := service.NewDefaultPackageSchemaService(contextRepo)
 	schemaService.SetInsecureRegistries(cfg.InsecureOCIRegistries)
+	schemaService.SetRegistryAuthFile(cfg.RegistryAuthFile)
 	// OIDC client provisioning (backend selected per call from the Context)
 	oidcProvisioner := provisioning.NewContextSelector(contextRepo, k8sClient)
 	serviceService := service.NewDefaultServiceService(serviceRepo, contextRepo, contextWriterRepo, schemaService, oidcProvisioner, k8sClient, k8sTypedClient, cfg.ContextNamespace, cfg.ReleaseInterval, cfg.ReleaseTimeout, cfg.ExcludedSidecarPrefixes)
