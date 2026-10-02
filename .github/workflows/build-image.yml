@@ -38,10 +38,10 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      # go.mod replaces github.com/okdp/okdp-lib with ../okdp-lib during the
+      # go.mod replaces github.com/okdp/okdp-lib-chart with ../okdp-lib-chart during the
       # no-kubocd migration.
       - name: Clone okdp-lib next to the repository
-        run: git clone --depth 1 https://github.com/OKDP/okdp-lib.git ../okdp-lib
+        run: git clone --depth 1 https://github.com/OKDP/okdp-lib-chart.git ../okdp-lib-chart
       - id: vars
         env:
           INPUT_VERSION: ${{ inputs.version }}
@@ -59,7 +59,7 @@ jobs:
       - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
-          build-contexts: okdp-lib=../okdp-lib
+          build-contexts: okdp-lib=../okdp-lib-chart
           platforms: linux/amd64,linux/arm64
           push: true
           cache-from: type=gha

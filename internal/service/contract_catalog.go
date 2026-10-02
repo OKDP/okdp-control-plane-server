@@ -8,12 +8,12 @@ import (
 	"strings"
 
 	"github.com/okdp/okdp-control-plane-server/internal/models"
-	okdpcontracts "github.com/okdp/okdp-lib/contracts"
+	okdpcontracts "github.com/okdp/okdp-lib-chart/contracts"
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 // contractsFS holds the contract schemas: the canonical JSON Schemas of
-// okdp-lib (github.com/okdp/okdp-lib/contracts), which the charts and
+// okdp-lib (github.com/okdp/okdp-lib-chart/contracts), which the charts and
 // scripts/check.sh validate against too. The same document drives the form
 // rendered by the console (converted to a ContractDescriptor), the
 // server-side validation of submitted values, and the address shown for a

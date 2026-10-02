@@ -12,10 +12,10 @@ ARG VERSION=dev
 
 WORKDIR /workspace/okdp-server
 
-# go.mod replaces github.com/okdp/okdp-lib with ../okdp-lib during the
-# no-kubocd migration: build with --build-context okdp-lib=../okdp-lib.
-COPY --from=okdp-lib go.mod ../okdp-lib/
-COPY --from=okdp-lib contracts/ ../okdp-lib/contracts/
+# go.mod replaces github.com/okdp/okdp-lib-chart with ../okdp-lib-chart during the
+# no-kubocd migration: build with --build-context okdp-lib=../okdp-lib-chart.
+COPY --from=okdp-lib go.mod ../okdp-lib-chart/
+COPY --from=okdp-lib contracts/ ../okdp-lib-chart/contracts/
 COPY go.* ./
 RUN go mod download
 
