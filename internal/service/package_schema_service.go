@@ -49,12 +49,25 @@ type DefaultPackageSchemaService struct {
 	tagsCache          sync.Map
 	cacheTTL           time.Duration
 	insecureRegistries []string
+	registryAuthFile   string
 }
 
 // SetInsecureRegistries declares the plain-HTTP registry hosts, so package
 // dumps and tag listings against them do not attempt TLS.
 func (s *DefaultPackageSchemaService) SetInsecureRegistries(hosts []string) {
 	s.insecureRegistries = hosts
+}
+
+// SetRegistryAuthFile points to a dockerconfigjson file holding credentials for private registries. Empty keeps every registry access anonymous.
+func (s *DefaultPackageSchemaService) SetRegistryAuthFile(path string) {
+	s.registryAuthFile = path
+}
+
+func (s *DefaultPackageSchemaService) credentialFor(host string) (*registryCredential, error) {
+	if s.registryAuthFile == "" {
+		return nil, nil
+	}
+	return registryCredentialFor(s.registryAuthFile, host)
 }
 
 type schemaCacheEntry struct {
@@ -213,7 +226,11 @@ func (s *DefaultPackageSchemaService) listOCITags(packageRepo, serviceName strin
 	}
 	registryURL := fmt.Sprintf("%s://%s/v2/%s/tags/list", scheme, host, path+"/"+serviceName)
 
-	resp, err := registryGet(registryURL)
+	cred, err := s.credentialFor(host)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := registryGet(registryURL, cred)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch tags from %s: %w", registryURL, err)
 	}
@@ -239,11 +256,13 @@ func (s *DefaultPackageSchemaService) listOCITags(packageRepo, serviceName strin
 	return tagsResp.Tags, nil
 }
 
-// registryGet performs a Docker Registry v2 GET, honoring the anonymous
-// bearer-token challenge some registries issue even for public repositories
-// (ghcr.io always does; quay.io serves public reads without it): on 401,
-// fetch a pull token from the advertised realm and replay the request.
-func registryGet(url string) (*http.Response, error) {
+// registryGet performs a Docker Registry v2 GET, honoring the bearer-token
+// challenge some registries issue even for public repositories (ghcr.io always
+// does; quay.io serves public reads without it): on 401, fetch a pull token
+// from the advertised realm and replay the request. With a credential, the
+// token is requested with it, or the request replayed with Basic auth when the
+// registry asks for that instead.
+func registryGet(url string, cred *registryCredential) (*http.Response, error) {
 	resp, err := http.Get(url)
 	if err != nil {
 		return nil, err
@@ -255,14 +274,26 @@ func registryGet(url string) (*http.Response, error) {
 	challenge := resp.Header.Get("WWW-Authenticate")
 	resp.Body.Close()
 
-	token, err := fetchAnonymousToken(challenge)
-	if err != nil {
-		return nil, fmt.Errorf("registry requires authentication and the anonymous token flow failed: %w", err)
-	}
-
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
+	}
+
+	scheme, _, _ := strings.Cut(strings.TrimSpace(challenge), " ")
+	if strings.EqualFold(scheme, "Basic") {
+		if cred == nil {
+			return nil, errors.New("registry requires authentication and no credentials are configured for it")
+		}
+		req.SetBasicAuth(cred.username, cred.password)
+		return http.DefaultClient.Do(req)
+	}
+
+	token, err := fetchToken(challenge, cred)
+	if err != nil {
+		if cred == nil {
+			return nil, fmt.Errorf("registry requires authentication and the anonymous token flow failed (private package? configure registry credentials): %w", err)
+		}
+		return nil, fmt.Errorf("registry token request with the configured credentials failed: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	return http.DefaultClient.Do(req)
@@ -297,16 +328,23 @@ func parseBearerChallenge(header string) (realm string, params url.Values, err e
 	return realm, params, nil
 }
 
-// fetchAnonymousToken resolves a bearer challenge by requesting a token from
-// its realm without credentials, registries grant pull tokens anonymously
-// for public repositories.
-func fetchAnonymousToken(challenge string) (string, error) {
+// fetchToken resolves a bearer challenge by requesting a token from its realm,
+// anonymously when cred is nil: registries grant pull tokens anonymously for
+// public repositories.
+func fetchToken(challenge string, cred *registryCredential) (string, error) {
 	realm, params, err := parseBearerChallenge(challenge)
 	if err != nil {
 		return "", err
 	}
 
-	resp, err := http.Get(realm + "?" + params.Encode())
+	req, err := http.NewRequest(http.MethodGet, realm+"?"+params.Encode(), nil)
+	if err != nil {
+		return "", err
+	}
+	if cred != nil {
+		req.SetBasicAuth(cred.username, cred.password)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -420,7 +458,16 @@ func (s *DefaultPackageSchemaService) fetchAndCache(serviceName, tag, packageRep
 	}
 
 	ociRef := fmt.Sprintf("oci://%s/%s:%s", packageRepo, serviceName, tag)
-	doc, err := s.fetchGroomedDoc(ociRef, insecureOCIHost(packageRepo, s.insecureRegistries))
+	host, _, _ := strings.Cut(packageRepo, "/")
+	cred, err := s.credentialFor(host)
+	if err != nil {
+		return nil, err
+	}
+	var credEnv []string
+	if cred != nil {
+		credEnv = kubocdCredentialEnv(host, cred)
+	}
+	doc, err := s.fetchGroomedDoc(ociRef, insecureOCIHost(packageRepo, s.insecureRegistries), credEnv)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch schema for %s: %w", ociRef, err)
 	}
@@ -445,14 +492,19 @@ func (s *DefaultPackageSchemaService) fetchAndCache(serviceName, tag, packageRep
 // Generous on purpose: a cold registry over a slow link is not a failure.
 const dumpTimeout = 60 * time.Second
 
-func (s *DefaultPackageSchemaService) fetchGroomedDoc(ociRef string, insecure bool) (map[string]any, error) {
+// credEnv carries the registry credential for kubocd; empty means an
+// anonymous pull.
+func (s *DefaultPackageSchemaService) fetchGroomedDoc(ociRef string, insecure bool, credEnv []string) (map[string]any, error) {
 	tmpDir, err := os.MkdirTemp("", "kubocd-dump-*")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create temp dir: %w", err)
 	}
 	defer os.RemoveAll(tmpDir)
 
-	args := []string{"dump", "package", ociRef, "--anonymous", "-o", tmpDir}
+	args := []string{"dump", "package", ociRef, "-o", tmpDir}
+	if len(credEnv) == 0 {
+		args = append(args, "--anonymous")
+	}
 	if insecure {
 		args = append(args, "--insecure")
 	}
@@ -464,6 +516,9 @@ func (s *DefaultPackageSchemaService) fetchGroomedDoc(ociRef string, insecure bo
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "kubocd", args...)
+	if len(credEnv) > 0 {
+		cmd.Env = append(os.Environ(), credEnv...)
+	}
 	output, err := cmd.CombinedOutput()
 	if ctx.Err() == context.DeadlineExceeded {
 		logrus.WithField("ref", ociRef).WithField("timeout", dumpTimeout).Error("kubocd dump timed out")

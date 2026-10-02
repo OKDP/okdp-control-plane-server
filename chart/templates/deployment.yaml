@@ -59,3 +59,13 @@ spec:
               port: http
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+          {{- with .Values.configuration.registryCredentialsSecret }}
+          volumeMounts:
+            - name: registry-credentials
+              mountPath: /etc/okdp/registry
+              readOnly: true
+      volumes:
+        - name: registry-credentials
+          secret:
+            secretName: {{ . }}
+          {{- end }}
