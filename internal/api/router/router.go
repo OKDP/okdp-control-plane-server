@@ -155,6 +155,7 @@ func SetupRouter(cfg *config.Config, verifier auth.Verifier, capabilitiesHandler
 			services.GET("/:serviceName/pods", serviceHandler.ListPods)
 			services.GET("/:serviceName/pods/:podName/logs", serviceHandler.GetPodLogs)
 			services.GET("/:serviceName/metrics", serviceHandler.GetServiceMetrics)
+			services.GET("/:serviceName/values", serviceHandler.GetRenderedValues)
 			services.POST("/:serviceName/sql", sqlHandler.ExecuteQuery)
 		}
 		api.GET("/projects/:name/metrics", requireProject, serviceHandler.GetProjectMetrics)

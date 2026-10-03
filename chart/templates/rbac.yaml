@@ -33,8 +33,10 @@ rules:
     resources: ["persistentvolumeclaims"]
     verbs: ["get", "list", "delete"]
   # Observed state, read-only. ConfigMaps: the instance descriptors
-  # (<release>-okdp, label okdp.io/instance) in the project namespaces, and the
-  # platform values (okdp-platform-values) in the releases namespace.
+  # (<release>-okdp, label okdp.io/instance) and the values ConfigMaps of the
+  # vendored charts (<release>-<chart>-values, label okdp.io/vendor-values) in
+  # the project namespaces, and the platform values (okdp-platform-values) in
+  # the releases namespace.
   - apiGroups: [""]
     resources: ["configmaps"]
     verbs: ["get", "list", "watch"]

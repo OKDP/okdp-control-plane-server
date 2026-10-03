@@ -1821,6 +1821,63 @@
                 }
             }
         },
+        "/api/projects/{name}/services/{serviceName}/values": {
+            "get": {
+                "description": "For each upstream chart the instance's chart vendors (okdp.vendor.render), the values.yaml it was rendered with (from the ConfigMap \u003crelease\u003e-\u003cchart\u003e-values the chart emits), the vendored chart's default values.yaml, and the lines of the former that differ from the latter. Empty when the chart vendors nothing or predates the values ConfigMaps. Defaults that cannot be read (registry unreachable) leave defaultsError set instead of failing.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "services"
+                ],
+                "summary": "Values passed to the vendored upstream charts",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Service instance name",
+                        "name": "serviceName",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/models.RenderedValues"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/projects/{name}/spark-apps": {
             "get": {
                 "description": "Get all SparkApplication instances for a project",
@@ -4102,6 +4159,50 @@
                     "type": "string"
                 },
                 "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.RenderedValues": {
+            "type": "object",
+            "properties": {
+                "changedLines": {
+                    "description": "ChangedLines are the 1-based lines of Values that differ from Defaults.\nEmpty when nothing differs or when the defaults could not be read.",
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "chart": {
+                    "description": "Chart is the vendored chart (its directory under vendor/).",
+                    "type": "string",
+                    "example": "trino"
+                },
+                "chartVersion": {
+                    "description": "ChartVersion is the vendored chart, \u003cname\u003e-\u003cversion\u003e.",
+                    "type": "string",
+                    "example": "trino-1.42.1"
+                },
+                "defaults": {
+                    "description": "Defaults is the vendored chart's own values.yaml, as published (with\nits comments). Empty when it could not be read (see DefaultsError).",
+                    "type": "string"
+                },
+                "defaultsError": {
+                    "description": "DefaultsError says why the defaults are missing.",
+                    "type": "string"
+                },
+                "name": {
+                    "description": "Name is the values ConfigMap.",
+                    "type": "string",
+                    "example": "demo-trino-trino-values"
+                },
+                "serviceVersion": {
+                    "description": "ServiceVersion is the version of the instance's chart that rendered\nthese values (it can differ from the declared one during an update).",
+                    "type": "string",
+                    "example": "480.0.0-1.0.2"
+                },
+                "values": {
+                    "description": "Values is the values.yaml the vendored chart was rendered with.",
                     "type": "string"
                 }
             }

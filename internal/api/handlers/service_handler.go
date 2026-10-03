@@ -24,13 +24,19 @@ const (
 
 // ServiceHandler handles platform service and catalog requests
 type ServiceHandler struct {
-	service       service.ServiceService
-	schemaService service.PackageSchemaService
+	service        service.ServiceService
+	schemaService  service.PackageSchemaService
+	renderedValues service.RenderedValuesService
 }
 
 // NewServiceHandler creates a new ServiceHandler
 func NewServiceHandler(svc service.ServiceService, schemaSvc service.PackageSchemaService) *ServiceHandler {
 	return &ServiceHandler{service: svc, schemaService: schemaSvc}
+}
+
+// SetRenderedValuesService enables GET …/services/:serviceName/values.
+func (h *ServiceHandler) SetRenderedValuesService(svc service.RenderedValuesService) {
+	h.renderedValues = svc
 }
 
 // --- Platform services (managed by OKDP) ---
@@ -472,6 +478,39 @@ func (h *ServiceHandler) UpdateServiceParameters(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, instance)
+}
+
+// GetRenderedValues godoc
+// @Summary      Values passed to the vendored upstream charts
+// @Description  For each upstream chart the instance's chart vendors (okdp.vendor.render), the values.yaml it was rendered with (from the ConfigMap <release>-<chart>-values the chart emits), the vendored chart's default values.yaml, and the lines of the former that differ from the latter. Empty when the chart vendors nothing or predates the values ConfigMaps. Defaults that cannot be read (registry unreachable) leave defaultsError set instead of failing.
+// @Tags         services
+// @Produce      json
+// @Param        name path string true "Project name"
+// @Param        serviceName path string true "Service instance name"
+// @Success      200  {array}   models.RenderedValues
+// @Failure      404  {object}  map[string]string
+// @Failure      500  {object}  map[string]string
+// @Router       /api/projects/{name}/services/{serviceName}/values [get]
+func (h *ServiceHandler) GetRenderedValues(c *gin.Context) {
+	project := c.Param("name")
+	serviceName := c.Param("serviceName")
+	if h.renderedValues == nil {
+		c.JSON(http.StatusNotImplemented, gin.H{"error": "rendered values are not available"})
+		return
+	}
+	values, err := h.renderedValues.GetRenderedValues(c.Request.Context(), project, serviceName)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": fmt.Sprintf("Service '%s' not found in project '%s'", serviceName, project),
+			})
+			return
+		}
+		logrus.WithError(err).Error("Failed to get the rendered values")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, values)
 }
 
 // --- Pod operations ---

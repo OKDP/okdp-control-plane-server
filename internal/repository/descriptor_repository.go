@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -75,6 +76,9 @@ func (r *k8sDescriptorRepository) List(ctx context.Context, namespace string) ([
 	}
 	out := make([]Descriptor, 0, len(list.Items))
 	for i := range list.Items {
+		if !IsDescriptorConfigMap(&list.Items[i]) {
+			continue
+		}
 		out = append(out, DescriptorFromConfigMap(&list.Items[i]))
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Release < out[j].Release })
@@ -83,6 +87,27 @@ func (r *k8sDescriptorRepository) List(ctx context.Context, namespace string) ([
 
 func (r *k8sDescriptorRepository) Watch(ctx context.Context, namespace string) (watch.Interface, error) {
 	return r.client.CoreV1().ConfigMaps(namespace).Watch(ctx, metav1.ListOptions{LabelSelector: LabelDescriptorInstance})
+}
+
+// IsDescriptorConfigMap tells the descriptor <release>-okdp (okdp.fullname
+// with suffix "okdp") from the other ConfigMaps an OKDP chart labels with
+// okdp.labels, which carry okdp.io/instance too: the values ConfigMaps of
+// okdp.vendor.render (<release>-<chart>-values), a chart's own ConfigMaps.
+// Taking one of them for the descriptor would blank the instance's URL, usage
+// and outputs.
+func IsDescriptorConfigMap(cm *corev1.ConfigMap) bool {
+	release := cm.Labels[LabelDescriptorInstance]
+	return release != "" && cm.Name == DescriptorName(release)
+}
+
+// DescriptorName is the name of the descriptor ConfigMap of a release:
+// "<release>-okdp" cut at 63 characters, without a trailing "-".
+func DescriptorName(release string) string {
+	name := release + "-okdp"
+	if len(name) > 63 {
+		name = name[:63]
+	}
+	return strings.TrimSuffix(name, "-")
 }
 
 // DescriptorFromConfigMap parses a descriptor ConfigMap. A malformed

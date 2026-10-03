@@ -591,6 +591,45 @@ definitions:
       name:
         type: string
     type: object
+  models.RenderedValues:
+    properties:
+      changedLines:
+        description: |-
+          ChangedLines are the 1-based lines of Values that differ from Defaults.
+          Empty when nothing differs or when the defaults could not be read.
+        items:
+          type: integer
+        type: array
+      chart:
+        description: Chart is the vendored chart (its directory under vendor/).
+        example: trino
+        type: string
+      chartVersion:
+        description: ChartVersion is the vendored chart, <name>-<version>.
+        example: trino-1.42.1
+        type: string
+      defaults:
+        description: |-
+          Defaults is the vendored chart's own values.yaml, as published (with
+          its comments). Empty when it could not be read (see DefaultsError).
+        type: string
+      defaultsError:
+        description: DefaultsError says why the defaults are missing.
+        type: string
+      name:
+        description: Name is the values ConfigMap.
+        example: demo-trino-trino-values
+        type: string
+      serviceVersion:
+        description: |-
+          ServiceVersion is the version of the instance's chart that rendered
+          these values (it can differ from the declared one during an update).
+        example: 480.0.0-1.0.2
+        type: string
+      values:
+        description: Values is the values.yaml the vendored chart was rendered with.
+        type: string
+    type: object
   models.ResourceDefaults:
     properties:
       cores:
@@ -2296,6 +2335,49 @@ paths:
       summary: Execute a SQL query on a deployed SQL engine
       tags:
       - sql
+  /api/projects/{name}/services/{serviceName}/values:
+    get:
+      description: For each upstream chart the instance's chart vendors (okdp.vendor.render),
+        the values.yaml it was rendered with (from the ConfigMap <release>-<chart>-values
+        the chart emits), the vendored chart's default values.yaml, and the lines
+        of the former that differ from the latter. Empty when the chart vendors nothing
+        or predates the values ConfigMaps. Defaults that cannot be read (registry
+        unreachable) leave defaultsError set instead of failing.
+      parameters:
+      - description: Project name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Service instance name
+        in: path
+        name: serviceName
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/models.RenderedValues'
+            type: array
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Values passed to the vendored upstream charts
+      tags:
+      - services
   /api/projects/{name}/services/stream:
     get:
       description: 'Stream service status updates using Server-Sent Events (SSE):

@@ -156,6 +156,10 @@ func main() {
 		SidecarPrefixes: cfg.ExcludedSidecarPrefixes,
 	})
 	serviceHandler := handlers.NewServiceHandler(serviceService, schemaService)
+	// What each vendored upstream chart was rendered with (values ConfigMaps
+	// of okdp.vendor.render), against the defaults of the published chart.
+	serviceHandler.SetRenderedValuesService(service.NewDefaultRenderedValuesService(
+		deployments, repository.NewVendorValuesRepository(k8sTypedClient), cfg.InsecureOCIRegistries))
 
 	// Initialize Spark stack (SparkApplication CRUD)
 	sparkRepo := repository.NewSparkAppRepository(k8sClient)

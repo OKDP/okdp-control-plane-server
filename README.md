@@ -22,7 +22,8 @@ The OKDP web console is a browser single-page application with no cluster creden
 no server-side logic, so it cannot drive Kubernetes on its own. This repository is its
 backend: an API that turns console actions into commits to the platform's deployments
 Git repository (projects, service instances, connections, the service catalog), and reads
-back what the cluster reports, streaming status, pods and metrics.
+back what the cluster reports, streaming status, pods and metrics, and the values each
+service's vendored upstream charts were rendered with, compared with their defaults.
 
 It is a first-party OKDP component, developed alongside the web console. Cluster credentials
 and business logic stay on the server side, keeping the console a stateless browser client.
@@ -46,7 +47,7 @@ Project layout:
 - `internal/api`: HTTP handlers and router.
 - `internal/service`: business logic.
 - `internal/gitops`: the deployments repository (go-git writer, layout, Flux rendering).
-- `internal/repository`: cluster access (platform values, instance descriptors, GitOps engine status).
+- `internal/repository`: cluster access (platform values, instance descriptors, values ConfigMaps of the vendored charts, GitOps engine status).
 - `internal/config`: configuration loaded from environment variables.
 - `chart/`: Helm chart.
 

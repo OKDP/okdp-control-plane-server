@@ -55,6 +55,23 @@ func TestValuesSchemaFromChartArchivePicksTheChartsOwn(t *testing.T) {
 	}
 }
 
+func TestVendoredValuesFromChartArchive(t *testing.T) {
+	archive := chartArchive(t, map[string]string{
+		"trino/values.yaml":                                 "workers: 1\n",
+		"trino/vendor/trino/values.yaml":                    "image: trinodb/trino\n",
+		"trino/vendor/trino/templates/x.yaml":               "kind: x\n",
+		"trino/vendor/opa-kube-mgmt/values.yaml":            "replicas: 1\n",
+		"trino/vendor/opa-kube-mgmt/charts/lib/values.yaml": "subchart: true\n",
+	})
+	values, err := vendoredValuesFromChartArchive(bytes.NewReader(archive))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(values) != 2 || string(values["trino"]) != "image: trinodb/trino\n" || string(values["opa-kube-mgmt"]) != "replicas: 1\n" {
+		t.Fatalf("values = %q", values)
+	}
+}
+
 // A minimal OCI distribution endpoint serving one chart, to exercise the pull
 // the way a registry answers it.
 func TestOCIChartSchemaFetcherPullsFromARegistry(t *testing.T) {

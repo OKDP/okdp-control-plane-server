@@ -55,3 +55,39 @@ func TestDeployConflictsCarryDistinctCodes(t *testing.T) {
 		t.Fatalf("duplicate instance: %d %v", code, body)
 	}
 }
+
+type renderedValuesStub struct {
+	values []models.RenderedValues
+	err    error
+}
+
+func (s renderedValuesStub) GetRenderedValues(context.Context, string, string) ([]models.RenderedValues, error) {
+	return s.values, s.err
+}
+
+func getRenderedValues(t *testing.T, svc service.RenderedValuesService) (int, string) {
+	t.Helper()
+	h := NewServiceHandler(nil, nil)
+	if svc != nil {
+		h.SetRenderedValuesService(svc)
+	}
+	engine := gin.New()
+	engine.GET("/api/projects/:name/services/:serviceName/values", h.GetRenderedValues)
+	recorder := httptest.NewRecorder()
+	engine.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/projects/demo/services/sql/values", nil))
+	return recorder.Code, recorder.Body.String()
+}
+
+func TestGetRenderedValues(t *testing.T) {
+	code, body := getRenderedValues(t, renderedValuesStub{values: []models.RenderedValues{{Name: "demo-sql-trino-values", Chart: "trino", Values: "a: 1\n", ChangedLines: []int{1}}}})
+	if code != http.StatusOK || !strings.Contains(body, `"changedLines":[1]`) || !strings.Contains(body, `"chart":"trino"`) {
+		t.Fatalf("200: %d %s", code, body)
+	}
+	notFound := apierrors.NewNotFound(schema.GroupResource{Resource: "services"}, "sql")
+	if code, body := getRenderedValues(t, renderedValuesStub{err: notFound}); code != http.StatusNotFound || !strings.Contains(body, "not found in project 'demo'") {
+		t.Fatalf("404: %d %s", code, body)
+	}
+	if code, _ := getRenderedValues(t, nil); code != http.StatusNotImplemented {
+		t.Fatalf("no service: %d", code)
+	}
+}
