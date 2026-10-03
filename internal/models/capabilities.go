@@ -2,22 +2,26 @@ package models
 
 // Capabilities describes the optional features the platform is configured
 // with, so the UI can adapt (e.g. hide the Identity section when user
-// management is not available). Derived from the Context at request time.
+// management is not available). Derived from the platform values and the
+// server configuration at request time.
 type Capabilities struct {
 	Identity         IdentityCapability         `json:"identity"`
 	OidcProvisioning OidcProvisioningCapability `json:"oidcProvisioning"`
 }
 
-// IdentityCapability describes how the platform integrates with its identity provider.
+// IdentityCapability describes how the console authenticates against the
+// platform's identity provider (Keycloak).
 type IdentityCapability struct {
-	// Provider is the configured identity provider: "external" (BYO OIDC,
-	// default) or "kubauth".
+	// Provider is who manages the platform users: "keycloak" when this server
+	// manages them through the Keycloak Admin API, "external" otherwise
+	// (users are managed in Keycloak directly).
 	Provider string `json:"provider"`
-	// UserManagement is true when the kubauth-specific user/group management
-	// API (/api/v1/identity) is available.
+	// UserManagement is true when the user/group management API
+	// (/api/v1/identity) is available: the server has Keycloak admin
+	// credentials and a realm to apply them to.
 	UserManagement bool `json:"userManagement"`
 	// Oidc is the OIDC client the console UI should authenticate with,
-	// resolved from the Context (identity.oidc). Absent when the platform
+	// resolved from the platform values (global.okdp.identity.oidc). Absent when the platform
 	// does not publish it: the UI falls back to its build-time configuration.
 	Oidc *IdentityOidcConfig `json:"oidc,omitempty"`
 }
@@ -34,7 +38,7 @@ type IdentityOidcConfig struct {
 
 // OidcProvisioningCapability describes the OIDC client provisioning backend.
 type OidcProvisioningCapability struct {
-	// Provider is the configured provisioning backend: "none" (default),
-	// "kubauth" or "keycloak".
+	// Provider is the configured provisioning backend: "none" (default) or
+	// "keycloak".
 	Provider string `json:"provider"`
 }

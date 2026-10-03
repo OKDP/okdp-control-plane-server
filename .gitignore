@@ -2,7 +2,6 @@
 bin/
 main
 okdp-control-plane-server
-kubocd-local
 *.exe
 *.exe~
 *.dll

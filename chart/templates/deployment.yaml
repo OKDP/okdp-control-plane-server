@@ -19,16 +19,35 @@ spec:
         {{- include "okdp-control-plane-server.labels" . | nindent 8 }}
     spec:
       serviceAccountName: {{ include "okdp-control-plane-server.fullname" . }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: {{ .Chart.Name }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           envFrom:
             - configMapRef:
                 name: {{ include "okdp-control-plane-server.fullname" . }}
-          {{- with .Values.proxy }}
-          {{- if or .httpProxy .httpsProxy .noProxy }}
+          {{- $kc := .Values.keycloak.credentialsSecret }}
+          {{- $proxy := .Values.proxy }}
+          {{- if or $kc.name $proxy.httpProxy $proxy.httpsProxy $proxy.noProxy }}
           env:
+            {{- if $kc.name }}
+            # Keycloak Admin API service account (user and group management).
+            - name: KEYCLOAK_CLIENT_ID
+              valueFrom:
+                secretKeyRef: { name: {{ $kc.name | quote }}, key: {{ $kc.clientIdKey | default "client_id" | quote }} }
+            - name: KEYCLOAK_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef: { name: {{ $kc.name | quote }}, key: {{ $kc.clientSecretKey | default "client_secret" | quote }} }
+            {{- end }}
+            {{- with $proxy }}
             {{- if .httpProxy }}
             - { name: HTTP_PROXY,  value: {{ .httpProxy | quote }} }
             - { name: http_proxy,  value: {{ .httpProxy | quote }} }
@@ -41,7 +60,7 @@ spec:
             - { name: NO_PROXY,    value: {{ .noProxy | quote }} }
             - { name: no_proxy,    value: {{ .noProxy | quote }} }
             {{- end }}
-          {{- end }}
+            {{- end }}
           {{- end }}
           ports:
             - name: http
@@ -57,5 +76,30 @@ spec:
             httpGet:
               path: /health
               port: http
+          volumeMounts:
+            # The local clone of the deployments repository: a cache only,
+            # Git is the store.
+            - name: gitops-clone
+              mountPath: /var/cache/okdp/gitops
+            # HOME of the image (Git and registry clients) and the temporary
+            # directory: the root filesystem is read-only.
+            - name: tmp
+              mountPath: /tmp
+            {{- if .Values.gitops.credentialsSecret }}
+            - name: gitops-credentials
+              mountPath: /etc/okdp/gitops-credentials
+              readOnly: true
+            {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: gitops-clone
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+        {{- if .Values.gitops.credentialsSecret }}
+        - name: gitops-credentials
+          secret:
+            secretName: {{ .Values.gitops.credentialsSecret }}
+            defaultMode: 0400
+        {{- end }}

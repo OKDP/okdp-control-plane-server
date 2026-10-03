@@ -1,0 +1,304 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "trino",
+  "type": "object",
+  "properties": {
+    "global": {
+      "type": "object",
+      "description": "Platform values, from platform/platform-values.yaml (global.okdp)."
+    },
+    "connections": {
+      "type": "object",
+      "description": "External connections, one values layer per projects/<project>/connections/<name>.yaml.",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "contract"
+        ],
+        "properties": {
+          "contract": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "secretRef": {
+            "type": "object",
+            "required": [
+              "name"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "okdp-lib": {
+      "type": "object",
+      "description": "Values slot Helm creates for the okdp-lib library dependency. Not a parameter."
+    },
+    "hiveCatalogs": {
+      "type": "array",
+      "title": "Hive catalogs",
+      "description": "Hive catalogs, one Trino catalog per item, each on its own metastore and object store.",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "metastore",
+          "storage"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "Trino catalog name.",
+            "pattern": "^[a-z][a-z0-9_-]*$"
+          },
+          "metastore": {
+            "type": "string",
+            "title": "Metastore",
+            "description": "Hive metastore connection backing this catalog.",
+            "x-okdp-connection-ref": {
+              "contract": "hive"
+            }
+          },
+          "storage": {
+            "type": "string",
+            "title": "Object store",
+            "description": "S3 object store connection backing this catalog.",
+            "x-okdp-connection-ref": {
+              "contract": "s3"
+            }
+          },
+          "s3SecretRef": {
+            "type": "string",
+            "title": "S3 credentials secret",
+            "description": "S3 identity used against this store. Secret with keys: accessKey, secretKey. Defaults to the instance s3SecretRef."
+          }
+        }
+      },
+      "default": [],
+      "x-ui-group": "Catalogs",
+      "x-ui-order": 1
+    },
+    "icebergCatalogs": {
+      "type": "array",
+      "title": "Iceberg REST catalogs",
+      "description": "Iceberg REST catalogs (Polaris), one Trino catalog per item, each on its own object store.",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "catalog",
+          "storage"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "Trino catalog name.",
+            "pattern": "^[a-z][a-z0-9_-]*$"
+          },
+          "catalog": {
+            "type": "string",
+            "title": "Catalog",
+            "description": "Iceberg REST catalog connection.",
+            "x-okdp-connection-ref": {
+              "contract": "iceberg-catalog"
+            }
+          },
+          "storage": {
+            "type": "string",
+            "title": "Object store",
+            "description": "S3 object store connection backing this catalog.",
+            "x-okdp-connection-ref": {
+              "contract": "s3"
+            }
+          },
+          "warehouse": {
+            "type": "string",
+            "title": "Warehouse",
+            "description": "Polaris catalog used as the warehouse. Defaults to the realm published on the connection."
+          },
+          "oidcSecretRef": {
+            "type": "string",
+            "title": "OAuth client secret",
+            "description": "OAuth client Trino uses against this catalog. Secret with keys: client_id, client_secret. Defaults to creds-<release>-oauth2."
+          },
+          "oauth2Scope": {
+            "type": "string",
+            "title": "OAuth2 scope",
+            "default": "PRINCIPAL_ROLE:ALL",
+            "description": "OAuth2 scope requested. Polaris rejects the connector default."
+          },
+          "s3SecretRef": {
+            "type": "string",
+            "title": "S3 credentials secret",
+            "description": "S3 identity used against this store. Secret with keys: accessKey, secretKey. Defaults to the instance s3SecretRef."
+          }
+        }
+      },
+      "default": [],
+      "x-ui-group": "Catalogs",
+      "x-ui-order": 2
+    },
+    "s3SecretRef": {
+      "type": "string",
+      "title": "S3 credentials secret",
+      "description": "Default S3 identity of this instance, used by any catalog that does not name its own. Secret with keys: accessKey, secretKey.",
+      "x-ui-group": "Catalogs",
+      "x-ui-order": 3
+    },
+    "numWorkers": {
+      "type": "integer",
+      "title": "Workers",
+      "default": 1,
+      "minimum": 0,
+      "description": "Number of workers",
+      "x-ui-group": "Sizing",
+      "x-ui-order": 1,
+      "x-ui-widget": "stepper",
+      "x-ui-columns": 2,
+      "x-ui-advanced": true
+    },
+    "workerCpu": {
+      "type": "number",
+      "title": "Worker CPU (vCPU)",
+      "default": 0.5,
+      "multipleOf": 0.25,
+      "description": "Worker CPU request in vCPU. The limit is twice the request.",
+      "x-ui-group": "Sizing",
+      "x-ui-order": 2,
+      "x-ui-columns": 2,
+      "x-ui-advanced": true
+    },
+    "workerMemoryGi": {
+      "type": "number",
+      "title": "Worker memory (GiB)",
+      "default": 2,
+      "multipleOf": 0.25,
+      "description": "Worker memory request in GiB. The limit is twice the request.",
+      "x-ui-group": "Sizing",
+      "x-ui-order": 3,
+      "x-ui-columns": 2,
+      "x-ui-advanced": true
+    },
+    "coordinatorMemoryGi": {
+      "type": "number",
+      "title": "Coordinator memory (GiB)",
+      "default": 8,
+      "multipleOf": 0.25,
+      "description": "Coordinator memory limit in GiB (request: 1 GiB).",
+      "x-ui-group": "Sizing",
+      "x-ui-order": 4,
+      "x-ui-columns": 2,
+      "x-ui-advanced": true
+    },
+    "enableOPA": {
+      "type": "boolean",
+      "title": "Enable OPA",
+      "default": true,
+      "description": "Whether to enable OPA.",
+      "x-ui-group": "Authorization",
+      "x-ui-order": 1
+    },
+    "enableOPAL": {
+      "type": "boolean",
+      "title": "Enable OPAL",
+      "default": false,
+      "description": "Whether to enable OPAL. When false, OPA policies are loaded from labeled ConfigMaps by the kube-mgmt sidecar.",
+      "x-ui-group": "Authorization",
+      "x-ui-order": 3,
+      "x-ui-condition": {
+        "field": "enableOPA",
+        "value": true
+      }
+    },
+    "enableOPADebugLogs": {
+      "type": "boolean",
+      "title": "Debug logs",
+      "default": false,
+      "description": "Log OPA status and decision logs to the container console. Verbose, intended for debugging.",
+      "x-ui-group": "Authorization",
+      "x-ui-order": 8,
+      "x-ui-advanced": true,
+      "x-ui-condition": {
+        "field": "enableOPA",
+        "value": true
+      }
+    },
+    "policyRepoUrl": {
+      "type": "string",
+      "title": "Policy repository",
+      "default": "https://github.com/OKDP/okdp-examples.git",
+      "description": "OPA policy repo URL",
+      "x-ui-group": "Authorization",
+      "x-ui-order": 4,
+      "x-ui-advanced": true,
+      "x-ui-condition": {
+        "field": "enableOPAL",
+        "value": true
+      }
+    },
+    "policyRepoMainBranch": {
+      "type": "string",
+      "title": "Policy branch",
+      "default": "main",
+      "description": "OPA policy repo branch.",
+      "x-ui-group": "Authorization",
+      "x-ui-order": 5,
+      "x-ui-columns": 2,
+      "x-ui-advanced": true,
+      "x-ui-condition": {
+        "field": "enableOPAL",
+        "value": true
+      }
+    },
+    "OPAL_POLICY_SUBSCRIPTION_DIRS": {
+      "type": "string",
+      "title": "Policy directories",
+      "default": "trino_opa_policy",
+      "description": "Policy directories in the repository for which the client will subscribe to, separated by ':'.",
+      "x-ui-group": "Authorization",
+      "x-ui-order": 6,
+      "x-ui-advanced": true,
+      "x-ui-condition": {
+        "field": "enableOPAL",
+        "value": true
+      }
+    },
+    "OPAL_POLICY_REPO_MANIFEST_PATH": {
+      "type": "string",
+      "title": "Policy manifest path",
+      "default": "trino_opa_policy",
+      "description": "The location of the manifest file in the remote repository.",
+      "x-ui-group": "Authorization",
+      "x-ui-order": 7,
+      "x-ui-advanced": true,
+      "x-ui-condition": {
+        "field": "enableOPAL",
+        "value": true
+      }
+    },
+    "opaPolicyPath": {
+      "type": "string",
+      "title": "Policy path",
+      "default": "v1/data/trino/allow",
+      "description": "Path of the OPA policies for Trino used in the Trino variable opa.policy.uri.",
+      "x-ui-group": "Authorization",
+      "x-ui-order": 2,
+      "x-ui-advanced": true,
+      "x-ui-condition": {
+        "field": "enableOPA",
+        "value": true
+      }
+    }
+  },
+  "additionalProperties": false
+}

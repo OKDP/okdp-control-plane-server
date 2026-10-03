@@ -8,11 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
-	"os/exec"
-	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,7 +17,6 @@ import (
 	"github.com/okdp/okdp-control-plane-server/internal/repository"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sync/singleflight"
-	"gopkg.in/yaml.v3"
 )
 
 type ServiceVersionsResponse struct {
@@ -38,12 +33,13 @@ type PackageSchemaService interface {
 	ListVersionsForServices(ctx context.Context, services []models.PlatformService) map[string][]string
 	// ListPackageTags returns the tags published in the OCI registry for a service's
 	// package, even if the service is not (yet) in the catalog. repositoryOverride
-	// takes precedence over the Context's global package repository when non-empty.
+	// takes precedence over the catalog's default chart repository when non-empty.
 	ListPackageTags(ctx context.Context, serviceName, repositoryOverride string) ([]string, error)
 }
 
 type DefaultPackageSchemaService struct {
-	contextRepo        repository.ContextRepository
+	contextRepo        repository.PlatformRepository
+	charts             ChartSchemaFetcher
 	cache              sync.Map
 	inflight           singleflight.Group
 	tagsCache          sync.Map
@@ -59,17 +55,23 @@ func (s *DefaultPackageSchemaService) SetInsecureRegistries(hosts []string) {
 
 type schemaCacheEntry struct {
 	schema map[string]any
-	// inputs is the package's declared connection inputs, read from the same
-	// dump as the schema so a package is fetched once for both.
+	// inputs is the chart's declared connection inputs, read from the same
+	// schema so a chart is fetched once for both.
 	inputs    []models.PackageInput
 	fetchedAt time.Time
 }
 
-func NewDefaultPackageSchemaService(contextRepo repository.ContextRepository) *DefaultPackageSchemaService {
+func NewDefaultPackageSchemaService(contextRepo repository.PlatformRepository) *DefaultPackageSchemaService {
 	return &DefaultPackageSchemaService{
 		contextRepo: contextRepo,
+		charts:      NewOCIChartSchemaFetcher(),
 		cacheTTL:    15 * time.Minute,
 	}
+}
+
+// SetChartFetcher replaces how chart schemas are pulled (tests).
+func (s *DefaultPackageSchemaService) SetChartFetcher(f ChartSchemaFetcher) {
+	s.charts = f
 }
 
 func (s *DefaultPackageSchemaService) GetServiceVersions(ctx context.Context, serviceName string) (*ServiceVersionsResponse, error) {
@@ -107,6 +109,9 @@ func (s *DefaultPackageSchemaService) GetServiceVersions(ctx context.Context, se
 			versions = []string{defaultVersion}
 		}
 	}
+	if versions == nil {
+		versions = []string{}
+	}
 
 	return &ServiceVersionsResponse{
 		Versions: versions,
@@ -114,7 +119,7 @@ func (s *DefaultPackageSchemaService) GetServiceVersions(ctx context.Context, se
 	}, nil
 }
 
-// ListPackageTags resolves the package repository from the Context (or the
+// ListPackageTags resolves the chart repository from the catalog (or the
 // per-service override when set) and lists the OCI tags published for the given
 // service's package.
 const tagsCacheTTL = 5 * time.Minute
@@ -202,6 +207,7 @@ func (s *DefaultPackageSchemaService) ListPackageTags(ctx context.Context, servi
 
 // listOCITags fetches available tags from the OCI registry for a given package.
 func (s *DefaultPackageSchemaService) listOCITags(packageRepo, serviceName string) ([]string, error) {
+	packageRepo = strings.TrimPrefix(packageRepo, "oci://")
 	// packageRepo is like "quay.io/kubotal/packages-dev"
 	scheme := "https"
 	if insecureOCIHost(packageRepo, s.insecureRegistries) {
@@ -213,7 +219,7 @@ func (s *DefaultPackageSchemaService) listOCITags(packageRepo, serviceName strin
 	}
 	registryURL := fmt.Sprintf("%s://%s/v2/%s/tags/list", scheme, host, path+"/"+serviceName)
 
-	resp, err := registryGet(registryURL)
+	resp, err := registryGet(registryURL, s.insecureRegistries)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch tags from %s: %w", registryURL, err)
 	}
@@ -223,7 +229,7 @@ func (s *DefaultPackageSchemaService) listOCITags(packageRepo, serviceName strin
 		return nil, fmt.Errorf("registry returned status %d for %s", resp.StatusCode, registryURL)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readBounded(resp.Body, maxRegistryResponse)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read registry response: %w", err)
 	}
@@ -239,12 +245,57 @@ func (s *DefaultPackageSchemaService) listOCITags(packageRepo, serviceName strin
 	return tagsResp.Tags, nil
 }
 
+// registryTimeout bounds one registry call (tag listing or token). A registry
+// that accepts the connection and never answers would otherwise pin the
+// request, and the goroutine serving it, forever.
+const registryTimeout = 30 * time.Second
+
+// maxRegistryResponse bounds what a tag list or a token answer may weigh: a
+// few kilobytes in practice, never the whole body of whatever answers there.
+const maxRegistryResponse = 4 << 20
+
+// registryClient is the one client of the registry calls: bounded in time, and
+// never led to another host or down to plain HTTP by a redirect.
+var registryClient = &http.Client{
+	Timeout:       registryTimeout,
+	CheckRedirect: sameOriginRedirects,
+}
+
+func sameOriginRedirects(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return errors.New("stopped after 10 redirects")
+	}
+	first := via[0].URL
+	if req.URL.Host != first.Host || (first.Scheme == "https" && req.URL.Scheme != "https") {
+		return fmt.Errorf("refusing a redirect from %s://%s to %s://%s", first.Scheme, first.Host, req.URL.Scheme, req.URL.Host)
+	}
+	return nil
+}
+
+// readBounded reads at most limit bytes, and fails rather than truncate.
+func readBounded(r io.Reader, limit int64) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("the response is larger than %d bytes", limit)
+	}
+	return data, nil
+}
+
 // registryGet performs a Docker Registry v2 GET, honoring the anonymous
 // bearer-token challenge some registries issue even for public repositories
 // (ghcr.io always does; quay.io serves public reads without it): on 401,
 // fetch a pull token from the advertised realm and replay the request.
-func registryGet(url string) (*http.Response, error) {
-	resp, err := http.Get(url)
+// insecureHosts are the INSECURE_OCI_REGISTRIES, the only hosts whose token
+// realm may be plain HTTP.
+func registryGet(rawURL string, insecureHosts []string) (*http.Response, error) {
+	registry, err := url.Parse(rawURL)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := registryClient.Get(rawURL)
 	if err != nil {
 		return nil, err
 	}
@@ -255,17 +306,54 @@ func registryGet(url string) (*http.Response, error) {
 	challenge := resp.Header.Get("WWW-Authenticate")
 	resp.Body.Close()
 
-	token, err := fetchAnonymousToken(challenge)
+	token, err := fetchAnonymousToken(challenge, registry.Host, insecureOCIHost(registry.Host, insecureHosts))
 	if err != nil {
 		return nil, fmt.Errorf("registry requires authentication and the anonymous token flow failed: %w", err)
 	}
 
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
-	return http.DefaultClient.Do(req)
+	return registryClient.Do(req)
+}
+
+// knownTokenHosts are the token services that live on another host than
+// their registry. Every other registry the platform uses (quay.io, ghcr.io,
+// Harbor, the distribution registry) serves its realm on its own host.
+var knownTokenHosts = map[string]string{
+	"registry-1.docker.io": "auth.docker.io",
+	"docker.io":            "auth.docker.io",
+}
+
+// checkTokenRealm refuses a realm the server should not be sent to: the
+// WWW-Authenticate header is whatever the registry (or anything on its path)
+// says, and following it blindly turns the tag listing into a request to any
+// URL, internal ones included. The realm must be HTTPS (plain HTTP only for a
+// registry declared insecure) and on the registry's own host, or on the known
+// token service of that registry.
+func checkTokenRealm(realm, registryHost string, insecure bool) (*url.URL, error) {
+	u, err := url.Parse(realm)
+	if err != nil || u.Host == "" {
+		return nil, fmt.Errorf("the token realm %q is not an absolute URL", realm)
+	}
+	switch {
+	case u.Scheme == "https":
+	case u.Scheme == "http" && insecure:
+	default:
+		return nil, fmt.Errorf("refusing the token realm %q: it must be https", realm)
+	}
+	registryName := hostname(registryHost)
+	if u.Hostname() != registryName && u.Hostname() != knownTokenHosts[registryName] {
+		return nil, fmt.Errorf("refusing the token realm %q: it is not on the registry host %s", realm, registryName)
+	}
+	return u, nil
+}
+
+// hostname strips the port of a host[:port].
+func hostname(host string) string {
+	return (&url.URL{Host: host}).Hostname()
 }
 
 // parseBearerChallenge extracts the realm and query parameters (service,
@@ -300,13 +388,22 @@ func parseBearerChallenge(header string) (realm string, params url.Values, err e
 // fetchAnonymousToken resolves a bearer challenge by requesting a token from
 // its realm without credentials, registries grant pull tokens anonymously
 // for public repositories.
-func fetchAnonymousToken(challenge string) (string, error) {
+func fetchAnonymousToken(challenge, registryHost string, insecure bool) (string, error) {
 	realm, params, err := parseBearerChallenge(challenge)
 	if err != nil {
 		return "", err
 	}
+	realmURL, err := checkTokenRealm(realm, registryHost, insecure)
+	if err != nil {
+		return "", err
+	}
+	query := realmURL.Query()
+	for key, values := range params {
+		query[key] = values
+	}
+	realmURL.RawQuery = query.Encode()
 
-	resp, err := http.Get(realm + "?" + params.Encode())
+	resp, err := registryClient.Get(realmURL.String())
 	if err != nil {
 		return "", err
 	}
@@ -319,7 +416,7 @@ func fetchAnonymousToken(challenge string) (string, error) {
 		Token       string `json:"token"`
 		AccessToken string `json:"access_token"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxRegistryResponse)).Decode(&tokenResp); err != nil {
 		return "", fmt.Errorf("failed to parse token response: %w", err)
 	}
 	if tokenResp.Token != "" {
@@ -419,216 +516,64 @@ func (s *DefaultPackageSchemaService) fetchAndCache(serviceName, tag, packageRep
 		}
 	}
 
-	ociRef := fmt.Sprintf("oci://%s/%s:%s", packageRepo, serviceName, tag)
-	doc, err := s.fetchGroomedDoc(ociRef, insecureOCIHost(packageRepo, s.insecureRegistries))
+	packageRepo = strings.TrimPrefix(packageRepo, "oci://")
+	repository := fmt.Sprintf("%s/%s", packageRepo, serviceName)
+	ctx, cancel := context.WithTimeout(context.Background(), chartFetchTimeout)
+	defer cancel()
+	chart, err := s.charts.FetchValuesSchema(ctx, repository, tag, insecureOCIHost(packageRepo, s.insecureRegistries))
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch schema for %s: %w", ociRef, err)
+		return nil, fmt.Errorf("failed to fetch the schema of oci://%s:%s: %w", repository, tag, err)
 	}
 
-	schema, err := parametersOf(doc)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch schema for %s: %w", ociRef, err)
-	}
-
-	// connectionRef parameters and the hand-written stanza coexist (an alias
-	// collision is a groom-time error upstream), so both sources are offered.
+	schema := parameterSchema(chart.Schema, chart.Dependencies...)
 	entry := &schemaCacheEntry{
-		schema:    parseTitleMetadata(schema),
-		inputs:    append(inputsFromMarkers(doc), inputsOf(doc)...),
+		schema:    schema,
+		inputs:    inputsFromMarkers(schema),
 		fetchedAt: time.Now(),
 	}
 	s.cache.Store(cacheKey, entry)
 	return entry, nil
 }
 
-// dumpTimeout bounds one `kubocd dump package`, which pulls an OCI artifact.
-// Generous on purpose: a cold registry over a slow link is not a failure.
-const dumpTimeout = 60 * time.Second
+// chartFetchTimeout bounds one chart pull. Generous on purpose: a cold
+// registry over a slow link is not a failure. Without a budget, a registry that
+// accepts the connection and never answers pins the request forever.
+const chartFetchTimeout = 60 * time.Second
 
-func (s *DefaultPackageSchemaService) fetchGroomedDoc(ociRef string, insecure bool) (map[string]any, error) {
-	tmpDir, err := os.MkdirTemp("", "kubocd-dump-*")
-	if err != nil {
-		return nil, fmt.Errorf("failed to create temp dir: %w", err)
+// PlatformKeys are the root properties of every OKDP chart schema that the
+// platform fills, never the user: the platform values and the external
+// connection layers. The chart's dependencies (okdp-lib, former modules) are
+// reserved the same way.
+var PlatformKeys = []string{"global", "connections"}
+
+// parameterSchema turns a chart's values.schema.json into the schema of the
+// user parameters: the same document without the reserved root properties
+// (PlatformKeys and the dependency keys). The console renders it as the
+// deployment form, and submitted parameters are validated against it: with
+// the chart's additionalProperties: false, a reserved key is refused. The
+// x-ui-* keywords are the chart's own, passed through untouched.
+func parameterSchema(chartSchema map[string]any, dependencies ...string) map[string]any {
+	reserved := map[string]bool{}
+	for _, key := range append(append([]string{}, PlatformKeys...), dependencies...) {
+		reserved[key] = true
 	}
-	defer os.RemoveAll(tmpDir)
-
-	args := []string{"dump", "package", ociRef, "--anonymous", "-o", tmpDir}
-	if insecure {
-		args = append(args, "--insecure")
-	}
-
-	// A budget, because this reaches a registry over the network. Without one, a
-	// registry that accepts the connection and never answers pins the request,
-	// and with it the goroutine serving it, for as long as the process lives.
-	ctx, cancel := context.WithTimeout(context.Background(), dumpTimeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, "kubocd", args...)
-	output, err := cmd.CombinedOutput()
-	if ctx.Err() == context.DeadlineExceeded {
-		logrus.WithField("ref", ociRef).WithField("timeout", dumpTimeout).Error("kubocd dump timed out")
-		return nil, fmt.Errorf("kubocd dump timed out after %s for %s, the registry did not answer", dumpTimeout, ociRef)
-	}
-	if err != nil {
-		if stale := staleKubocd(string(output)); stale != "" {
-			logrus.WithField("ref", ociRef).Error(stale)
-			return nil, errors.New(stale)
-		}
-		logrus.WithError(err).WithField("output", string(output)).Error("kubocd dump failed")
-		return nil, fmt.Errorf("kubocd dump failed: %s", string(output))
-	}
-
-	entries, err := os.ReadDir(tmpDir)
-	if err != nil || len(entries) == 0 {
-		return nil, fmt.Errorf("no dump output found in %s", tmpDir)
-	}
-
-	groomedPath := fmt.Sprintf("%s/%s/groomed.yaml", tmpDir, entries[0].Name())
-	data, err := os.ReadFile(groomedPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read groomed.yaml: %w", err)
-	}
-
-	var groomedDoc map[string]any
-	if err := yaml.Unmarshal(data, &groomedDoc); err != nil {
-		return nil, fmt.Errorf("failed to parse groomed.yaml: %w", err)
-	}
-
-	return groomedDoc, nil
-}
-
-// splitOptions cuts the option segment of a title on spaces, except inside
-// double quotes. Unquoted values cannot hold a space.
-func splitOptions(segment string) []string {
-	// An unbalanced quote would swallow every option after it. Splitting on
-	// spaces truncates one value instead of dropping the rest silently.
-	if strings.Count(segment, `"`)%2 != 0 {
-		logrus.Warnf("unbalanced quote in title options %q, falling back to splitting on spaces", segment)
-		return strings.Fields(segment)
-	}
-
-	var options []string
-	var current strings.Builder
-	inQuotes := false
-
-	flush := func() {
-		if current.Len() > 0 {
-			options = append(options, current.String())
-			current.Reset()
+	result := deepCopyMap(chartSchema)
+	if props, ok := result["properties"].(map[string]any); ok {
+		for key := range reserved {
+			delete(props, key)
 		}
 	}
-
-	for _, r := range segment {
-		switch {
-		case r == '"':
-			inQuotes = !inQuotes
-			current.WriteRune(r)
-		case r == ' ' && !inQuotes:
-			flush()
-		default:
-			current.WriteRune(r)
-		}
-	}
-	flush()
-	return options
-}
-
-// parseTitleMetadata reads the `title` field from each property and expands it
-// into `x-ui-*` fields.
-//
-// Title format: "Group | Label | widget | key:value key:value..."
-//   - Segment 1: group name (becomes x-ui-group)
-//   - Segment 2: display label (replaces title)
-//   - Segment 3: widget name (becomes x-ui-widget, empty = auto-detect)
-//   - Segment 4+: space-separated key:value pairs (become x-ui-<key>).
-//     Quote a value that holds spaces: placeholder:"e.g. 10Gi, 50Gi".
-//
-// If title has no "|" separators, it's treated as a plain label (no UI hints).
-func parseTitleMetadata(schema map[string]any) map[string]any {
-	result := deepCopyMap(schema)
-
-	props, ok := result["properties"].(map[string]any)
-	if !ok {
-		return result
-	}
-
-	for _, propDef := range props {
-		propMap, ok := propDef.(map[string]any)
-		if !ok {
-			continue
-		}
-
-		titleRaw, ok := propMap["title"]
-		if !ok {
-			continue
-		}
-		title, ok := titleRaw.(string)
-		if !ok || !strings.Contains(title, "|") {
-			continue
-		}
-
-		parts := strings.SplitN(title, "|", 4)
-		for i := range parts {
-			parts[i] = strings.TrimSpace(parts[i])
-		}
-
-		if len(parts) >= 1 && parts[0] != "" {
-			propMap["x-ui-group"] = parts[0]
-		}
-
-		if len(parts) >= 2 && parts[1] != "" {
-			propMap["title"] = parts[1]
-		} else {
-			delete(propMap, "title")
-		}
-
-		if len(parts) >= 3 && parts[2] != "" {
-			propMap["x-ui-widget"] = parts[2]
-		}
-
-		if len(parts) >= 4 && parts[3] != "" {
-			for _, kv := range splitOptions(parts[3]) {
-				eqIdx := strings.Index(kv, ":")
-				if eqIdx < 0 {
-					continue
-				}
-				key := kv[:eqIdx]
-				val := strings.Trim(kv[eqIdx+1:], `"`)
-
-				switch key {
-				case "condition":
-					eqParts := strings.SplitN(val, "=", 2)
-					if len(eqParts) == 2 {
-						condVal := parseValue(eqParts[1])
-						propMap["x-ui-condition"] = map[string]any{
-							"field": eqParts[0],
-							"value": condVal,
-						}
-					}
-				default:
-					propMap["x-ui-"+key] = parseValue(val)
-				}
+	if required, ok := result["required"].([]any); ok {
+		kept := make([]any, 0, len(required))
+		for _, r := range required {
+			if name, _ := r.(string); reserved[name] {
+				continue
 			}
+			kept = append(kept, r)
 		}
+		result["required"] = kept
 	}
-
 	return result
-}
-
-func parseValue(s string) any {
-	if s == "true" {
-		return true
-	}
-	if s == "false" {
-		return false
-	}
-	if i, err := strconv.Atoi(s); err == nil {
-		return i
-	}
-	if f, err := strconv.ParseFloat(s, 64); err == nil {
-		return f
-	}
-	return s
 }
 
 func deepCopyMap(src map[string]any) map[string]any {
@@ -638,153 +583,81 @@ func deepCopyMap(src map[string]any) map[string]any {
 	return dst
 }
 
-// parametersOf pulls the parameter schema out of a package document.
-func parametersOf(doc map[string]any) (map[string]any, error) {
-	schemaSection, ok := doc["schema"].(map[string]any)
-	if !ok {
-		return nil, fmt.Errorf("no 'schema' section in groomed output")
-	}
-	parameters, ok := schemaSection["parameters"].(map[string]any)
-	if !ok {
-		return nil, fmt.Errorf("no 'schema.parameters' in groomed output")
-	}
-	return parameters, nil
-}
+// ConnectionRefKeyword marks a string parameter holding the name of a
+// connection of a contract: {"x-okdp-connection-ref": {"contract": "<contract>"}}.
+const ConnectionRefKeyword = "x-okdp-connection-ref"
 
-// namedConnectionParameter finds the parameter reference in the template a
-// package uses to let the user pick the connection, typically
-// `{{ .Parameters.pgConnection | default "-" }}`. Pipelines around it are the
-// norm (the default is how an optional input expresses "none"), so this
-// searches for the reference rather than matching the whole template. An input
-// bound any other way (a fixed name, a release output) has no reference and
-// offers the user no choice.
-var namedConnectionParameter = regexp.MustCompile(`\.Parameters\.([A-Za-z_][A-Za-z0-9_]*)`)
-
-// inputsOf reads the connections a package declares it needs. A package with
-// no inputs is the normal case today, so this never fails: it returns nothing.
-func inputsOf(doc map[string]any) []models.PackageInput {
-	raw, ok := doc["inputs"].([]any)
-	if !ok {
-		return nil
-	}
-
-	inputs := make([]models.PackageInput, 0, len(raw))
-	for _, item := range raw {
-		entry, ok := item.(map[string]any)
-		if !ok {
-			continue
+// inputsFromMarkers reads the connection inputs a chart declares: every
+// property carrying an x-okdp-connection-ref marker, at any depth (a Trino
+// catalog list holds one per item). Path is the JSON path of the property
+// (hiveCatalogs[].metastore). A root property is also a Parameter the form can
+// offer a choice for; a nested one is reported so the console knows the
+// contract of the field it renders inside its list.
+func inputsFromMarkers(parameters map[string]any) []models.PackageInput {
+	var inputs []models.PackageInput
+	walkConnectionRefs(parameters, "", func(p string, property map[string]any, contract string, required bool) {
+		description, _ := property["description"].(string)
+		// A default lets the form say the binding is inherited instead of
+		// showing None, which reads as "nothing", the opposite of the truth.
+		defaultValue, _ := property["default"].(string)
+		input := models.PackageInput{
+			Alias:       p,
+			Path:        p,
+			Contract:    contract,
+			Optional:    !required,
+			Default:     defaultValue,
+			Description: description,
 		}
-		contract, _ := entry["contract"].(string)
-		if contract == "" {
-			continue
-		}
-
-		input := models.PackageInput{Contract: contract}
-		if alias, _ := entry["alias"].(string); alias != "" {
-			input.Alias = alias
-		} else {
-			// The package format defaults the alias to the contract name.
-			input.Alias = contract
-		}
-		// KcdTemplateBool fields arrive as template strings, so a literal true
-		// is the string "true", not a boolean.
-		switch v := entry["optional"].(type) {
-		case bool:
-			input.Optional = v
-		case string:
-			input.Optional = strings.EqualFold(strings.TrimSpace(v), "true")
-		}
-		input.Description, _ = entry["description"].(string)
-
-		if named, ok := entry["namedConnection"].(map[string]any); ok {
-			if name, _ := named["name"].(string); name != "" {
-				if m := namedConnectionParameter.FindStringSubmatch(name); m != nil {
-					input.Parameter = m[1]
-				}
-			}
+		if !strings.ContainsAny(p, ".[") {
+			input.Parameter = p
 		}
 		inputs = append(inputs, input)
-	}
+	})
+	sort.Slice(inputs, func(i, j int) bool { return inputs[i].Path < inputs[j].Path })
 	return inputs
 }
 
-// inputsFromMarkers reads the connection inputs a package declares through
-// connectionRef parameters. The groom desugars those into plain string nodes
-// carrying an `x-kubocd-connection-ref` marker, so this is the declarative
-// successor of the hand-written inputs stanza: the parameter IS the input,
-// no template to reverse-engineer.
-//
-// Only top-level parameters are reported: a ref nested in an array generates
-// one input per element, which no deployment form can offer a static choice
-// for. connectionSelector markers are skipped for the same reason the picker
-// would skip them, the package queries by labels, the user provides nothing.
-func inputsFromMarkers(doc map[string]any) []models.PackageInput {
-	schemaSection, ok := doc["schema"].(map[string]any)
-	if !ok {
-		return nil
-	}
-	parameters, ok := schemaSection["parameters"].(map[string]any)
-	if !ok {
-		return nil
-	}
-	properties, ok := parameters["properties"].(map[string]any)
-	if !ok {
-		return nil
-	}
-
-	// For a connectionRef the required flag lives in the PARENT's required
-	// array, not in the marker.
+// walkConnectionRefs calls fn for every property of node marked
+// x-okdp-connection-ref. The required flag of a ref lives in its PARENT's
+// required array.
+func walkConnectionRefs(node map[string]any, prefix string, fn func(path string, property map[string]any, contract string, required bool)) {
 	required := map[string]bool{}
-	if list, ok := parameters["required"].([]any); ok {
+	if list, ok := node["required"].([]any); ok {
 		for _, item := range list {
 			if name, ok := item.(string); ok {
 				required[name] = true
 			}
 		}
 	}
-
-	var inputs []models.PackageInput
-	for name, raw := range properties {
-		property, ok := raw.(map[string]any)
-		if !ok {
-			continue
-		}
-		marker, ok := property["x-kubocd-connection-ref"].(map[string]any)
-		if !ok {
-			continue
-		}
-		contract, _ := marker["contract"].(string)
-		if contract == "" {
-			continue
-		}
-		description, _ := property["description"].(string)
-		// The default survives the groom as an ordinary schema default. Passing
-		// it on lets the form say the binding is inherited instead of showing
-		// None, which reads as "nothing", the opposite of the truth.
-		defaultValue, _ := property["default"].(string)
-		inputs = append(inputs, models.PackageInput{
-			Alias:       name,
-			Contract:    contract,
-			Parameter:   name,
-			Optional:    !required[name],
-			Default:     defaultValue,
-			Description: description,
-		})
-	}
-	sort.Slice(inputs, func(i, j int) bool { return inputs[i].Parameter < inputs[j].Parameter })
-	return inputs
-}
-
-// staleKubocd names the one failure that reads as a broken package but is a
-// broken server: a kubocd older than the package model it is asked to read.
-// The raw error blames the package, which sends the reader editing a file that
-// is fine.
-func staleKubocd(output string) string {
-	for _, unknown := range []string{"unknown type 'connectionRef'", `unknown field "outputs"`} {
-		if strings.Contains(output, unknown) {
-			return "the kubocd binary shipped with this server is older than the package it reads (" +
-				unknown + "). Rebuild the server image against a kubocd that supports the unified connections model."
+	if properties, ok := node["properties"].(map[string]any); ok {
+		for name, raw := range properties {
+			property, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			p := name
+			if prefix != "" {
+				p = prefix + "." + name
+			}
+			if marker, ok := property[ConnectionRefKeyword].(map[string]any); ok {
+				if contract, _ := marker["contract"].(string); contract != "" {
+					fn(p, property, contract, required[name])
+				}
+				continue
+			}
+			walkConnectionRefs(property, p, fn)
 		}
 	}
-	return ""
+	if items, ok := node["items"].(map[string]any); ok {
+		walkConnectionRefs(items, prefix+"[]", fn)
+	}
+	for _, combinator := range []string{"allOf", "anyOf", "oneOf"} {
+		if list, ok := node[combinator].([]any); ok {
+			for _, raw := range list {
+				if sub, ok := raw.(map[string]any); ok {
+					walkConnectionRefs(sub, prefix, fn)
+				}
+			}
+		}
+	}
 }

@@ -2,12 +2,17 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/mock"
+
 	"github.com/okdp/okdp-control-plane-server/internal/models"
+	"github.com/okdp/okdp-control-plane-server/internal/repository"
+	"github.com/okdp/okdp-control-plane-server/internal/service/mocks"
 )
 
 func tokenRequest(server, token string) models.SecretStoreRequest {
@@ -80,4 +85,21 @@ func TestValidateVaultTokenStillRejectsForbidden(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "permission denied") {
 		t.Fatalf("a refused token was accepted: %v", err)
 	}
+}
+
+// A store whose <name>-credentials is someone else's Secret is a bad request,
+// and nothing is created.
+func TestCreateSecretStoreRefusesAForeignCredentialsSecret(t *testing.T) {
+	repo := &mocks.SecretStoreRepository{}
+	repo.On("CreateOrUpdateSecret", mock.Anything, "demo", "p-hive-credentials", mock.Anything).
+		Return(fmt.Errorf("%w: secret %q", repository.ErrForeignSecret, "p-hive-credentials"))
+	req := tokenRequest("https://vault.example", "s.token")
+	req.Name = "p-hive"
+
+	_, err := NewDefaultSecretStoreService(repo).CreateSecretStore(context.Background(), "demo", req)
+
+	if !IsValidationError(err) {
+		t.Fatalf("expected a validation error, got %v", err)
+	}
+	repo.AssertNotCalled(t, "Create", mock.Anything, mock.Anything, mock.Anything)
 }

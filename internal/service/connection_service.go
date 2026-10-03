@@ -5,50 +5,38 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/validation"
 
+	"github.com/okdp/okdp-control-plane-server/internal/auth"
+	"github.com/okdp/okdp-control-plane-server/internal/gitops"
 	"github.com/okdp/okdp-control-plane-server/internal/models"
 	"github.com/okdp/okdp-control-plane-server/internal/repository"
-	"github.com/okdp/okdp-control-plane-server/internal/repository/crd"
 	"github.com/sirupsen/logrus"
 )
 
-// AnnotationCredentialsSecret names the Secret holding the credential fields of
-// a connection. They are kept out of spec.values so that what the CRD stores
-// stays exactly the shape a KuboCD Contract schema will validate, and so that
-// reading a Connection never discloses a password.
-const AnnotationCredentialsSecret = "okdp.io/credentials-secret"
-
-// AnnotationCredentialsOwned records whether the console wrote that Secret or
-// merely points at one. Written at creation rather than derived later: reading
-// the Secret back would cost one API call per connection in a list, and the
-// name alone cannot tell, an external Secret being free to follow the same
-// convention.
-const AnnotationCredentialsOwned = "okdp.io/credentials-owned"
-
-// credentialsSecretSuffix mirrors the convention already used by secret stores.
+// credentialsSecretSuffix names the Secret the console writes for a
+// connection: <connection>-credentials, in the project namespace.
 const credentialsSecretSuffix = "-credentials"
 
-// valueSecretRef names the value published so a KuboCD package can bind the
-// credentials: the NAME of the Secret holding them, never a value. It matches
-// the secretRef field declared by the KuboCD Contracts, which are the schema of
-// record.
-//
-// Rotating a credential does not touch the Connection: Reloader restarts the
-// workloads mounting the Secret, so a digest published here would only help a
-// package that propagated it into its pod template.
+// valueSecretRef is the key under which a connection publishes the NAME of
+// the Secret holding its credentials (never a value): secretRef.name in the
+// connection file, the field the contract schemas declare.
 const valueSecretRef = "secretRef"
 
-// ConnectionService manages the connections of a project and of the platform.
+// connectionsResource names the resource in not-found and conflict errors.
+var connectionsResource = schema.GroupResource{Group: "okdp.io", Resource: "connections"}
+
+// ConnectionService manages the connections of a project.
 //
-// Throughout, an empty namespace addresses the platform (cluster-wide) scope,
-// matching ConnectionRepository.
+// External connections are files of the deployments Git repository
+// (projects/<p>/connections/<name>.yaml) plus a credentials Secret in the
+// project namespace. Internal connections are what the deployed instances
+// publish in their descriptor (outputs.yaml).
 type ConnectionService interface {
 	// Catalog returns the known contracts and whether connections can currently
 	// be persisted.
@@ -68,37 +56,46 @@ type ConnectionService interface {
 	ListInternal(ctx context.Context, project string) ([]models.InternalConnection, error)
 
 	// ListSelectable returns the connections a deployment form can offer for an
-	// input of the given contract: the project's own plus the platform-wide
-	// ones, managed included.
+	// input of the given contract: the project's external ones and the ones
+	// its deployed instances provide.
 	ListSelectable(ctx context.Context, project, contract string) ([]models.SelectableConnection, error)
 
-	// ListConsumers returns the services of a project bound to a connection,
-	// read from what the release controller published rather than guessed.
+	// ListConsumers returns the services of a project bound to a connection:
+	// the instances whose declaration layers it in or whose parameters name it.
 	ListConsumers(ctx context.Context, project, name string) ([]models.ConnectionConsumer, error)
 }
 
+// InstanceLister lists the instances of a project, with their status and
+// bound connections (ServiceService.ListServices).
+type InstanceLister func(ctx context.Context, project string) ([]models.ServiceInstance, error)
+
 type DefaultConnectionService struct {
-	repo        repository.ConnectionRepository
-	releaseRepo repository.ServiceRepository
+	deployments *gitops.Deployments
+	secrets     repository.ConnectionSecretRepository
+	descriptors repository.DescriptorRepository
+	instances   InstanceLister
 	catalog     ContractCatalog
 }
 
 func NewDefaultConnectionService(
-	repo repository.ConnectionRepository,
-	releaseRepo repository.ServiceRepository,
+	deployments *gitops.Deployments,
+	secrets repository.ConnectionSecretRepository,
+	descriptors repository.DescriptorRepository,
+	instances InstanceLister,
 	catalog ContractCatalog,
 ) *DefaultConnectionService {
 	return &DefaultConnectionService{
-		repo:        repo,
-		releaseRepo: releaseRepo,
+		deployments: deployments,
+		secrets:     secrets,
+		descriptors: descriptors,
+		instances:   instances,
 		catalog:     catalog,
 	}
 }
 
-// ErrConnectionsUnavailable is returned by the write paths while the KuboCD
-// connection CRDs are not installed. The handler turns it into a 501 so the
-// console can explain the situation instead of showing a generic failure.
-var ErrConnectionsUnavailable = fmt.Errorf("the KuboCD connection CRDs are not installed on this cluster")
+// ErrConnectionsUnavailable is returned by the write paths while no
+// deployments repository is configured. The handler turns it into a 501.
+var ErrConnectionsUnavailable = fmt.Errorf("no deployments repository is configured, connections cannot be stored")
 
 // ValidationError is a problem with what was submitted, as opposed to a failure
 // of the platform. It lets the handler answer 400 rather than 500 without
@@ -127,41 +124,69 @@ func IsValidationError(err error) bool {
 	return errors.As(err, &validationErr)
 }
 
+// IsNotFound reports whether an error from this service is a missing resource,
+// so the handler can answer 404 without importing the Kubernetes error package.
+func IsNotFound(err error) bool {
+	return apierrors.IsNotFound(err)
+}
+
+// connectionGitError maps the deployments repository errors to the API ones.
+func connectionGitError(err error, name string) error {
+	var inUse *gitops.ErrInUse
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, gitops.ErrNotFound):
+		return apierrors.NewNotFound(connectionsResource, name)
+	case errors.Is(err, gitops.ErrExists):
+		return apierrors.NewAlreadyExists(connectionsResource, name)
+	case errors.As(err, &inUse):
+		return invalid("connection %q is still layered into %s; change them first", name, strings.Join(inUse.Users, ", "))
+	default:
+		return err
+	}
+}
+
+func (s *DefaultConnectionService) available() bool {
+	return s.deployments != nil
+}
+
 func (s *DefaultConnectionService) Catalog(ctx context.Context) models.ConnectionCatalogResponse {
 	return models.ConnectionCatalogResponse{
 		Types:        s.catalog.List(),
-		CRDAvailable: s.repo.Available(ctx),
+		CRDAvailable: s.available(),
 	}
 }
 
 // --- External connections ---
 
 func (s *DefaultConnectionService) List(ctx context.Context, namespace string) ([]models.ConnectionResponse, error) {
-	// Not having the CRDs is the normal state today, not an error: the console
-	// shows an empty list and explains why, rather than a failed request.
-	if !s.repo.Available(ctx) {
+	if !s.available() {
 		return []models.ConnectionResponse{}, nil
 	}
-
-	connections, err := s.repo.List(ctx, namespace)
+	connections, err := s.deployments.ListConnections(ctx, namespace)
 	if err != nil {
 		return nil, err
 	}
-
 	result := make([]models.ConnectionResponse, 0, len(connections))
 	for i := range connections {
-		// Managed connections belong to the internal view. They are owned by a
-		// release and must not be editable here.
-		if connections[i].IsManaged() {
-			continue
-		}
-		result = append(result, s.toResponse(&connections[i], namespace))
+		result = append(result, s.toResponse(&connections[i]))
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
 	return result, nil
 }
 
+// withoutSecretIfNone drops a named Secret for a contract without secret
+// fields: such a connection carries no secretRef at all.
+func (s *DefaultConnectionService) withoutSecretIfNone(req models.ConnectionRequest) models.ConnectionRequest {
+	if descriptor, known := s.catalog.Get(req.Type); known && len(descriptor.SecretFields()) == 0 {
+		req.ExistingSecret = ""
+	}
+	return req
+}
+
 func (s *DefaultConnectionService) Create(ctx context.Context, namespace string, req models.ConnectionRequest) (*models.ConnectionResponse, error) {
+	req = s.withoutSecretIfNone(req)
 	descriptor, values, err := s.validateRequest(ctx, namespace, req, false)
 	if err != nil {
 		return nil, err
@@ -171,89 +196,74 @@ func (s *DefaultConnectionService) Create(ctx context.Context, namespace string,
 	// of a live connection follows the same naming convention, so writing it
 	// first would let a repeated create merge into it and the rollback below
 	// delete it, taking the running consumers' credentials with it.
-	if _, err := s.repo.Get(ctx, namespace, req.Name); err == nil {
-		return nil, apierrors.NewAlreadyExists(crd.GetConnectionGVR().GroupResource(), req.Name)
-	} else if !apierrors.IsNotFound(err) {
+	if _, err := s.deployments.GetConnection(ctx, namespace, req.Name); err == nil {
+		return nil, apierrors.NewAlreadyExists(connectionsResource, req.Name)
+	} else if !errors.Is(err, gitops.ErrNotFound) {
 		return nil, err
 	}
 
 	public, secrets := splitValues(descriptor, values)
-	secretNamespace := namespace
-	secretName := req.Name + credentialsSecretSuffix
+	if err := s.catalog.ValidatePublic(descriptor.Name, public); err != nil {
+		return nil, invalid("%v", err)
+	}
+	secretName := ""
 	ownSecret := req.ExistingSecret == ""
 
 	if !ownSecret {
 		// Pointing at a Secret somebody else owns: nothing is written, and the
 		// credential fields of the payload are ignored on purpose.
 		secretName = req.ExistingSecret
-		secrets = nil
-		public[valueSecretRef] = secretName
 	} else if len(secrets) > 0 {
-		if err := s.repo.CreateOrUpdateSecret(ctx, secretNamespace, secretName, secrets); err != nil {
+		secretName = req.Name + credentialsSecretSuffix
+		if err := s.secrets.CreateOrUpdateSecret(ctx, namespace, secretName, secrets); err != nil {
 			return nil, storeCredentialsError(err)
 		}
-		// Tell consumers where the credentials are, so a package can bind them.
-		public[valueSecretRef] = secretName
 	}
 
-	connection := &crd.Connection{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      req.Name,
-			Namespace: namespace,
-			Labels: map[string]string{
-				crd.LabelManagedBy: crd.ManagedByValue,
-			},
-		},
-		Spec: crd.ConnectionSpec{
-			// The type name IS the contract: a package asking for database-server
-			// finds it by that name, here and in the catalog.
-			Contract:    descriptor.Name,
-			Description: req.Description,
-			Values:      public,
-		},
+	connection := gitops.Connection{
+		Name:        req.Name,
+		Project:     namespace,
+		Contract:    descriptor.Name,
+		Description: req.Description,
+		Values:      public,
+		SecretRef:   secretName,
 	}
-	if len(secrets) > 0 || !ownSecret {
-		connection.Annotations = map[string]string{
-			AnnotationCredentialsSecret: secretNamespace + "/" + secretName,
-			AnnotationCredentialsOwned:  strconv.FormatBool(ownSecret),
-		}
-	}
-
-	if err := s.repo.Create(ctx, namespace, connection); err != nil {
-		// Leave no orphan Secret behind when the Connection itself is refused. A
+	if _, err := s.deployments.PutConnection(ctx, auth.ActorFrom(ctx), connection, true); err != nil {
+		// Leave no orphan Secret behind when the connection itself is refused. A
 		// Secret we do not own is never touched, and neither is the one a
 		// concurrent create under the same name has just bound to its own
-		// Connection.
-		if ownSecret && len(secrets) > 0 && !apierrors.IsAlreadyExists(err) {
-			if cleanupErr := s.repo.DeleteSecret(ctx, secretNamespace, secretName); cleanupErr != nil {
+		// connection.
+		if ownSecret && len(secrets) > 0 && !errors.Is(err, gitops.ErrExists) {
+			if cleanupErr := s.secrets.DeleteSecret(ctx, namespace, secretName); cleanupErr != nil {
 				logrus.WithError(cleanupErr).Warn("Failed to clean up the credentials secret of a rejected connection")
 			}
 		}
-		return nil, err
+		return nil, connectionGitError(err, req.Name)
 	}
 
-	response := s.toResponse(connection, namespace)
+	response := s.toResponse(&connection)
 	return &response, nil
 }
 
 func (s *DefaultConnectionService) Update(ctx context.Context, namespace, name string, req models.ConnectionRequest) (*models.ConnectionResponse, error) {
 	req.Name = name
+	req = s.withoutSecretIfNone(req)
 	descriptor, values, err := s.validateRequest(ctx, namespace, req, true)
 	if err != nil {
 		return nil, err
 	}
 
-	existing, err := s.repo.Get(ctx, namespace, name)
+	existing, err := s.deployments.GetConnection(ctx, namespace, name)
 	if err != nil {
-		return nil, err
-	}
-	if existing.IsManaged() {
-		return nil, invalid("connection %q %s and cannot be edited", name, managedBy(existing))
+		return nil, connectionGitError(err, name)
 	}
 
 	public, secrets := splitValues(descriptor, values)
-	secretNamespace := namespace
-	secretName := name + credentialsSecretSuffix
+	if err := s.catalog.ValidatePublic(descriptor.Name, public); err != nil {
+		return nil, invalid("%v", err)
+	}
+	ownedName := name + credentialsSecretSuffix
+	secretName := existing.SecretRef
 
 	// Set when the connection moves off a Secret we owned. The old Secret is
 	// dropped only once the new reference is persisted, otherwise a failed
@@ -261,97 +271,95 @@ func (s *DefaultConnectionService) Update(ctx context.Context, namespace, name s
 	// exists.
 	orphanedSecret := ""
 
-	if req.ExistingSecret != "" {
-		if previous, owned := credentialsSecretOf(existing, name); owned && previous != req.ExistingSecret {
-			orphanedSecret = previous
+	if len(descriptor.SecretFields()) == 0 {
+		// No secret field, no secretRef.
+		req.ExistingSecret, secretName = "", ""
+		if existing.SecretRef == ownedName {
+			orphanedSecret = ownedName
 		}
-		public[valueSecretRef] = req.ExistingSecret
-		existing.Annotations = withCredentialsSecret(existing.Annotations, secretNamespace+"/"+req.ExistingSecret, false)
+	} else if req.ExistingSecret != "" {
+		if existing.SecretRef == ownedName && req.ExistingSecret != ownedName {
+			orphanedSecret = ownedName
+		}
+		secretName = req.ExistingSecret
 	} else if len(secrets) > 0 {
 		// An unchanged credential is not resubmitted by the console, so only
 		// write the Secret when new values actually arrived, otherwise an edit
 		// of, say, the port would blank out the password.
-		if err := s.repo.CreateOrUpdateSecret(ctx, secretNamespace, secretName, secrets); err != nil {
+		if err := s.secrets.CreateOrUpdateSecret(ctx, namespace, ownedName, secrets); err != nil {
 			return nil, storeCredentialsError(err)
 		}
-		public[valueSecretRef] = secretName
-		existing.Annotations = withCredentialsSecret(existing.Annotations, secretNamespace+"/"+secretName, true)
-	} else {
-		// The credentials did not change, so neither do the fields describing
-		// them, and they must be carried over: splitValues rebuilt the values
-		// from the request, which no longer mentions them.
-		for _, key := range []string{valueSecretRef} {
-			if previous, ok := existing.Spec.Values[key]; ok {
-				public[key] = previous
-			}
-		}
+		secretName = ownedName
 	}
 
-	existing.Spec.Contract = descriptor.Name
-	existing.Spec.Description = req.Description
-	existing.Spec.Values = public
-
-	if err := s.repo.Update(ctx, namespace, existing); err != nil {
-		return nil, err
+	updated := gitops.Connection{
+		Name:        name,
+		Project:     namespace,
+		Contract:    descriptor.Name,
+		Description: req.Description,
+		Values:      public,
+		SecretRef:   secretName,
+	}
+	if _, err := s.deployments.PutConnection(ctx, auth.ActorFrom(ctx), updated, false); err != nil {
+		return nil, connectionGitError(err, name)
 	}
 
 	if orphanedSecret != "" {
-		if err := s.repo.DeleteSecret(ctx, secretNamespace, orphanedSecret); err != nil {
-			logrus.WithError(err).WithField("secret", orphanedSecret).Warn("Failed to remove the credentials secret left behind by a connection now pointing elsewhere")
-		}
+		s.deleteOwnedSecret(ctx, namespace, orphanedSecret)
 	}
 
-	response := s.toResponse(existing, namespace)
+	response := s.toResponse(&updated)
 	return &response, nil
 }
 
 func (s *DefaultConnectionService) Delete(ctx context.Context, namespace, name string) error {
-	if !s.repo.Available(ctx) {
+	if !s.available() {
 		return ErrConnectionsUnavailable
 	}
-
-	existing, err := s.repo.Get(ctx, namespace, name)
+	existing, err := s.deployments.GetConnection(ctx, namespace, name)
 	if err != nil {
-		return err
+		return connectionGitError(err, name)
 	}
-	if existing.IsManaged() {
-		return invalid("connection %q %s and cannot be deleted; it exists as long as that service does", name, managedBy(existing))
-	}
-
-	if err := s.repo.Delete(ctx, namespace, name); err != nil {
-		return err
+	if _, err := s.deployments.DeleteConnection(ctx, auth.ActorFrom(ctx), namespace, name); err != nil {
+		return connectionGitError(err, name)
 	}
 
 	// Only a Secret this server wrote is removed with the connection. One that
 	// was already there, projected from a vault, belongs to whoever put it
 	// there: deleting it would take the credentials of everything else reading
-	// it. The name is no guide, an external Secret being free to follow the same
-	// convention, so this reads what was recorded at creation.
-	secretName, owned := credentialsSecretOf(existing, name)
-	if !owned {
-		logrus.WithField("secret", secretName).
-			Info("Leaving the credentials secret in place, the connection did not own it")
+	// it.
+	if existing.SecretRef == "" {
 		return nil
 	}
-
-	// The Secret outlives the Connection only if this fails. Report nothing to
-	// the user for it, the connection itself is gone.
-	if err := s.repo.DeleteSecret(ctx, namespace, secretName); err != nil {
-		logrus.WithError(err).Warn("Failed to delete the credentials secret of a removed connection")
+	if existing.SecretRef != name+credentialsSecretSuffix {
+		logrus.WithField("secret", existing.SecretRef).Info("Leaving the credentials secret in place, the connection did not own it")
+		return nil
 	}
+	s.deleteOwnedSecret(ctx, namespace, existing.SecretRef)
 	return nil
 }
 
-// credentialsSecretOf returns the Secret holding a connection's credentials and
-// whether this server wrote it.
-func credentialsSecretOf(connection *crd.Connection, name string) (string, bool) {
-	secretName := name + credentialsSecretSuffix
-	if ref := connection.Annotations[AnnotationCredentialsSecret]; ref != "" {
-		if _, referenced, found := strings.Cut(ref, "/"); found && referenced != "" {
-			secretName = referenced
-		}
+// deleteOwnedSecret removes a credentials Secret, only when it carries the
+// console's managed-by label: the name alone is no proof, an external Secret
+// being free to follow the same convention.
+func (s *DefaultConnectionService) deleteOwnedSecret(ctx context.Context, namespace, name string) {
+	content, found, err := s.secrets.InspectSecret(ctx, namespace, name)
+	if err != nil {
+		logrus.WithError(err).WithField("secret", name).Warn("Could not inspect the credentials secret, leaving it in place")
+		return
 	}
-	return secretName, credentialsOwned(connection.Annotations, name, secretName)
+	if !found {
+		return
+	}
+	if !content.Managed {
+		logrus.WithField("secret", name).Info("Leaving the credentials secret in place, the console did not write it")
+		return
+	}
+	// The Secret outlives the connection only if this fails. Report nothing to
+	// the user for it, the connection itself is gone.
+	if err := s.secrets.DeleteSecret(ctx, namespace, name); err != nil {
+		logrus.WithError(err).WithField("secret", name).Warn("Failed to delete the credentials secret of a connection")
+	}
 }
 
 func (s *DefaultConnectionService) Test(ctx context.Context, req models.ConnectionTestRequest) models.ConnectionTestResult {
@@ -403,66 +411,68 @@ func (s *DefaultConnectionService) Test(ctx context.Context, req models.Connecti
 
 // --- Internal connections ---
 
-// ListInternal returns the connections the project's own services publish, and
-// only those: a Connection the release controller owns, born from the `outputs`
-// stanza of a package.
-//
-// A service that publishes nothing is absent rather than approximated. An entry
-// with no Connection behind it could not be bound anyway, since ListSelectable
-// only offers real ones, and it would invite the user to wire a service to
-// something that does not exist.
-func (s *DefaultConnectionService) ListInternal(ctx context.Context, project string) ([]models.InternalConnection, error) {
-	if !s.repo.Available(ctx) {
-		return []models.InternalConnection{}, nil
+// outputsOf lists the connections the deployed instances of a project
+// publish in their descriptor.
+func (s *DefaultConnectionService) outputsOf(ctx context.Context, project string) ([]repository.Descriptor, error) {
+	if s.descriptors == nil {
+		return nil, nil
 	}
+	return s.descriptors.List(ctx, project)
+}
 
-	connections, err := s.repo.List(ctx, project)
+// internalCapable reports whether an instance output of that contract can be
+// referenced by name: okdp.connection resolves an internal reference only for
+// contracts declaring a naming convention (x-okdp-internal). The others (s3,
+// database-server) are external only.
+func (s *DefaultConnectionService) internalCapable(contract string) bool {
+	descriptor, known := s.catalog.Get(contract)
+	return known && descriptor.Internal
+}
+
+// ListInternal returns the connections the project's own instances publish
+// (their descriptor's outputs.yaml) that other instances can reference by
+// name, and only those.
+func (s *DefaultConnectionService) ListInternal(ctx context.Context, project string) ([]models.InternalConnection, error) {
+	descriptors, err := s.outputsOf(ctx, project)
 	if err != nil {
 		return nil, err
 	}
-
-	result := make([]models.InternalConnection, 0, len(connections))
-	for i := range connections {
-		if !connections[i].IsManaged() {
-			continue
+	result := make([]models.InternalConnection, 0)
+	for _, d := range descriptors {
+		for _, output := range d.Outputs {
+			if !s.internalCapable(output.Contract) {
+				continue
+			}
+			result = append(result, s.outputToInternal(d, output, project))
 		}
-		result = append(result, s.managedToInternal(&connections[i], project))
 	}
-
 	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
 	return result, nil
 }
 
-func (s *DefaultConnectionService) managedToInternal(connection *crd.Connection, project string) models.InternalConnection {
-	values := connection.Spec.Values
+func (s *DefaultConnectionService) outputToInternal(d repository.Descriptor, output repository.DescriptorOutput, project string) models.InternalConnection {
+	values := output.Values
 	if values == nil {
 		values = map[string]any{}
 	}
-
 	entry := models.InternalConnection{
-		Name:        connection.Name,
-		Type:        connection.Spec.Contract,
-		TypeDisplay: connection.Status.ContractDisplay,
-		Service:     connection.Labels[crd.LabelService],
-		ReleaseName: connection.Status.Parent,
+		Name:        output.Name,
+		Type:        output.Contract,
+		TypeDisplay: output.Contract,
+		Service:     d.Service,
+		ReleaseName: d.Release,
 		Namespace:   project,
-		Status:      connection.Status.Phase,
-		Values:      values,
-		Managed:     true,
+		// The descriptor exists: the chart rendered and the engine applied it.
+		Status:  "Ready",
+		Values:  values,
+		Managed: true,
 	}
-	if descriptor, known := s.catalog.Get(connection.Spec.Contract); known {
+	if descriptor, known := s.catalog.Get(output.Contract); known {
 		entry.Icon = descriptor.Icon
 		entry.Category = descriptor.Category
-		// The catalog's display name wins over what the controller wrote in
-		// the status: KuboCD renders it as "[trino]", raw lookup markers
-		// included, which is not a label for humans.
 		entry.TypeDisplay = descriptor.DisplayName
 	}
-	if entry.TypeDisplay == "" {
-		entry.TypeDisplay = connection.Spec.Contract
-	}
-
-	entry.Endpoint = endpointFrom(values, s.catalog, connection.Spec.Contract)
+	entry.Endpoint = endpointFrom(values, s.catalog, output.Contract)
 	// host and port stay filled when the contract has them, for the columns that
 	// show them separately. Most contracts publish a URI instead.
 	if host, ok := values["host"].(string); ok {
@@ -471,8 +481,8 @@ func (s *DefaultConnectionService) managedToInternal(connection *crd.Connection,
 			entry.Port = int32(port)
 		}
 	}
-	if ts := connection.CreationTimestamp; !ts.IsZero() {
-		entry.CreatedAt = ts.Format(time.RFC3339)
+	if !d.CreatedAt.IsZero() {
+		entry.CreatedAt = d.CreatedAt.UTC().Format(time.RFC3339)
 	}
 	return entry
 }
@@ -484,10 +494,10 @@ func (s *DefaultConnectionService) managedToInternal(connection *crd.Connection,
 // submitted engine dropped. On an edit, credentials that were not resubmitted
 // are kept as they are rather than reported as missing.
 func (s *DefaultConnectionService) validateRequest(ctx context.Context, namespace string, req models.ConnectionRequest, isUpdate bool) (*models.ContractDescriptor, map[string]any, error) {
-	if !s.repo.Available(ctx) {
+	if !s.available() {
 		return nil, nil, ErrConnectionsUnavailable
 	}
-	if errs := validation.IsDNS1123Subdomain(req.Name); len(errs) > 0 {
+	if errs := validation.IsDNS1123Label(req.Name); len(errs) > 0 {
 		return nil, nil, invalid("invalid connection name %q: %s", req.Name, errs[0])
 	}
 
@@ -499,9 +509,9 @@ func (s *DefaultConnectionService) validateRequest(ctx context.Context, namespac
 		return nil, nil, invalid("connections of type %q come from a deployed service and cannot be declared by hand", req.Type)
 	}
 	values := s.catalog.Normalize(req.Type, req.Values)
-	// The Secret name is published in spec.values for the consumers, so a client
-	// editing what it just read sends it back. No contract declares it, and the
-	// write paths below set it again from the request.
+	// The Secret name is published with the values for the consumers, so a
+	// client editing what it just read sends it back. No contract field
+	// declares it, and the write paths set it again from the request.
 	delete(values, valueSecretRef)
 	validateValues := s.catalog.Validate
 	if isUpdate {
@@ -532,7 +542,7 @@ func (s *DefaultConnectionService) checkExistingSecret(
 	descriptor *models.ContractDescriptor,
 ) error {
 	secretNamespace := namespace
-	content, found, err := s.repo.InspectSecret(ctx, secretNamespace, req.ExistingSecret)
+	content, found, err := s.secrets.InspectSecret(ctx, secretNamespace, req.ExistingSecret)
 	if err != nil {
 		return fmt.Errorf("failed to read the secret %q: %w", req.ExistingSecret, err)
 	}
@@ -563,9 +573,6 @@ func (s *DefaultConnectionService) checkExistingSecret(
 	return nil
 }
 
-// credentialsNamespace returns where the Secret of a connection lives. Platform
-// connections are cluster-scoped and have no namespace of their own, so their
-// credentials go to the platform namespace.
 // splitValues separates the values that go into the Connection spec from the
 // credentials, which are stored in a Secret instead.
 func splitValues(descriptor *models.ContractDescriptor, values map[string]any) (map[string]any, map[string][]byte) {
@@ -588,95 +595,82 @@ func splitValues(descriptor *models.ContractDescriptor, values map[string]any) (
 	return public, secrets
 }
 
-func (s *DefaultConnectionService) toResponse(connection *crd.Connection, namespace string) models.ConnectionResponse {
-	// One type, one contract: the contract of the spec is the whole answer.
-	contractName := connection.Spec.Contract
-
-	values := connection.Spec.Values
-	if values == nil {
-		values = map[string]any{}
+func (s *DefaultConnectionService) toResponse(connection *gitops.Connection) models.ConnectionResponse {
+	values := map[string]any{}
+	for k, v := range connection.Values {
+		values[k] = v
+	}
+	if connection.SecretRef != "" {
+		values[valueSecretRef] = connection.SecretRef
 	}
 
 	response := models.ConnectionResponse{
 		Name:        connection.Name,
-		Type:        contractName,
+		Type:        connection.Contract,
 		Scope:       models.ConnectionScopeProject,
-		Namespace:   namespace,
-		Description: connection.Spec.Description,
-		Status:      connection.Status.Phase,
-		Message:     connection.Status.Message,
-		Values:      values,
+		Namespace:   connection.Project,
+		Description: connection.Description,
+		// Declared in Git: what it points at is only checked by a test.
+		Status: "Ready",
+		Values: values,
 	}
-	if descriptor, known := s.catalog.Get(contractName); known {
+	if descriptor, known := s.catalog.Get(connection.Contract); known {
 		response.SecretFields = descriptor.SecretFields()
-		// Read the Secret back from the annotation rather than rebuilding the
-		// name: a connection created before the convention, or edited by hand,
-		// may point somewhere else, and a consumer needs the real reference.
-		if ref := connection.Annotations[AnnotationCredentialsSecret]; ref != "" && len(response.SecretFields) > 0 {
-			if ns, name, found := strings.Cut(ref, "/"); found {
-				response.CredentialsSecret = &models.CredentialsSecretRef{
-					Name:      name,
-					Namespace: ns,
-					Keys:      response.SecretFields,
-					Owned:     credentialsOwned(connection.Annotations, connection.Name, name),
-				}
+		if connection.SecretRef != "" && len(response.SecretFields) > 0 {
+			response.CredentialsSecret = &models.CredentialsSecretRef{
+				Name:      connection.SecretRef,
+				Namespace: connection.Project,
+				Keys:      response.SecretFields,
+				Owned:     connection.SecretRef == connection.Name+credentialsSecretSuffix,
 			}
 		}
-	}
-	if ts := connection.CreationTimestamp; !ts.IsZero() {
-		response.CreatedAt = ts.Format(time.RFC3339)
 	}
 	return response
 }
 
-// managedBy names the release a connection belongs to, for the message shown
-// when someone tries to edit or delete it. The controller fills status.parent
-// only once it has reconciled, so a connection can legitimately be managed
-// with no parent yet, saying `release ""` would read like a bug.
-func managedBy(connection *crd.Connection) string {
-	if parent := connection.Status.Parent; parent != "" {
-		return fmt.Sprintf("is provided by the deployed service %q", parent)
-	}
-	return "is provided by a deployed service"
-}
-
-// IsNotFound reports whether an error from this service is a missing resource,
-// so the handler can answer 404 without importing the Kubernetes error package.
-func IsNotFound(err error) bool {
-	return apierrors.IsNotFound(err)
-}
-
 func (s *DefaultConnectionService) ListSelectable(ctx context.Context, project, contract string) ([]models.SelectableConnection, error) {
-	// Without the CRDs there is nothing to bind. The form simply offers no
-	// existing connection, which is accurate.
-	if !s.repo.Available(ctx) {
-		return []models.SelectableConnection{}, nil
-	}
-
 	result := []models.SelectableConnection{}
-	collect := func(connections []crd.Connection, scope string) {
-		for i := range connections {
-			connection := &connections[i]
-			if contract != "" && connection.Spec.Contract != contract {
+	if s.available() {
+		connections, err := s.deployments.ListConnections(ctx, project)
+		if err != nil {
+			return nil, err
+		}
+		for _, c := range connections {
+			if contract != "" && c.Contract != contract {
 				continue
 			}
 			result = append(result, models.SelectableConnection{
-				Name:        connection.Name,
+				Name:        c.Name,
 				Scope:       models.ConnectionScopeProject,
-				Type:        connection.Spec.Contract,
-				Status:      connection.Status.Phase,
-				Description: connection.Spec.Description,
-				Managed:     connection.IsManaged(),
-				ProvidedBy:  connection.Status.Parent,
+				Type:        c.Contract,
+				Status:      "Ready",
+				Description: c.Description,
 			})
 		}
 	}
 
-	projectConnections, err := s.repo.List(ctx, project)
+	descriptors, err := s.outputsOf(ctx, project)
 	if err != nil {
 		return nil, err
 	}
-	collect(projectConnections, models.ConnectionScopeProject)
+	for _, d := range descriptors {
+		for _, output := range d.Outputs {
+			if contract != "" && output.Contract != contract {
+				continue
+			}
+			if !s.internalCapable(output.Contract) {
+				continue
+			}
+			result = append(result, models.SelectableConnection{
+				Name:       output.Name,
+				Scope:      models.ConnectionScopeProject,
+				Type:       output.Contract,
+				Status:     "Ready",
+				Managed:    true,
+				ProvidedBy: d.Release,
+			})
+		}
+	}
 
 	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
 	return result, nil
@@ -710,64 +704,32 @@ func endpointFrom(values map[string]any, catalog ContractCatalog, contractName s
 	return host
 }
 
-// withCredentialsSecret records where a connection's credentials live, without
-// dropping the other annotations.
-func withCredentialsSecret(annotations map[string]string, reference string, owned bool) map[string]string {
-	if annotations == nil {
-		annotations = map[string]string{}
-	}
-	annotations[AnnotationCredentialsSecret] = reference
-	annotations[AnnotationCredentialsOwned] = strconv.FormatBool(owned)
-	return annotations
-}
-
-// ListConsumers returns the services bound to a connection. The controller
-// publishes both what a release watches and what it actually resolved, so this
-// reads that rather than reparsing parameters and guessing.
+// ListConsumers returns the services bound to a connection: the instances
+// whose declaration layers it in (external) or whose parameters name it
+// (internal).
 func (s *DefaultConnectionService) ListConsumers(ctx context.Context, project, name string) ([]models.ConnectionConsumer, error) {
-	releases, err := s.releaseRepo.List(ctx, project, project)
+	consumers := make([]models.ConnectionConsumer, 0)
+	if s.instances == nil {
+		return consumers, nil
+	}
+	instances, err := s.instances(ctx, project)
 	if err != nil {
 		return nil, err
 	}
-
-	consumers := make([]models.ConnectionConsumer, 0)
-	for i := range releases {
-		release := &releases[i]
-		watched := referencesConnection(release.Status.WatchedInputConnections, project, name)
-		effective := referencesConnection(release.Status.EffectiveInputConnections, project, name)
-		if !watched && !effective {
-			continue
+	for _, instance := range instances {
+		for _, bound := range instance.Connections {
+			if bound.Name != name {
+				continue
+			}
+			consumers = append(consumers, models.ConnectionConsumer{
+				Service:     instance.Name,
+				ReleaseName: instance.ReleaseName,
+				Status:      instance.Status,
+				Effective:   bound.Resolved,
+			})
+			break
 		}
-		consumers = append(consumers, models.ConnectionConsumer{
-			Service:     strings.TrimPrefix(release.Name, project+"-"),
-			ReleaseName: release.Name,
-			Status:      release.Status.Phase,
-			Effective:   effective,
-		})
 	}
 	sort.Slice(consumers, func(i, j int) bool { return consumers[i].ReleaseName < consumers[j].ReleaseName })
 	return consumers, nil
-}
-
-// referencesConnection reports whether one of the references points at the named
-// connection of a project. A ClusterConnection carries no namespace of its own,
-// so an empty namespace matches too: it is the platform-wide one of that name.
-func referencesConnection(refs []crd.InputConnectionReference, project, name string) bool {
-	for _, ref := range refs {
-		if ref.Name == name && (ref.Namespace == project || ref.Namespace == "") {
-			return true
-		}
-	}
-	return false
-}
-
-// credentialsOwned reports whether the console wrote the credentials Secret.
-// A Connection carrying no such annotation falls back on the naming
-// convention.
-func credentialsOwned(annotations map[string]string, connectionName, secretName string) bool {
-	if raw, present := annotations[AnnotationCredentialsOwned]; present {
-		owned, err := strconv.ParseBool(raw)
-		return err == nil && owned
-	}
-	return secretName == connectionName+credentialsSecretSuffix
 }

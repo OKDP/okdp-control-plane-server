@@ -31,3 +31,27 @@ func TestParseBearerChallengeRequiresRealm(t *testing.T) {
 		t.Fatal("expected an error when the challenge has no realm")
 	}
 }
+
+func TestTokenRealmMustBeOnTheRegistryHostOverHTTPS(t *testing.T) {
+	for _, tc := range []struct {
+		realm, registry string
+		insecure, ok    bool
+	}{
+		{"https://ghcr.io/token", "ghcr.io", false, true},
+		{"https://quay.io/v2/auth", "quay.io", false, true},
+		{"https://auth.docker.io/token", "registry-1.docker.io", false, true},
+		{"https://harbor.example:8443/service/token", "harbor.example", false, true},
+		{"http://registry:5000/token", "registry:5000", true, true},
+		{"http://ghcr.io/token", "ghcr.io", false, false},
+		{"https://169.254.169.254/latest/meta-data", "ghcr.io", false, false},
+		{"https://auth.docker.io/token", "ghcr.io", false, false},
+		{"https://ghcr.io.evil.example/token", "ghcr.io", false, false},
+		{"file:///etc/passwd", "ghcr.io", false, false},
+		{"/token", "ghcr.io", false, false},
+	} {
+		_, err := checkTokenRealm(tc.realm, tc.registry, tc.insecure)
+		if (err == nil) != tc.ok {
+			t.Errorf("realm %q for registry %q (insecure %v): err = %v, want ok = %v", tc.realm, tc.registry, tc.insecure, err, tc.ok)
+		}
+	}
+}

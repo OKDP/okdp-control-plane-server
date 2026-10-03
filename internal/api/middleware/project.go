@@ -9,7 +9,8 @@ import (
 )
 
 // RequireProject checks that the :name segment of the path really is a project,
-// that is a Namespace carrying the okdp.io/project label.
+// that is a project declared in the deployments repository
+// (projects/<name>/project.yaml, written by the console or by hand in Git).
 //
 // Without it, every route under /api/projects/:name passes the raw path
 // segment to the Kubernetes client, with the cluster-wide rights of the
@@ -31,7 +32,7 @@ func RequireProject(get func(c *gin.Context, name string) (*models.Project, erro
 		project, err := get(c, name)
 		switch {
 		case err != nil && !apierrors.IsNotFound(err):
-			// A cluster that cannot answer is not a project that does not exist:
+			// A store that cannot answer is not a project that does not exist:
 			// answering 404 on a timeout tells the console the project was
 			// deleted, and loses the cause on the way.
 			_ = c.Error(err)

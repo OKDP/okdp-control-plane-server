@@ -28,20 +28,27 @@ on:
         required: false
         type: string
 
+permissions:
+  contents: read
+
 jobs:
   publish:
     runs-on: ubuntu-latest
     # packages: write is what ghcr needs. Quay ignores it.
     permissions: { contents: read, packages: write }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       - id: vars
         env:
           INPUT_VERSION: ${{ inputs.version }}
         run: |
           VERSION="${INPUT_VERSION:-$(jq -r '.["."] // "0.1.0"' .release-please-manifest.json)}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+        with:
+          version: v3.21.4   # same Helm 3 as OKDP/gh-workflows okdp-chart-ci.yml
       - name: Package and push chart
         env:
           CHART_REGISTRY: ${{ vars.CHART_REGISTRY || 'quay.io/okdp/charts' }}

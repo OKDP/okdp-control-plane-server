@@ -7,24 +7,24 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"regexp"
-	"slices"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/okdp/okdp-control-plane-server/internal/auth"
+	"github.com/okdp/okdp-control-plane-server/internal/gitops"
 	"github.com/okdp/okdp-control-plane-server/internal/models"
 	"github.com/okdp/okdp-control-plane-server/internal/repository"
-	"github.com/okdp/okdp-control-plane-server/internal/repository/crd"
 	"github.com/okdp/okdp-control-plane-server/internal/repository/provisioning"
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 )
@@ -39,10 +39,18 @@ var (
 // serviceNameRe matches a DNS-style identifier (lowercase alphanumerics and dashes).
 var serviceNameRe = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
 
+// servicesResource names the resource in the not-found and conflict errors
+// the handlers map to 404 and 409.
+var servicesResource = schema.GroupResource{Group: "okdp.io", Resource: "services"}
+
 // ServiceService manages platform services (deploy, monitor, delete) and exposes the catalog.
+//
+// Desired state is written to the deployments Git repository; observed state
+// is read from the cluster (instance descriptors, workloads, and the objects
+// of the GitOps engine).
 type ServiceService interface {
 	GetPlatformServices(ctx context.Context) ([]models.PlatformService, error)
-	// AddPlatformService exposes a new service in the catalog (default Context).
+	// AddPlatformService exposes a new service in the catalog (platform/catalog.yaml).
 	AddPlatformService(ctx context.Context, svc models.PlatformService) (*models.PlatformService, error)
 	// UpdatePlatformService updates an existing catalog service (name from the path).
 	UpdatePlatformService(ctx context.Context, name string, svc models.PlatformService) (*models.PlatformService, error)
@@ -53,7 +61,9 @@ type ServiceService interface {
 	GetService(ctx context.Context, project, name string) (*models.ServiceInstance, error)
 	UpdateServiceParameters(ctx context.Context, project, name string, req models.ServiceUpdateRequest) (*models.ServiceInstance, error)
 	DeleteService(ctx context.Context, project, name string) error
-	WatchServices(ctx context.Context, project string) (watch.Interface, error)
+	// WatchServices streams the instances of a project as they change, until
+	// ctx ends or an underlying watch closes (the channel is then closed).
+	WatchServices(ctx context.Context, project string) (<-chan ServiceEvent, error)
 
 	GetMenuCategories(ctx context.Context) ([]models.MenuCategory, error)
 
@@ -61,56 +71,75 @@ type ServiceService interface {
 
 	GetProfileImages(ctx context.Context) (map[string][]models.ProfileImage, error)
 
-	EnrichURL(ctx context.Context, instance *models.ServiceInstance)
-	EnrichPodHealth(ctx context.Context, instance *models.ServiceInstance)
 	ListPods(ctx context.Context, project, serviceName string) ([]models.Pod, error)
-	GetPodLogs(ctx context.Context, project, podName, container string, tailLines int64, follow bool) (io.ReadCloser, error)
+	// GetPodLogs streams the logs of a pod of the instance serviceName; a pod
+	// of another instance, or of none, is not found.
+	GetPodLogs(ctx context.Context, project, serviceName, podName, container string, tailLines int64, follow bool) (io.ReadCloser, error)
 	GetServiceMetrics(ctx context.Context, project, serviceName string) (*models.ServiceMetrics, error)
 	GetProjectMetrics(ctx context.Context, project string) (map[string]*models.ServiceMetrics, error)
 }
 
+// ServiceEvent is one change of a project's instances, as streamed to the
+// console: Type is ADDED, MODIFIED or DELETED.
+type ServiceEvent struct {
+	Type   string                 `json:"type"`
+	Object models.ServiceInstance `json:"object"`
+}
+
+// ServiceDeps gathers what DefaultServiceService needs.
+type ServiceDeps struct {
+	Deployments     *gitops.Deployments
+	PlatformRepo    repository.PlatformRepository
+	CatalogWriter   repository.CatalogWriterRepository
+	SchemaService   PackageSchemaService
+	OidcProvisioner provisioning.OidcClientProvisioner
+	Engine          repository.EngineAdapter
+	Descriptors     repository.DescriptorRepository
+	K8sClient       dynamic.Interface
+	TypedClient     kubernetes.Interface
+	SidecarPrefixes []string
+	// Changes is shared with the other writers of the deployments repository,
+	// so a live stream hears about their commits too. Created when nil.
+	Changes *ChangeNotifier
+}
+
 type DefaultServiceService struct {
-	releaseRepo      repository.ServiceRepository
-	contextRepo      repository.ContextRepository
-	contextWriteRepo repository.ContextWriterRepository
-	schemaService    PackageSchemaService
-	oidcProvisioner  provisioning.OidcClientProvisioner
-	k8sClient        dynamic.Interface
-	typedClient      kubernetes.Interface
-	contextNamespace string
-	releaseInterval  string
-	releaseTimeout   string
-	sidecarPrefixes  []string
-	// insecureRegistries mirrors INSECURE_OCI_REGISTRIES so the Releases this
-	// service creates carry the insecure flag for those hosts.
-	insecureRegistries []string
+	deployments     *gitops.Deployments
+	platformRepo    repository.PlatformRepository
+	catalogWriter   repository.CatalogWriterRepository
+	schemaService   PackageSchemaService
+	oidcProvisioner provisioning.OidcClientProvisioner
+	engine          repository.EngineAdapter
+	descriptors     repository.DescriptorRepository
+	k8sClient       dynamic.Interface
+	typedClient     kubernetes.Interface
+	sidecarPrefixes []string
+	changes         *ChangeNotifier
 }
 
-// SetInsecureRegistries declares the plain-HTTP registry hosts.
-func (s *DefaultServiceService) SetInsecureRegistries(hosts []string) {
-	s.insecureRegistries = hosts
-}
-
-func NewDefaultServiceService(releaseRepo repository.ServiceRepository, contextRepo repository.ContextRepository, contextWriteRepo repository.ContextWriterRepository, schemaService PackageSchemaService, oidcProvisioner provisioning.OidcClientProvisioner, k8sClient dynamic.Interface, typedClient kubernetes.Interface, contextNamespace, releaseInterval, releaseTimeout string, sidecarPrefixes []string) *DefaultServiceService {
+func NewDefaultServiceService(d ServiceDeps) *DefaultServiceService {
+	if d.Changes == nil {
+		d.Changes = NewChangeNotifier()
+	}
 	return &DefaultServiceService{
-		releaseRepo:      releaseRepo,
-		contextRepo:      contextRepo,
-		contextWriteRepo: contextWriteRepo,
-		schemaService:    schemaService,
-		oidcProvisioner:  oidcProvisioner,
-		k8sClient:        k8sClient,
-		typedClient:      typedClient,
-		contextNamespace: contextNamespace,
-		releaseInterval:  releaseInterval,
-		releaseTimeout:   releaseTimeout,
-		sidecarPrefixes:  sidecarPrefixes,
+		deployments:     d.Deployments,
+		platformRepo:    d.PlatformRepo,
+		catalogWriter:   d.CatalogWriter,
+		schemaService:   d.SchemaService,
+		oidcProvisioner: d.OidcProvisioner,
+		engine:          d.Engine,
+		descriptors:     d.Descriptors,
+		k8sClient:       d.K8sClient,
+		typedClient:     d.TypedClient,
+		sidecarPrefixes: d.SidecarPrefixes,
+		changes:         d.Changes,
 	}
 }
 
 // --- Platform services ---
 
 func (s *DefaultServiceService) GetPlatformServices(ctx context.Context) ([]models.PlatformService, error) {
-	services, err := s.contextRepo.GetPlatformServices(ctx)
+	services, err := s.platformRepo.GetPlatformServices(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -125,16 +154,16 @@ func (s *DefaultServiceService) GetPlatformServices(ctx context.Context) ([]mode
 	return services, nil
 }
 
-// AddPlatformService validates and appends a new service to the catalog (default Context).
+// AddPlatformService validates and appends a new service to the catalog.
 func (s *DefaultServiceService) AddPlatformService(ctx context.Context, svc models.PlatformService) (*models.PlatformService, error) {
-	if s.contextWriteRepo == nil {
+	if s.catalogWriter == nil {
 		return nil, fmt.Errorf("catalog management is not available")
 	}
 	if err := normalizeAndValidateCatalogService(&svc); err != nil {
 		return nil, err
 	}
 
-	existing, err := s.contextRepo.GetPlatformServices(ctx)
+	existing, err := s.platformRepo.GetPlatformServices(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read catalog: %w", err)
 	}
@@ -148,16 +177,16 @@ func (s *DefaultServiceService) AddPlatformService(ctx context.Context, svc mode
 		return nil, err
 	}
 
-	if err := s.contextWriteRepo.AddPlatformService(ctx, svc); err != nil {
+	if err := s.catalogWriter.AddPlatformService(ctx, svc); err != nil {
 		return nil, err
 	}
-	s.contextRepo.Invalidate()
+	s.platformRepo.Invalidate()
 	return &svc, nil
 }
 
 // UpdatePlatformService validates and replaces an existing catalog service.
 func (s *DefaultServiceService) UpdatePlatformService(ctx context.Context, name string, svc models.PlatformService) (*models.PlatformService, error) {
-	if s.contextWriteRepo == nil {
+	if s.catalogWriter == nil {
 		return nil, fmt.Errorf("catalog management is not available")
 	}
 	svc.Name = name // the path is the source of truth for identity
@@ -173,31 +202,31 @@ func (s *DefaultServiceService) UpdatePlatformService(ctx context.Context, name 
 		return nil, err
 	}
 
-	if err := s.contextWriteRepo.UpdatePlatformService(ctx, name, svc); err != nil {
+	if err := s.catalogWriter.UpdatePlatformService(ctx, name, svc); err != nil {
 		return nil, err
 	}
-	s.contextRepo.Invalidate()
+	s.platformRepo.Invalidate()
 	return &svc, nil
 }
 
 // RemovePlatformService removes a service from the catalog.
 func (s *DefaultServiceService) RemovePlatformService(ctx context.Context, name string) error {
-	if s.contextWriteRepo == nil {
+	if s.catalogWriter == nil {
 		return fmt.Errorf("catalog management is not available")
 	}
 	if _, err := s.findCatalogService(ctx, name); err != nil {
 		return err
 	}
-	if err := s.contextWriteRepo.RemovePlatformService(ctx, name); err != nil {
+	if err := s.catalogWriter.RemovePlatformService(ctx, name); err != nil {
 		return err
 	}
-	s.contextRepo.Invalidate()
+	s.platformRepo.Invalidate()
 	return nil
 }
 
 // findCatalogService returns the catalog service by name or ErrCatalogServiceNotFound.
 func (s *DefaultServiceService) findCatalogService(ctx context.Context, name string) (*models.PlatformService, error) {
-	existing, err := s.contextRepo.GetPlatformServices(ctx)
+	existing, err := s.platformRepo.GetPlatformServices(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read catalog: %w", err)
 	}
@@ -272,9 +301,45 @@ func normalizeAndValidateCatalogService(svc *models.PlatformService) error {
 	return nil
 }
 
+// --- Instances: desired state in Git ---
+
+// ReleaseNameTakenError is a new instance whose release name <p>-<i> another
+// project's instance (or a platform component) already uses. The handler
+// answers 409 with its own code, distinct from a duplicate instance.
+type ReleaseNameTakenError struct{ *gitops.ErrReleaseTaken }
+
+// IsReleaseNameTaken reports whether err is a release-name collision.
+func IsReleaseNameTaken(err error) bool {
+	var taken *ReleaseNameTakenError
+	return errors.As(err, &taken)
+}
+
+// gitError maps the errors of the deployments repository to the Kubernetes
+// API errors the handlers already turn into 404 and 409.
+func gitError(err error, name string) error {
+	var taken *gitops.ErrReleaseTaken
+	switch {
+	case err == nil:
+		return nil
+	case errors.As(err, &taken):
+		return &ReleaseNameTakenError{taken}
+	case errors.Is(err, gitops.ErrNotFound):
+		return apierrors.NewNotFound(servicesResource, name)
+	case errors.Is(err, gitops.ErrExists):
+		return apierrors.NewAlreadyExists(servicesResource, name)
+	default:
+		return err
+	}
+}
+
+// chartURL is the OCI chart reference of a catalog service, without tag.
+func chartURL(packageRepo, service string) string {
+	return "oci://" + strings.TrimSuffix(strings.TrimPrefix(packageRepo, "oci://"), "/") + "/" + service
+}
+
 func (s *DefaultServiceService) DeployService(ctx context.Context, project string, req models.ServiceRequest) (*models.ServiceInstance, error) {
 	if req.Service == "" {
-		return nil, fmt.Errorf("service name is required")
+		return nil, invalid("service name is required")
 	}
 
 	svc, err := s.resolvePlatformService(ctx, req.Service)
@@ -287,117 +352,409 @@ func (s *DefaultServiceService) DeployService(ctx context.Context, project strin
 		deployTag = svc.DefaultVersion
 	}
 
-	if err := s.validateParameters(ctx, req.Service, deployTag, req.Parameters); err != nil {
-		return nil, fmt.Errorf("parameter validation failed: %w", err)
+	instanceName := req.InstanceName
+	if instanceName == "" {
+		instanceName = req.Service
+	}
+	if err := gitops.ValidateName("instance", instanceName); err != nil {
+		return nil, invalid("%v", err)
 	}
 
-	packageRepo, err := s.contextRepo.GetPackageRepository(ctx)
+	if err := s.validateParameters(ctx, req.Service, deployTag, req.Parameters); err != nil {
+		return nil, err
+	}
+
+	packageRepo, err := s.platformRepo.GetPackageRepository(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to resolve package repository: %w", err)
+		return nil, fmt.Errorf("failed to resolve the chart repository: %w", err)
 	}
 	if svc.Repository != "" {
 		packageRepo = svc.Repository
 	}
 
-	ingressSuffix, err := s.contextRepo.GetIngressSuffix(ctx)
+	connections, err := s.deployments.ListConnections(ctx, project)
 	if err != nil {
-		return nil, fmt.Errorf("failed to resolve ingress suffix: %w", err)
-	}
-
-	instanceName := req.InstanceName
-	if instanceName == "" {
-		instanceName = req.Service
-	}
-	releaseName := fmt.Sprintf("%s-%s", project, instanceName)
-
-	release := &crd.Release{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: crd.ReleaseAPIVersion,
-			Kind:       crd.ReleaseKind,
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      releaseName,
-			Namespace: project,
-			Labels: map[string]string{
-				crd.LabelProject:      project,
-				crd.LabelService:      req.Service,
-				crd.LabelInstanceName: instanceName,
-			},
-		},
-		Spec: crd.ReleaseSpec{
-			Description: fmt.Sprintf("%s for project %s", req.Service, project),
-			Package: crd.ReleasePackage{
-				Repository: fmt.Sprintf("%s/%s", packageRepo, req.Service),
-				Tag:        deployTag,
-				Interval:   s.releaseInterval,
-				Timeout:    s.releaseTimeout,
-				Insecure:   insecureOCIHost(packageRepo, s.insecureRegistries),
-			},
-			Parameters: req.Parameters,
-			// No explicit Contexts. KuboCD merges Config.defaultContexts, then the
-			// optional Context named by Config.defaultNamespaceContexts looked up in
-			// this Release's namespace. A project overriding nothing needs no object.
-			TargetNamespace: project,
-			CreateNamespace: false,
-		},
-	}
-
-	if err := s.releaseRepo.Create(ctx, project, release); err != nil {
 		return nil, err
 	}
 
-	instance := releaseToInstance(release)
-	instance.URL = fmt.Sprintf("https://%s.%s", releaseName, ingressSuffix)
-	return instance, nil
+	values := req.Parameters
+	if values == nil {
+		values = map[string]any{}
+	}
+	state := gitops.InstanceState{
+		Instance: gitops.Instance{
+			Name:        instanceName,
+			Project:     project,
+			Service:     req.Service,
+			Chart:       chartURL(packageRepo, req.Service),
+			Version:     deployTag,
+			Connections: referencedConnections(values, connectionNames(connections)),
+		},
+		Values: values,
+	}
+	if err := state.Instance.Validate(); err != nil {
+		return nil, invalid("%v", err)
+	}
+
+	revision, err := s.deployments.CreateInstance(ctx, auth.ActorFrom(ctx), state)
+	if err != nil {
+		return nil, gitError(err, instanceName)
+	}
+	s.changes.Notify(project, instanceName, "ADDED")
+
+	instance := s.assemble(state, repository.EngineStatus{}, nil, nil, nil)
+	instance.Revision = revision
+	return &instance, nil
+}
+
+// errStaleValidation reports that the declaration changed between the
+// validation of a patch and its write.
+var errStaleValidation = errors.New("the instance changed while its parameters were validated")
+
+// maxValidationReplays bounds how many times a patch is validated again
+// because the declaration kept changing under it.
+const maxValidationReplays = 3
+
+// UpdateServiceParameters applies a JSON Merge Patch to the parameters of an
+// instance (and its chart version when req.Tag is set).
+//
+// Validation reads the catalog and the chart schema, through the deployments
+// repository: it must not run inside UpdateInstance, whose callback holds the
+// store's write lock (a read there waits for itself). The patch is validated
+// against the current declaration first; the write then re-applies it to the
+// latest declaration and only proceeds when that declaration is the one that
+// was validated, otherwise the whole validation runs again.
+func (s *DefaultServiceService) UpdateServiceParameters(ctx context.Context, project, name string, req models.ServiceUpdateRequest) (*models.ServiceInstance, error) {
+	connections, err := s.deployments.ListConnections(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	known := connectionNames(connections)
+
+	for attempt := 0; ; attempt++ {
+		current, err := s.deployments.GetInstance(ctx, project, name)
+		if err != nil {
+			return nil, gitError(err, name)
+		}
+		version := current.Instance.Version
+		if req.Tag != "" {
+			version = req.Tag
+		}
+		// JSON Merge Patch (RFC 7386): a submitted key replaces the stored
+		// one, null deletes it, objects merge recursively, arrays replace.
+		values := MergePatch(current.Values, req.Parameters)
+		if err := s.validateParameters(ctx, current.Instance.Service, version, values); err != nil {
+			return nil, err
+		}
+
+		state, revision, err := s.deployments.UpdateInstance(ctx, auth.ActorFrom(ctx), project, name, func(st *gitops.InstanceState) error {
+			if st.Instance.Service != current.Instance.Service || st.Instance.Version != current.Instance.Version ||
+				!reflect.DeepEqual(st.Values, current.Values) {
+				return errStaleValidation
+			}
+			st.Instance.Version = version
+			st.Values = MergePatch(st.Values, req.Parameters)
+			st.Instance.Connections = referencedConnections(st.Values, known)
+			return nil
+		})
+		if errors.Is(err, errStaleValidation) {
+			if attempt < maxValidationReplays {
+				continue
+			}
+			return nil, fmt.Errorf("%w: %v", gitops.ErrConflict, err)
+		}
+		if err != nil {
+			return nil, gitError(err, name)
+		}
+		s.changes.Notify(project, name, "MODIFIED")
+
+		instance, err := s.GetService(ctx, project, name)
+		if err != nil {
+			fallback := s.assemble(*state, repository.EngineStatus{}, nil, nil, nil)
+			instance = &fallback
+		}
+		instance.Revision = revision
+		return instance, nil
+	}
+}
+
+func (s *DefaultServiceService) DeleteService(ctx context.Context, project, name string) error {
+	if _, err := s.deployments.DeleteInstance(ctx, auth.ActorFrom(ctx), project, name); err != nil {
+		return gitError(err, name)
+	}
+	s.changes.Notify(project, name, "DELETED")
+
+	releaseName := gitops.ReleaseName(project, name)
+	s.cleanupOidcClient(ctx, releaseName)
+	s.cleanupUserResources(ctx, project, releaseName)
+	return nil
+}
+
+// cleanupOidcClient best-effort unregisters the OIDC client of a deleted
+// service through the configured provisioning backend (no-op when
+// identity.provisioning.provider is unset/none).
+func (s *DefaultServiceService) cleanupOidcClient(ctx context.Context, releaseName string) {
+	if s.oidcProvisioner == nil {
+		return
+	}
+	if err := s.oidcProvisioner.DeleteClient(ctx, releaseName); err != nil {
+		// Warn, not Debug: a client left registered outlives the service that
+		// owned it and nothing else reports it.
+		logrus.WithError(err).WithField("oidcClient", releaseName).Warn("OidcClient cleanup failed")
+	} else {
+		logrus.WithField("oidcClient", releaseName).Info("Cleaned up OidcClient")
+	}
+}
+
+// MergePatch applies patch to target as a JSON Merge Patch (RFC 7386) and
+// returns the result: a null value removes the key, a nested object merges
+// into the stored one (recursively), anything else (arrays included)
+// replaces it. target is not modified. The result is never nil.
+func MergePatch(target, patch map[string]any) map[string]any {
+	out := make(map[string]any, len(target)+len(patch))
+	for k, v := range target {
+		out[k] = v
+	}
+	for k, v := range patch {
+		if v == nil {
+			delete(out, k)
+			continue
+		}
+		if patchObject, ok := v.(map[string]any); ok {
+			current, _ := out[k].(map[string]any)
+			out[k] = MergePatch(current, patchObject)
+			continue
+		}
+		out[k] = v
+	}
+	return out
+}
+
+// connectionNames lists the external connections of a project.
+func connectionNames(connections []gitops.Connection) map[string]bool {
+	names := make(map[string]bool, len(connections))
+	for _, c := range connections {
+		names[c.Name] = true
+	}
+	return names
+}
+
+// referencedConnections lists, sorted, the external connections the values
+// name: the connection files to layer in so the chart finds
+// connections.<name>. A connection reference is a plain string parameter
+// (x-okdp-connection-ref), possibly nested (a catalog of a Trino), so every
+// string of the values is a candidate; only declared connections match.
+// Layering one in that no parameter actually uses is harmless: the chart
+// ignores connections it is not asked for.
+func referencedConnections(values map[string]any, known map[string]bool) []string {
+	found := map[string]bool{}
+	walkStrings(values, func(v string) {
+		if known[v] {
+			found[v] = true
+		}
+	})
+	out := make([]string, 0, len(found))
+	for name := range found {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// walkStrings calls fn on every string of a JSON-like value.
+func walkStrings(v any, fn func(string)) {
+	switch t := v.(type) {
+	case string:
+		fn(t)
+	case map[string]any:
+		for _, item := range t {
+			walkStrings(item, fn)
+		}
+	case []any:
+		for _, item := range t {
+			walkStrings(item, fn)
+		}
+	}
+}
+
+// --- Instances: observed state from the cluster ---
+
+// projectObservation is what the cluster says about a project's releases.
+type projectObservation struct {
+	engine      map[string]repository.EngineStatus
+	descriptors map[string]*repository.Descriptor
+	// outputs are the connections the deployed instances provide, by name.
+	outputs map[string]bool
+	pods    []unstructured.Unstructured
+}
+
+func (s *DefaultServiceService) observe(ctx context.Context, project string) projectObservation {
+	obs := projectObservation{
+		engine:      map[string]repository.EngineStatus{},
+		descriptors: map[string]*repository.Descriptor{},
+		outputs:     map[string]bool{},
+	}
+	if s.engine != nil {
+		if statuses, err := s.engine.List(ctx, project); err != nil {
+			logrus.WithError(err).WithField("engine", s.engine.Name()).Warn("Could not read the GitOps engine status")
+		} else {
+			obs.engine = statuses
+		}
+	}
+	if s.descriptors != nil {
+		if list, err := s.descriptors.List(ctx, project); err != nil {
+			logrus.WithError(err).Warn("Could not read the instance descriptors")
+		} else {
+			for i := range list {
+				obs.descriptors[list[i].Release] = &list[i]
+				for _, o := range list[i].Outputs {
+					obs.outputs[o.Name] = true
+				}
+			}
+		}
+	}
+	if s.k8sClient != nil {
+		podGVR := schema.GroupVersionResource{Version: "v1", Resource: "pods"}
+		if list, err := s.k8sClient.Resource(podGVR).Namespace(project).List(ctx, metav1.ListOptions{LabelSelector: repository.LabelAppInstance}); err == nil {
+			obs.pods = list.Items
+		}
+	}
+	return obs
+}
+
+// assemble builds the console view of an instance from its declaration and
+// what the cluster reports.
+func (s *DefaultServiceService) assemble(st gitops.InstanceState, engine repository.EngineStatus, descriptor *repository.Descriptor, externals map[string]bool, obs *projectObservation) models.ServiceInstance {
+	inst := st.Instance
+	release := inst.ReleaseName()
+	instance := models.ServiceInstance{
+		Name:            inst.Name,
+		ReleaseName:     release,
+		Service:         inst.Service,
+		ServiceTag:      inst.Version,
+		TargetNamespace: inst.Project,
+		Parameters:      st.Values,
+	}
+
+	instance.Status, instance.StatusMessage = instanceStatus(inst, engine, s.engineName())
+	if !engine.CreatedAt.IsZero() {
+		instance.CreatedAt = engine.CreatedAt.UTC().Format(time.RFC3339)
+	}
+	if descriptor != nil {
+		instance.URL = descriptor.URL
+		instance.Usage = descriptor.Usage
+		if instance.CreatedAt == "" && !descriptor.CreatedAt.IsZero() {
+			instance.CreatedAt = descriptor.CreatedAt.UTC().Format(time.RFC3339)
+		}
+	}
+	if obs != nil && instance.Status == repository.PhaseReady {
+		instance.Status = s.checkPodHealth(obs.pods, release, instance.Status)
+	}
+	instance.Connections = boundConnections(st, externals, obs)
+	return instance
+}
+
+func (s *DefaultServiceService) engineName() string {
+	if s.engine == nil {
+		return "the GitOps engine"
+	}
+	return s.engine.Name()
+}
+
+// instanceStatus maps the engine's report to the console's status words.
+// Anything the engine has not picked up yet is Pending: committed, waiting.
+func instanceStatus(inst gitops.Instance, engine repository.EngineStatus, engineName string) (string, string) {
+	if !engine.Found {
+		return repository.PhasePending, fmt.Sprintf("Committed to Git, waiting for %s to reconcile it.", engineName)
+	}
+	if engine.Phase == repository.PhaseReady && engine.Revision != "" && engine.Revision != inst.Version {
+		return repository.PhaseUpdating, fmt.Sprintf("Moving from version %s to %s.", engine.Revision, inst.Version)
+	}
+	message := engine.Message
+	if engine.Phase == repository.PhaseReady {
+		message = ""
+	}
+	return engine.Phase, truncateMessage(message)
+}
+
+// boundConnections describes what an instance is wired to: the external
+// connections its declaration layers in, and the connections of other
+// instances its values name. Resolved says whether the connection exists: a
+// file in Git for an external one, a deployed provider for an internal one.
+func boundConnections(st gitops.InstanceState, externals map[string]bool, obs *projectObservation) []models.ServiceConnection {
+	project := st.Instance.Project
+	byName := map[string]models.ServiceConnection{}
+	for _, name := range st.Instance.Connections {
+		byName[name] = models.ServiceConnection{Name: name, Namespace: project, Kind: models.ConnectionKindExternal, Resolved: externals == nil || externals[name]}
+	}
+	if obs != nil {
+		self := st.Instance.ReleaseName()
+		walkStrings(st.Values, func(v string) {
+			if _, seen := byName[v]; seen || v == self {
+				return
+			}
+			if obs.outputs[v] {
+				byName[v] = models.ServiceConnection{Name: v, Namespace: project, Kind: models.ConnectionKindInternal, Resolved: true}
+			}
+		})
+	}
+	if len(byName) == 0 {
+		return nil
+	}
+	out := make([]models.ServiceConnection, 0, len(byName))
+	for _, c := range byName {
+		out = append(out, c)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
 }
 
 func (s *DefaultServiceService) ListServices(ctx context.Context, project string) ([]models.ServiceInstance, error) {
-	releases, err := s.releaseRepo.List(ctx, project, project)
+	states, err := s.deployments.ListInstances(ctx, project)
 	if err != nil {
 		return nil, err
 	}
-
-	var result []models.ServiceInstance
-	for i := range releases {
-		result = append(result, *releaseToInstance(&releases[i]))
+	connections, err := s.deployments.ListConnections(ctx, project)
+	if err != nil {
+		return nil, err
 	}
-	s.enrichWithURL(ctx, result)
-	s.enrichWithPodHealth(ctx, result)
+	externals := connectionNames(connections)
+	obs := s.observe(ctx, project)
+
+	result := make([]models.ServiceInstance, 0, len(states))
+	for _, st := range states {
+		release := st.Instance.ReleaseName()
+		result = append(result, s.assemble(st, obs.engine[release], obs.descriptors[release], externals, &obs))
+	}
 	return result, nil
 }
 
 func (s *DefaultServiceService) GetService(ctx context.Context, project, name string) (*models.ServiceInstance, error) {
-	releaseName := fmt.Sprintf("%s-%s", project, name)
-	release, err := s.releaseRepo.Get(ctx, project, releaseName)
+	st, err := s.deployments.GetInstance(ctx, project, name)
+	if err != nil {
+		return nil, gitError(err, name)
+	}
+	connections, err := s.deployments.ListConnections(ctx, project)
 	if err != nil {
 		return nil, err
 	}
-	instance := releaseToInstance(release)
-	s.setURLIfExposed(ctx, instance)
-	instances := []models.ServiceInstance{*instance}
-	s.enrichWithPodHealth(ctx, instances)
-	instance.Status = instances[0].Status
-	// Only surface an explanatory message when the instance is not Ready: there
-	// is nothing useful to show on a healthy service, and scanning events has a
-	// non-trivial API cost per request.
-	if instance.Status != "Ready" {
-		instance.StatusMessage = s.latestWarningMessage(ctx, project, instance.ReleaseName)
+	obs := s.observe(ctx, project)
+	release := st.Instance.ReleaseName()
+	instance := s.assemble(*st, obs.engine[release], obs.descriptors[release], connectionNames(connections), &obs)
+	// Only look for an explanation when the instance is not Ready and the
+	// engine gave none: scanning events has a non-trivial API cost per request.
+	if instance.Status != repository.PhaseReady && instance.Status != repository.PhasePending && instance.StatusMessage == "" {
+		instance.StatusMessage = s.latestWarningMessage(ctx, project, release)
 	}
-	return instance, nil
+	return &instance, nil
 }
 
 // latestWarningMessage scans Warning events in a namespace and returns the
-// most recent message whose involvedObject name is related to the given release.
+// most recent message whose involvedObject belongs to the given release.
 func (s *DefaultServiceService) latestWarningMessage(ctx context.Context, project, releaseName string) string {
-	if project == "" || releaseName == "" {
+	if project == "" || releaseName == "" || s.k8sClient == nil {
 		return ""
 	}
-	names, err := s.releaseInstanceNames(ctx, project, releaseName)
-	if err != nil {
-		logrus.WithError(err).Debugf("latestWarningMessage: instance names failed for %s", releaseName)
-		return ""
-	}
-
 	eventsGVR := schema.GroupVersionResource{Version: "v1", Resource: "events"}
 	events, err := s.k8sClient.Resource(eventsGVR).Namespace(project).List(ctx, metav1.ListOptions{
 		FieldSelector: "type=Warning",
@@ -413,7 +770,7 @@ func (s *DefaultServiceService) latestWarningMessage(ctx context.Context, projec
 	)
 	for _, e := range events.Items {
 		involvedName, _, _ := unstructured.NestedString(e.Object, "involvedObject", "name")
-		if !matchesInstance(involvedName, names) {
+		if involvedName != releaseName && !strings.HasPrefix(involvedName, releaseName+"-") {
 			continue
 		}
 		ts := pickEventTimestamp(e.Object)
@@ -424,6 +781,161 @@ func (s *DefaultServiceService) latestWarningMessage(ctx context.Context, projec
 		}
 	}
 	return latestMsg
+}
+
+// --- Live stream ---
+
+func (s *DefaultServiceService) WatchServices(ctx context.Context, project string) (<-chan ServiceEvent, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	out := make(chan ServiceEvent, 16)
+
+	type trigger struct {
+		instance  string
+		eventType string
+	}
+	triggers := make(chan trigger, 64)
+	forward := func(instance, eventType string) {
+		select {
+		case triggers <- trigger{instance, eventType}:
+		case <-ctx.Done():
+		}
+	}
+
+	started := 0
+	prefix := project + "-"
+	if s.descriptors != nil {
+		if w, err := s.descriptors.Watch(ctx, project); err != nil {
+			logrus.WithError(err).Warn("Could not watch the instance descriptors")
+		} else {
+			started++
+			go func() {
+				defer w.Stop()
+				defer cancel()
+				for event := range w.ResultChan() {
+					if cm, ok := event.Object.(*corev1.ConfigMap); ok {
+						if release := cm.Labels[repository.LabelDescriptorInstance]; strings.HasPrefix(release, prefix) {
+							forward(strings.TrimPrefix(release, prefix), string(event.Type))
+						}
+					}
+				}
+			}()
+		}
+	}
+	if s.engine != nil {
+		if w, err := s.engine.Watch(ctx); err != nil {
+			logrus.WithError(err).WithField("engine", s.engine.Name()).Warn("Could not watch the GitOps engine objects")
+		} else {
+			started++
+			go func() {
+				defer w.Stop()
+				defer cancel()
+				for event := range w.ResultChan() {
+					u, ok := event.Object.(*unstructured.Unstructured)
+					if !ok {
+						continue
+					}
+					if p, release := s.engine.ReleaseOf(u); p == project && strings.HasPrefix(release, prefix) {
+						forward(strings.TrimPrefix(release, prefix), string(event.Type))
+					}
+				}
+			}()
+		}
+	}
+	commits, unsubscribe := s.changes.Subscribe(project)
+	go func() {
+		defer unsubscribe()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case c := <-commits:
+				forward(c.Instance, c.Type)
+			}
+		}
+	}()
+	if started == 0 {
+		logrus.WithField("project", project).Warn("Streaming the services of a project from the console's own commits only")
+	}
+
+	go func() {
+		defer close(out)
+		defer cancel()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case t := <-triggers:
+				event, ok := s.eventFor(ctx, project, t.instance, t.eventType)
+				if !ok {
+					continue
+				}
+				select {
+				case out <- event:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+	return out, nil
+}
+
+// eventFor recomputes an instance after a change. The declaration decides
+// whether it still exists: a descriptor deleted while Git still declares the
+// instance is a change of status, not a deletion.
+func (s *DefaultServiceService) eventFor(ctx context.Context, project, name, eventType string) (ServiceEvent, bool) {
+	instance, err := s.GetService(ctx, project, name)
+	if apierrors.IsNotFound(err) {
+		return ServiceEvent{Type: "DELETED", Object: models.ServiceInstance{
+			Name: name, ReleaseName: gitops.ReleaseName(project, name), TargetNamespace: project,
+		}}, true
+	}
+	if err != nil {
+		logrus.WithError(err).WithField("instance", project+"/"+name).Debug("Could not refresh a streamed instance")
+		return ServiceEvent{}, false
+	}
+	if eventType != "ADDED" {
+		eventType = "MODIFIED"
+	}
+	return ServiceEvent{Type: eventType, Object: *instance}, true
+}
+
+// --- Catalog (self-service) ---
+
+func (s *DefaultServiceService) GetMenuCategories(ctx context.Context) ([]models.MenuCategory, error) {
+	return s.platformRepo.GetMenuCategories(ctx)
+}
+
+func (s *DefaultServiceService) GetIngressSuffix(ctx context.Context) (string, error) {
+	return s.platformRepo.GetIngressSuffix(ctx)
+}
+
+func (s *DefaultServiceService) GetProfileImages(ctx context.Context) (map[string][]models.ProfileImage, error) {
+	return s.platformRepo.GetProfileImages(ctx)
+}
+
+// --- Pods ---
+
+// instanceSelector selects the workloads of an instance: every one carries
+// app.kubernetes.io/instance: <project>-<instance> (chart rules).
+func instanceSelector(project, name string) string {
+	return fmt.Sprintf("%s=%s", repository.LabelAppInstance, gitops.ReleaseName(project, name))
+}
+
+func (s *DefaultServiceService) ListPods(ctx context.Context, project, serviceName string) ([]models.Pod, error) {
+	podGVR := schema.GroupVersionResource{Version: "v1", Resource: "pods"}
+	podList, err := s.k8sClient.Resource(podGVR).Namespace(project).List(ctx, metav1.ListOptions{
+		LabelSelector: instanceSelector(project, serviceName),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list pods: %w", err)
+	}
+
+	result := []models.Pod{}
+	for _, item := range podList.Items {
+		result = append(result, s.unstructuredToPod(&item))
+	}
+	return result, nil
 }
 
 // pickEventTimestamp reads the most useful timestamp from an Event object.
@@ -452,31 +964,6 @@ func truncateMessage(msg string) string {
 		return msg
 	}
 	return msg[:max] + "…"
-}
-
-func (s *DefaultServiceService) DeleteService(ctx context.Context, project, name string) error {
-	releaseName := fmt.Sprintf("%s-%s", project, name)
-
-	if err := s.releaseRepo.Delete(ctx, project, releaseName); err != nil {
-		return err
-	}
-
-	s.cleanupOidcClient(ctx, releaseName)
-	s.cleanupUserResources(ctx, project, releaseName)
-	return nil
-}
-
-// cleanupOidcClient best-effort unregisters the OIDC client of a deleted
-// service through the configured provisioning backend (no-op when
-// identity.provisioning.provider is unset/none).
-func (s *DefaultServiceService) cleanupOidcClient(ctx context.Context, releaseName string) {
-	if err := s.oidcProvisioner.DeleteClient(ctx, releaseName); err != nil {
-		// Warn, not Debug: a client left registered outlives the service that
-		// owned it and nothing else reports it.
-		logrus.WithError(err).WithField("oidcClient", releaseName).Warn("OidcClient cleanup failed")
-	} else {
-		logrus.WithField("oidcClient", releaseName).Info("Cleaned up OidcClient")
-	}
 }
 
 // ownsByName reports whether an object named by a release belongs to
@@ -511,14 +998,17 @@ func ownsByName(objectName, releaseName string, otherReleases []string) bool {
 
 // cleanupUserResources removes the pods and volumes a release created outside
 // its own manifests, JupyterHub's per-user servers and home volumes, which no
-// controller reclaims when the Release goes.
+// controller reclaims when the release goes.
 //
 // Deleting a volume is irreversible, so this fails closed: if the surviving
 // releases cannot be listed, nothing is deleted rather than everything matching
 // a prefix.
 func (s *DefaultServiceService) cleanupUserResources(ctx context.Context, namespace, releaseName string) {
-	// Called after the Release has been deleted, so this lists the neighbours.
-	survivors, err := s.releaseRepo.List(ctx, namespace, namespace)
+	if s.k8sClient == nil {
+		return
+	}
+	// Called after the instance has been removed from Git, so this lists the neighbours.
+	survivors, err := s.deployments.ListInstances(ctx, namespace)
 	if err != nil {
 		logrus.WithError(err).WithField("release", releaseName).
 			Error("Skipping user resource cleanup: cannot tell this release's objects from its neighbours'")
@@ -526,8 +1016,8 @@ func (s *DefaultServiceService) cleanupUserResources(ctx context.Context, namesp
 	}
 	others := make([]string, 0, len(survivors))
 	for i := range survivors {
-		if survivors[i].Name != releaseName {
-			others = append(others, survivors[i].Name)
+		if name := survivors[i].Instance.ReleaseName(); name != releaseName {
+			others = append(others, name)
 		}
 	}
 
@@ -556,244 +1046,9 @@ func (s *DefaultServiceService) cleanupUserResources(ctx context.Context, namesp
 	}
 }
 
-func (s *DefaultServiceService) WatchServices(ctx context.Context, project string) (watch.Interface, error) {
-	return s.releaseRepo.Watch(ctx, project, project)
-}
-
-// --- Catalog (self-service) ---
-
-func (s *DefaultServiceService) GetMenuCategories(ctx context.Context) ([]models.MenuCategory, error) {
-	return s.contextRepo.GetMenuCategories(ctx)
-}
-
-func (s *DefaultServiceService) GetIngressSuffix(ctx context.Context) (string, error) {
-	return s.contextRepo.GetIngressSuffix(ctx)
-}
-
-func (s *DefaultServiceService) GetProfileImages(ctx context.Context) (map[string][]models.ProfileImage, error) {
-	return s.contextRepo.GetProfileImages(ctx)
-}
-
-func (s *DefaultServiceService) UpdateServiceParameters(ctx context.Context, project, name string, req models.ServiceUpdateRequest) (*models.ServiceInstance, error) {
-	releaseName := fmt.Sprintf("%s-%s", project, name)
-
-	release, err := s.releaseRepo.Get(ctx, project, releaseName)
-	if err != nil {
-		return nil, err
-	}
-
-	if req.Tag != "" {
-		release.Spec.Package.Tag = req.Tag
-	}
-
-	if req.Parameters != nil {
-		if release.Spec.Parameters == nil {
-			release.Spec.Parameters = make(map[string]any)
-		}
-		for k, v := range req.Parameters {
-			release.Spec.Parameters[k] = v
-		}
-	}
-
-	serviceName := release.Labels[crd.LabelService]
-	if err := s.validateParameters(ctx, serviceName, release.Spec.Package.Tag, release.Spec.Parameters); err != nil {
-		return nil, fmt.Errorf("parameter validation failed: %w", err)
-	}
-
-	if err := s.releaseRepo.Update(ctx, project, release); err != nil {
-		return nil, fmt.Errorf("failed to update release: %w", err)
-	}
-
-	instance := releaseToInstance(release)
-	s.setURLIfExposed(ctx, instance)
-	return instance, nil
-}
-
-// --- helpers ---
-
-func (s *DefaultServiceService) enrichWithURL(ctx context.Context, instances []models.ServiceInstance) {
-	suffix, err := s.contextRepo.GetIngressSuffix(ctx)
-	if err != nil {
-		return
-	}
-	// Get the URL only if the Ingress belongs to this instance.
-	// This avoids matching an Ingress from another instance with a similar name,
-	// such as "kafka" and "kafka-console".
-	// Ingresses are loaded once per namespace and reused by all instances.
-	hostsByNS := map[string]map[string]string{}
-	for i := range instances {
-		ns := instances[i].TargetNamespace
-		if ns == "" {
-			continue
-		}
-		hosts, ok := hostsByNS[ns]
-		if !ok {
-			hosts = s.namespaceIngressHosts(ctx, ns)
-			hostsByNS[ns] = hosts
-		}
-		names, err := s.releaseInstanceNames(ctx, ns, instances[i].ReleaseName)
-		if err != nil {
-			continue
-		}
-		for _, host := range candidateHosts(&instances[i], suffix) {
-			if owner, exists := hosts[host]; exists && slices.Contains(names, owner) {
-				instances[i].URL = "https://" + host
-				break
-			}
-		}
-	}
-}
-
-// setURLIfExposed sets instance.URL to the first candidate host (see
-// candidateHosts) that an Ingress in the instance's namespace actually
-// routes to, the single-instance counterpart of enrichWithURL (see it for
-// the rationale).
-func (s *DefaultServiceService) setURLIfExposed(ctx context.Context, instance *models.ServiceInstance) {
-	suffix, err := s.contextRepo.GetIngressSuffix(ctx)
-	if err != nil || instance == nil || instance.TargetNamespace == "" {
-		return
-	}
-	names, err := s.releaseInstanceNames(ctx, instance.TargetNamespace, instance.ReleaseName)
-	if err != nil {
-		return
-	}
-	hosts := s.namespaceIngressHosts(ctx, instance.TargetNamespace)
-	for _, host := range candidateHosts(instance, suffix) {
-		if owner, exists := hosts[host]; exists && slices.Contains(names, owner) {
-			instance.URL = "https://" + host
-			return
-		}
-	}
-}
-
-// roleHostConventions maps a role (models.ServiceInstance.Roles) to the
-// canonical Ingress host a service filling that role is expected to publish,
-// for roles whose URL is a project-wide convention rather than tied to
-// whatever name a given instance happens to have, e.g. a project has at
-// most one default storage service, so consumers and the console can assume
-// a single, stable host regardless of which backend/instance is deployed.
-var roleHostConventions = map[string]func(namespace string) string{
-	"storage": func(namespace string) string { return fmt.Sprintf("storage-%s", namespace) },
-	// The Spark UIs (history server and live driver UIs) are reached through
-	// the web proxy, whose Ingress host is a fixed prefix, not the release
-	// or service name.
-	"spark": func(namespace string) string { return fmt.Sprintf("spark-web-proxy-%s", namespace) },
-}
-
-// candidateHosts lists the Ingress hosts, in priority order, that could
-// expose instance: its own release name first, then any role-specific
-// convention that applies to it, then the platform-packages catalog's own
-// "<service>[-console]-<namespace>" convention, most service contexts
-// (Trino, Superset, JupyterHub, Spark History, Polaris, ...) publish their
-// endpoint at a host built from the service name and namespace rather than
-// the release name, independently of whatever instance name the user chose.
-func candidateHosts(instance *models.ServiceInstance, suffix string) []string {
-	hosts := []string{fmt.Sprintf("%s.%s", instance.ReleaseName, suffix)}
-	for _, role := range instance.Roles {
-		if hostname, ok := roleHostConventions[role]; ok {
-			hosts = append(hosts, fmt.Sprintf("%s.%s", hostname(instance.TargetNamespace), suffix))
-		}
-	}
-	if instance.Service != "" {
-		hosts = append(hosts,
-			fmt.Sprintf("%s-console-%s.%s", instance.Service, instance.TargetNamespace, suffix),
-			fmt.Sprintf("%s-%s.%s", instance.Service, instance.TargetNamespace, suffix),
-		)
-	}
-	return hosts
-}
-
-// namespaceIngressHosts maps each host served by an Ingress in a namespace to
-// the HelmRelease that owns it (empty on error, so a lookup failure never fabricates a URL).
-func (s *DefaultServiceService) namespaceIngressHosts(ctx context.Context, namespace string) map[string]string {
-	ingressGVR := schema.GroupVersionResource{Group: "networking.k8s.io", Version: "v1", Resource: "ingresses"}
-	list, err := s.k8sClient.Resource(ingressGVR).Namespace(namespace).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return map[string]string{}
-	}
-	return ingressHostsFromItems(list.Items)
-}
-
-// Maps each Ingress host to its HelmRelease.
-// Ingresses without a HelmRelease owner are ignored.
-func ingressHostsFromItems(items []unstructured.Unstructured) map[string]string {
-	hosts := map[string]string{}
-	for i := range items {
-		owner := items[i].GetLabels()["helm.toolkit.fluxcd.io/name"]
-		if owner == "" {
-			continue
-		}
-		rules, _, _ := unstructured.NestedSlice(items[i].Object, "spec", "rules")
-		for _, r := range rules {
-			rm, ok := r.(map[string]any)
-			if !ok {
-				continue
-			}
-			if host, ok := rm["host"].(string); ok && host != "" {
-				hosts[host] = owner
-			}
-		}
-	}
-	return hosts
-}
-
-// enrichWithPodHealth overrides a "Ready" Release status when pods are actually unhealthy.
-func (s *DefaultServiceService) enrichWithPodHealth(ctx context.Context, instances []models.ServiceInstance) {
-	podGVR := schema.GroupVersionResource{Version: "v1", Resource: "pods"}
-
-	podsByNamespace := map[string][]unstructured.Unstructured{}
-	for i := range instances {
-		if instances[i].Status != "Ready" {
-			continue
-		}
-		ns := instances[i].TargetNamespace
-		if ns == "" {
-			continue
-		}
-		if _, done := podsByNamespace[ns]; !done {
-			podList, err := s.k8sClient.Resource(podGVR).Namespace(ns).List(ctx, metav1.ListOptions{})
-			if err != nil {
-				podsByNamespace[ns] = nil
-			} else {
-				podsByNamespace[ns] = podList.Items
-			}
-		}
-		pods := podsByNamespace[ns]
-		if pods == nil {
-			continue
-		}
-
-		names, err := s.releaseInstanceNames(ctx, ns, instances[i].ReleaseName)
-		if err != nil {
-			continue
-		}
-		instances[i].Status = s.checkPodHealth(pods, names, instances[i].Status)
-	}
-}
-
-func (s *DefaultServiceService) EnrichURL(ctx context.Context, instance *models.ServiceInstance) {
-	s.setURLIfExposed(ctx, instance)
-}
-
-func (s *DefaultServiceService) EnrichPodHealth(ctx context.Context, instance *models.ServiceInstance) {
-	if instance == nil || instance.Status != "Ready" || instance.TargetNamespace == "" {
-		return
-	}
-	podGVR := schema.GroupVersionResource{Version: "v1", Resource: "pods"}
-	podList, err := s.k8sClient.Resource(podGVR).Namespace(instance.TargetNamespace).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return
-	}
-	names, err := s.releaseInstanceNames(ctx, instance.TargetNamespace, instance.ReleaseName)
-	if err != nil {
-		return
-	}
-	instance.Status = s.checkPodHealth(podList.Items, names, instance.Status)
-}
-
-func (s *DefaultServiceService) checkPodHealth(pods []unstructured.Unstructured, names []string, currentStatus string) string {
+func (s *DefaultServiceService) checkPodHealth(pods []unstructured.Unstructured, releaseName string, currentStatus string) string {
 	for _, pod := range pods {
-		if !matchesInstance(pod.GetName(), names) {
+		if pod.GetLabels()[repository.LabelAppInstance] != releaseName {
 			continue
 		}
 		containerStatuses, _, _ := unstructured.NestedSlice(pod.Object, "status", "containerStatuses")
@@ -825,7 +1080,7 @@ func (s *DefaultServiceService) checkPodHealth(pods []unstructured.Unstructured,
 }
 
 func (s *DefaultServiceService) resolvePlatformService(ctx context.Context, name string) (*models.PlatformService, error) {
-	services, err := s.contextRepo.GetPlatformServices(ctx)
+	services, err := s.platformRepo.GetPlatformServices(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read platform services: %w", err)
 	}
@@ -835,10 +1090,16 @@ func (s *DefaultServiceService) resolvePlatformService(ctx context.Context, name
 			return &svc, nil
 		}
 	}
-	return nil, fmt.Errorf("service %q is not available in the platform", name)
+	return nil, invalid("service %q is not available in the platform", name)
 }
 
 func (s *DefaultServiceService) validateParameters(ctx context.Context, serviceName, tag string, params map[string]any) error {
+	// Filled by the platform and the connection layers, never by values.yaml.
+	for _, key := range PlatformKeys {
+		if _, set := params[key]; set {
+			return invalid("parameter %q is reserved: the platform fills it", key)
+		}
+	}
 	if s.schemaService == nil {
 		return nil
 	}
@@ -848,28 +1109,37 @@ func (s *DefaultServiceService) validateParameters(ctx context.Context, serviceN
 		return fmt.Errorf("could not fetch schema for %s@%s: %w", serviceName, tag, err)
 	}
 
+	if schemaMap == nil {
+		// No schema at all: nothing to validate against. (A chart without
+		// values.schema.json already fails the fetch above.)
+		return nil
+	}
+
+	// From here on the chart has a schema: one that cannot be used fails the
+	// request (fail closed) rather than committing values nobody checked.
 	schemaJSON, err := json.Marshal(schemaMap)
 	if err != nil {
-		return nil
+		return fmt.Errorf("the schema of %s@%s cannot be encoded: %w", serviceName, tag, err)
 	}
 
 	compiler := jsonschema.NewCompiler()
 	schemaDoc, err := jsonschema.UnmarshalJSON(bytes.NewReader(schemaJSON))
 	if err != nil {
-		logrus.WithError(err).Warn("Failed to unmarshal schema JSON, skipping validation")
-		return nil
+		return fmt.Errorf("the schema of %s@%s cannot be read: %w", serviceName, tag, err)
 	}
 	if err := compiler.AddResource("schema.json", schemaDoc); err != nil {
-		logrus.WithError(err).Warn("Failed to add schema resource, skipping validation")
-		return nil
+		return fmt.Errorf("the schema of %s@%s cannot be loaded: %w", serviceName, tag, err)
 	}
 
 	sch, err := compiler.Compile("schema.json")
 	if err != nil {
-		logrus.WithError(err).Warn("Failed to compile schema, skipping validation")
-		return nil
+		return fmt.Errorf("the schema of %s@%s does not compile: %w", serviceName, tag, err)
 	}
 
+	if params == nil {
+		// No parameter at all is an empty values file, not a null document.
+		params = map[string]any{}
+	}
 	paramsJSON, err := json.Marshal(params)
 	if err != nil {
 		return fmt.Errorf("failed to marshal parameters: %w", err)
@@ -881,7 +1151,7 @@ func (s *DefaultServiceService) validateParameters(ctx context.Context, serviceN
 	}
 
 	if err := sch.Validate(paramsAny); err != nil {
-		return fmt.Errorf("invalid parameters: %w", err)
+		return invalid("parameter validation failed: invalid parameters: %v", err)
 	}
 	return nil
 }
@@ -897,73 +1167,21 @@ func (s *DefaultServiceService) isInfraSidecar(containerName string) bool {
 	return false
 }
 
-func (s *DefaultServiceService) releaseInstanceNames(ctx context.Context, project, releaseName string) ([]string, error) {
-	release, err := s.releaseRepo.Get(ctx, project, releaseName)
+func (s *DefaultServiceService) GetPodLogs(ctx context.Context, project, serviceName, podName, container string, tailLines int64, follow bool) (io.ReadCloser, error) {
+	// The pod must be one ListPods shows for this instance. Without the check,
+	// any pod of the namespace is readable through any service name, sidecars
+	// and other tenants' jobs included.
+	pod, err := s.typedClient.CoreV1().Pods(project).Get(ctx, podName, metav1.GetOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("failed to get release: %w", err)
-	}
-
-	helmReleases, err := s.k8sClient.Resource(crd.GetHelmReleaseGVR()).Namespace(project).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to list helm releases: %w", err)
-	}
-
-	var names []string
-	for _, hr := range helmReleases.Items {
-		for _, ref := range hr.GetOwnerReferences() {
-			if ref.UID == release.UID {
-				names = append(names, hr.GetName())
-				break
-			}
+		if apierrors.IsNotFound(err) {
+			return nil, apierrors.NewNotFound(corev1.Resource("pods"), podName)
 		}
+		return nil, fmt.Errorf("failed to get pod: %w", err)
 	}
-	if len(names) == 0 {
-		return nil, fmt.Errorf("no helm release owned by %s", releaseName)
-	}
-	return names, nil
-}
-
-func (s *DefaultServiceService) releaseInstanceSelector(ctx context.Context, project, releaseName string) (string, error) {
-	names, err := s.releaseInstanceNames(ctx, project, releaseName)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("app.kubernetes.io/instance in (%s)", strings.Join(names, ",")), nil
-}
-
-func matchesInstance(name string, instanceNames []string) bool {
-	for _, n := range instanceNames {
-		if name == n || strings.HasPrefix(name, n+"-") {
-			return true
-		}
-	}
-	return false
-}
-
-func (s *DefaultServiceService) ListPods(ctx context.Context, project, serviceName string) ([]models.Pod, error) {
-	releaseName := fmt.Sprintf("%s-%s", project, serviceName)
-
-	selector, err := s.releaseInstanceSelector(ctx, project, releaseName)
-	if err != nil {
-		return nil, err
+	if pod.Labels[repository.LabelAppInstance] != gitops.ReleaseName(project, serviceName) {
+		return nil, apierrors.NewNotFound(corev1.Resource("pods"), podName)
 	}
 
-	podGVR := schema.GroupVersionResource{Version: "v1", Resource: "pods"}
-	podList, err := s.k8sClient.Resource(podGVR).Namespace(project).List(ctx, metav1.ListOptions{
-		LabelSelector: selector,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to list pods: %w", err)
-	}
-
-	var result []models.Pod
-	for _, item := range podList.Items {
-		result = append(result, s.unstructuredToPod(&item))
-	}
-	return result, nil
-}
-
-func (s *DefaultServiceService) GetPodLogs(ctx context.Context, project, podName, container string, tailLines int64, follow bool) (io.ReadCloser, error) {
 	opts := &corev1.PodLogOptions{
 		Follow: follow,
 	}
@@ -1039,326 +1257,4 @@ func (s *DefaultServiceService) unstructuredToPod(u *unstructured.Unstructured) 
 	pod.Restarts = restarts
 
 	return pod
-}
-
-func releaseToInstance(r *crd.Release) *models.ServiceInstance {
-	status := models.MapPhaseToStatus(r.Status.Phase)
-
-	serviceName := r.Labels[crd.LabelService]
-	instanceName := r.Labels[crd.LabelInstanceName]
-	if instanceName == "" {
-		instanceName = serviceName
-	}
-
-	createdAt := ""
-	if !r.CreationTimestamp.IsZero() {
-		createdAt = r.CreationTimestamp.Format(time.RFC3339)
-	}
-
-	return &models.ServiceInstance{
-		Name:            instanceName,
-		ReleaseName:     r.Name,
-		Service:         serviceName,
-		ServiceTag:      r.Spec.Package.Tag,
-		Status:          status,
-		TargetNamespace: r.Spec.TargetNamespace,
-		Roles:           r.Status.Roles,
-		Parameters:      r.Spec.Parameters,
-		Connections:     boundConnections(r),
-		CreatedAt:       createdAt,
-	}
-}
-
-// boundConnections describes what a release is wired to, from what the
-// controller published.
-//
-// The two lists do not mean what their names suggest. A connectionRef with no
-// kind resolves by looking on both sides, so watchedInputConnections holds
-// every *candidate*, a Connection and a ClusterConnection per name, not a set
-// of pending bindings. Listing them as they come showed "demo-db
-// (ClusterConnection) waiting" next to the Connection that had resolved, for a
-// ClusterConnection that never existed. Candidates are therefore grouped by
-// name: a name that resolved shows once, resolved. A name that resolved nowhere
-// shows once, waiting, which is the case a reader opens this page for.
-func boundConnections(r *crd.Release) []models.ServiceConnection {
-	byName := map[string]models.ServiceConnection{}
-	order := make([]string, 0, len(r.Status.WatchedInputConnections))
-
-	remember := func(ref crd.InputConnectionReference, resolved bool) {
-		current, seen := byName[ref.Name]
-		if !seen {
-			order = append(order, ref.Name)
-		}
-		// A resolved candidate always wins over a pending one.
-		if seen && current.Resolved {
-			return
-		}
-		byName[ref.Name] = models.ServiceConnection{
-			Name: ref.Name, Namespace: ref.Namespace, Kind: ref.Kind, Resolved: resolved,
-		}
-	}
-
-	for _, ref := range r.Status.EffectiveInputConnections {
-		remember(ref, true)
-	}
-	for _, ref := range r.Status.WatchedInputConnections {
-		remember(ref, false)
-	}
-
-	if len(order) == 0 {
-		return nil
-	}
-	sort.Strings(order)
-	out := make([]models.ServiceConnection, 0, len(order))
-	for _, name := range order {
-		out = append(out, byName[name])
-	}
-	return out
-}
-
-// GetServiceMetrics aggregates live CPU/memory usage from the metrics-server
-// for every pod belonging to a service instance, against the total limits
-// read from the pods' container specs.
-func (s *DefaultServiceService) GetProjectMetrics(ctx context.Context, project string) (map[string]*models.ServiceMetrics, error) {
-	instances, err := s.ListServices(ctx, project)
-	if err != nil {
-		return nil, err
-	}
-
-	podGVR := schema.GroupVersionResource{Version: "v1", Resource: "pods"}
-	allPods, err := s.k8sClient.Resource(podGVR).Namespace(project).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to list pods: %w", err)
-	}
-	metricsByPod := s.listPodMetricsByName(ctx, project)
-
-	metrics := make(map[string]*models.ServiceMetrics, len(instances))
-	for _, inst := range instances {
-		names, err := s.releaseInstanceNames(ctx, project, inst.ReleaseName)
-		if err != nil {
-			continue
-		}
-		var pods []unstructured.Unstructured
-		for _, pod := range allPods.Items {
-			if slices.Contains(names, pod.GetLabels()["app.kubernetes.io/instance"]) {
-				pods = append(pods, pod)
-			}
-		}
-		metrics[inst.Name] = buildServiceMetrics(pods, metricsByPod)
-	}
-	return metrics, nil
-}
-
-func (s *DefaultServiceService) listPodMetricsByName(ctx context.Context, namespace string) map[string]*unstructured.Unstructured {
-	metricsGVR := schema.GroupVersionResource{
-		Group:    "metrics.k8s.io",
-		Version:  "v1beta1",
-		Resource: "pods",
-	}
-	byName := map[string]*unstructured.Unstructured{}
-	list, err := s.k8sClient.Resource(metricsGVR).Namespace(namespace).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		logrus.Debugf("metrics for namespace %s unavailable: %v", namespace, err)
-		return byName
-	}
-	for i := range list.Items {
-		byName[list.Items[i].GetName()] = &list.Items[i]
-	}
-	return byName
-}
-
-func buildServiceMetrics(pods []unstructured.Unstructured, metricsByPod map[string]*unstructured.Unstructured) *models.ServiceMetrics {
-	var cpuLimit, memLimit float64
-	var cpuUsed, memUsed float64
-	cpuUsedAvailable := false
-	memUsedAvailable := false
-
-	for _, pod := range pods {
-		containers, _, _ := unstructured.NestedSlice(pod.Object, "spec", "containers")
-		for _, c := range containers {
-			container, ok := c.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			resources, _ := container["resources"].(map[string]interface{})
-			if resources == nil {
-				continue
-			}
-			for _, bucket := range []string{"limits", "requests"} {
-				quantities, _ := resources[bucket].(map[string]interface{})
-				if quantities == nil {
-					continue
-				}
-				if v, ok := quantities["cpu"].(string); ok && v != "" {
-					if cores, err := parseCPUQuantity(v); err != nil {
-						logrus.WithError(err).WithField("pod", pod.GetName()).Warn("skipping unparseable CPU limit")
-					} else {
-						cpuLimit += cores
-					}
-				}
-				if v, ok := quantities["memory"].(string); ok && v != "" {
-					if bytes, err := parseMemoryQuantity(v); err != nil {
-						logrus.WithError(err).WithField("pod", pod.GetName()).Warn("skipping unparseable memory limit")
-					} else {
-						memLimit += bytes
-					}
-				}
-				break
-			}
-		}
-	}
-
-	for _, pod := range pods {
-		podMetrics, ok := metricsByPod[pod.GetName()]
-		if !ok {
-			continue
-		}
-		containers, _, _ := unstructured.NestedSlice(podMetrics.Object, "containers")
-		for _, c := range containers {
-			container, ok := c.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			usage, _ := container["usage"].(map[string]interface{})
-			if usage == nil {
-				continue
-			}
-			if v, ok := usage["cpu"].(string); ok && v != "" {
-				if cores, err := parseCPUQuantity(v); err != nil {
-					logrus.WithError(err).WithField("pod", pod.GetName()).Warn("skipping unparseable CPU usage from metrics-server")
-				} else {
-					cpuUsed += cores
-					cpuUsedAvailable = true
-				}
-			}
-			if v, ok := usage["memory"].(string); ok && v != "" {
-				if bytes, err := parseMemoryQuantity(v); err != nil {
-					logrus.WithError(err).WithField("pod", pod.GetName()).Warn("skipping unparseable memory usage from metrics-server")
-				} else {
-					memUsed += bytes
-					memUsedAvailable = true
-				}
-			}
-		}
-	}
-
-	metrics := &models.ServiceMetrics{
-		CPU: models.MetricValue{
-			UsedRaw:   cpuUsed,
-			LimitRaw:  cpuLimit,
-			Used:      formatCPU(cpuUsed),
-			Limit:     formatCPU(cpuLimit),
-			Pct:       ratio(cpuUsed, cpuLimit),
-			Available: cpuUsedAvailable,
-		},
-		Memory: models.MetricValue{
-			UsedRaw:   memUsed,
-			LimitRaw:  memLimit,
-			Used:      formatMemory(memUsed),
-			Limit:     formatMemory(memLimit),
-			Pct:       ratio(memUsed, memLimit),
-			Available: memUsedAvailable,
-		},
-	}
-	return metrics
-}
-
-func (s *DefaultServiceService) GetServiceMetrics(ctx context.Context, project, serviceName string) (*models.ServiceMetrics, error) {
-	releaseName := fmt.Sprintf("%s-%s", project, serviceName)
-
-	selector, err := s.releaseInstanceSelector(ctx, project, releaseName)
-	if err != nil {
-		return nil, err
-	}
-
-	podGVR := schema.GroupVersionResource{Version: "v1", Resource: "pods"}
-	podList, err := s.k8sClient.Resource(podGVR).Namespace(project).List(ctx, metav1.ListOptions{
-		LabelSelector: selector,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to list pods: %w", err)
-	}
-
-	metricsByPod := s.listPodMetricsByName(ctx, project)
-	return buildServiceMetrics(podList.Items, metricsByPod), nil
-}
-
-// parseCPUQuantity parses a Kubernetes CPU quantity string (e.g. "500m",
-// "2", "1500000000n", "1.5") and returns the value in whole cores. Wraps
-// k8s.io/apimachinery resource.ParseQuantity, the canonical parser used
-// throughout the Kubernetes ecosystem, so we inherit correct handling of
-// every SI suffix (n, u, m, k, M, G, T, P, E) and binary suffix (Ki, Mi,
-// Gi, Ti, Pi, Ei) as well as decimal and scientific notation.
-// Returns an error when s is not a valid quantity; callers are expected
-// to log a warning and skip the faulty container, not fail the whole
-// request.
-func parseCPUQuantity(s string) (float64, error) {
-	if s == "" {
-		return 0, nil
-	}
-	q, err := resource.ParseQuantity(s)
-	if err != nil {
-		return 0, fmt.Errorf("invalid CPU quantity %q: %w", s, err)
-	}
-	// AsApproximateFloat64 returns the value in the quantity's base units.
-	// For CPU, the base unit is already "cores" (e.g. "500m" → 0.5).
-	return q.AsApproximateFloat64(), nil
-}
-
-// parseMemoryQuantity parses a Kubernetes memory quantity string (e.g.
-// "512Mi", "2Gi", "1024", "1.5Gi") and returns the value in bytes. Same
-// rationale as parseCPUQuantity, we delegate to resource.ParseQuantity.
-func parseMemoryQuantity(s string) (float64, error) {
-	if s == "" {
-		return 0, nil
-	}
-	q, err := resource.ParseQuantity(s)
-	if err != nil {
-		return 0, fmt.Errorf("invalid memory quantity %q: %w", s, err)
-	}
-	// For memory, the base unit is bytes.
-	return q.AsApproximateFloat64(), nil
-}
-
-// formatCPU returns a compact human-readable string in cores.
-func formatCPU(cores float64) string {
-	if cores == 0 {
-		return "0"
-	}
-	if cores < 1 {
-		return fmt.Sprintf("%.3f", cores)
-	}
-	return fmt.Sprintf("%.2f", cores)
-}
-
-// formatMemory picks the right binary unit for a byte value.
-func formatMemory(bytes float64) string {
-	if bytes == 0 {
-		return "0"
-	}
-	units := []struct {
-		threshold float64
-		suffix    string
-	}{
-		{1024 * 1024 * 1024, "Gi"},
-		{1024 * 1024, "Mi"},
-		{1024, "Ki"},
-	}
-	for _, u := range units {
-		if bytes >= u.threshold {
-			return fmt.Sprintf("%.2f%s", bytes/u.threshold, u.suffix)
-		}
-	}
-	return fmt.Sprintf("%.0fB", bytes)
-}
-
-func ratio(a, b float64) float64 {
-	if b <= 0 {
-		return 0
-	}
-	r := a / b
-	if r > 1 {
-		return 1
-	}
-	return r
 }

@@ -3,14 +3,18 @@ package main
 import (
 	"context"
 	"net/http"
+	"os"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/sirupsen/logrus"
 
 	"github.com/okdp/okdp-control-plane-server/internal/api/handlers"
 	"github.com/okdp/okdp-control-plane-server/internal/api/router"
 	"github.com/okdp/okdp-control-plane-server/internal/auth"
+	"github.com/okdp/okdp-control-plane-server/internal/buildinfo"
 	"github.com/okdp/okdp-control-plane-server/internal/config"
+	"github.com/okdp/okdp-control-plane-server/internal/gitops"
 	"github.com/okdp/okdp-control-plane-server/internal/repository"
 	"github.com/okdp/okdp-control-plane-server/internal/repository/provisioning"
 	"github.com/okdp/okdp-control-plane-server/internal/service"
@@ -71,36 +75,56 @@ func main() {
 		logrus.Fatalf("Failed to initialize Kubernetes discovery client: %v", err)
 	}
 
-	// Initialize Project stack (projects are Kubernetes Namespaces
-	// carrying the label okdp.io/project)
-	projectRepo := repository.NewProjectRepository(k8sTypedClient)
-	contextWriterRepo := repository.NewContextWriterRepository(k8sClient, cfg.ContextName, cfg.ContextNamespace)
-	projectService := service.NewDefaultProjectService(projectRepo)
+	// The deployments Git repository, the only desired-state store.
+	if err := cfg.GitOps.Validate(); err != nil {
+		logrus.Fatalf("Invalid GitOps configuration: %v", err)
+	}
+	deployments, err := buildDeployments(cfg.GitOps)
+	if err != nil {
+		logrus.Fatalf("Failed to prepare the deployments repository: %v", err)
+	}
+	var engine repository.EngineAdapter
+	switch cfg.GitOps.Engine {
+	case config.EngineArgoCD:
+		engine = repository.NewArgoCDAdapter(k8sClient, cfg.GitOps.ArgoCDNamespace)
+	default:
+		engine = repository.NewFluxAdapter(k8sClient, cfg.GitOps.ReleasesNamespace)
+	}
+	descriptors := repository.NewDescriptorRepository(k8sTypedClient)
+
+	// Initialize Project stack: projects are the projects/<p>/project.yaml
+	// files of the deployments repository; the console also creates (and
+	// deletes) the Namespace of the projects it creates.
+	projectNamespaces := repository.NewProjectNamespaceRepository(k8sTypedClient)
+	projectService := service.NewDefaultProjectService(projectNamespaces, deployments)
 	projectHandler := handlers.NewProjectHandler(projectService)
 
-	// Context repository (shared by capabilities, catalog and Spark)
-	contextRepo := repository.NewContextRepository(k8sClient, cfg.ContextName, cfg.ContextNamespace)
+	// Platform configuration: the platform values (global.okdp) and the
+	// service catalog (platform/catalog.yaml). Shared by capabilities, catalog
+	// and Spark.
+	contextRepo := repository.NewPlatformRepository(k8sTypedClient, cfg.GitOps.ReleasesNamespace, deployments)
+	catalogWriter := repository.NewCatalogWriterRepository(deployments)
 
-	// Initialize Identity stack. The namespace is read per call from the Context,
-	// and the discovery client tells whether the kubauth CRDs are there at all.
-	kubauthNamespace := func(ctx context.Context) string {
-		ns, err := contextRepo.GetKubauthNamespace(ctx)
-		if err == nil {
-			return ns
-		}
-		// Falling back silently would read and write the CRs in a namespace the
-		// kubauth controller does not watch, and answer 200 all along.
-		logrus.WithError(err).Warnf("Could not read the kubauth namespace, falling back to %s", cfg.PlatformNamespace)
-		return cfg.PlatformNamespace
-	}
-	identityRepo := repository.NewIdentityRepository(k8sClient, k8sDiscoveryClient, kubauthNamespace)
+	// Initialize Identity stack: users and groups in the platform Keycloak
+	// realm, through the Admin REST API (KEYCLOAK_*). The realm is located by
+	// KEYCLOAK_URL/KEYCLOAK_REALM, else by the issuer the API verifies tokens
+	// against.
+	identityRepo := repository.NewKeycloakIdentityRepository(cfg, keycloakIssuerSource(cfg, contextRepo))
 	identityService := service.NewDefaultIdentityService(identityRepo)
 	identityHandler := handlers.NewIdentityHandler(identityService)
+	if cfg.KeycloakClientSecret == "" {
+		logrus.Info("KEYCLOAK_CLIENT_SECRET is not set: user and group management (/api/v1/identity) is disabled")
+	} else {
+		logrus.WithFields(logrus.Fields{
+			"url":      cfg.KeycloakURL,
+			"realm":    cfg.KeycloakRealm,
+			"clientId": cfg.KeycloakClientID,
+		}).Info("User and group management backed by the Keycloak Admin API (an empty url/realm follows the platform issuer)")
+	}
 
-	// Initialize Capabilities stack (platform features derived from the Context).
-	// Built after the identity repository: the identity capability answers on
-	// the same two conditions as the routes, the configured provider and the
-	// CRDs actually being served.
+	// Initialize Capabilities stack (platform features derived from the
+	// platform values). The identity capability answers on the same condition
+	// as the identity routes.
 	capabilityService := service.NewDefaultCapabilityService(contextRepo, identityRepo.Available)
 	capabilitiesHandler := handlers.NewCapabilitiesHandler(capabilityService)
 
@@ -114,42 +138,69 @@ func main() {
 	externalSecretService := service.NewDefaultExternalSecretService(externalSecretRepo, secretStoreRepo)
 	externalSecretHandler := handlers.NewExternalSecretHandler(externalSecretService)
 
-	// Initialize Service stack (KuboCD Releases + Context-driven catalog)
-	serviceRepo := repository.NewServiceRepository(k8sClient)
+	// Initialize Service stack (instances in Git, status from the cluster)
 	schemaService := service.NewDefaultPackageSchemaService(contextRepo)
 	schemaService.SetInsecureRegistries(cfg.InsecureOCIRegistries)
-	// OIDC client provisioning (backend selected per call from the Context)
+	// OIDC client provisioning (backend selected per call from the platform values)
 	oidcProvisioner := provisioning.NewContextSelector(contextRepo, k8sClient)
-	serviceService := service.NewDefaultServiceService(serviceRepo, contextRepo, contextWriterRepo, schemaService, oidcProvisioner, k8sClient, k8sTypedClient, cfg.ContextNamespace, cfg.ReleaseInterval, cfg.ReleaseTimeout, cfg.ExcludedSidecarPrefixes)
-	serviceService.SetInsecureRegistries(cfg.InsecureOCIRegistries)
+	serviceService := service.NewDefaultServiceService(service.ServiceDeps{
+		Deployments:     deployments,
+		PlatformRepo:    contextRepo,
+		CatalogWriter:   catalogWriter,
+		SchemaService:   schemaService,
+		OidcProvisioner: oidcProvisioner,
+		Engine:          engine,
+		Descriptors:     descriptors,
+		K8sClient:       k8sClient,
+		TypedClient:     k8sTypedClient,
+		SidecarPrefixes: cfg.ExcludedSidecarPrefixes,
+	})
 	serviceHandler := handlers.NewServiceHandler(serviceService, schemaService)
+	// What each vendored upstream chart was rendered with (values ConfigMaps
+	// of okdp.vendor.render), against the defaults of the published chart.
+	serviceHandler.SetRenderedValuesService(service.NewDefaultRenderedValuesService(
+		deployments, repository.NewVendorValuesRepository(k8sTypedClient), cfg.InsecureOCIRegistries))
 
 	// Initialize Spark stack (SparkApplication CRUD)
 	sparkRepo := repository.NewSparkAppRepository(k8sClient)
 	sparkService := service.NewDefaultSparkService(sparkRepo, contextRepo, k8sTypedClient)
 	sparkHandler := handlers.NewSparkHandler(sparkService)
 
-	// Setup router
-	// Initialize Connection stack (external connections declared by users +
-	// internal ones derived from the services deployed in a project)
+	// Initialize Connection stack (external connections declared in Git +
+	// internal ones published by the instances deployed in a project)
 	contractCatalog, err := service.NewEmbeddedContractCatalog()
 	if err != nil {
 		logrus.Fatalf("Failed to load the contract catalog: %v", err)
 	}
-	connectionRepo := repository.NewConnectionRepository(k8sClient, k8sTypedClient, k8sDiscoveryClient)
-	connectionService := service.NewDefaultConnectionService(connectionRepo, serviceRepo, contractCatalog)
+	connectionSecrets := repository.NewConnectionSecretRepository(k8sTypedClient)
+	connectionService := service.NewDefaultConnectionService(deployments, connectionSecrets, descriptors, serviceService.ListServices, contractCatalog)
 	connectionHandler := handlers.NewConnectionHandler(connectionService)
 
-	// The identity block is checked once, at startup, against what the cluster
-	// actually serves. A platform told to provision clients through kubauth on a
-	// cluster without kubauth would deploy services whose OIDC client is never
-	// created, and fail much later at the point of authenticating a user, with
-	// nothing pointing back here.
-	checkIdentityConfiguration(context.Background(), contextRepo, identityRepo)
+	// SQL editor: statements run on a deployed engine (Trino) at the URL of its
+	// instance descriptor with the caller's bearer token, or on a PostgreSQL
+	// connection of the project with its credentials Secret. Engine
+	// certificates are taken on trust when the platform does so for its issuer.
+	sqlConnections := service.SqlConnectionSource{Get: deployments.GetConnection, Secrets: connectionSecrets}
+	sqlService := service.NewDefaultSqlService(serviceService.GetService, sqlConnections, func(ctx context.Context) bool {
+		insecure, err := contextRepo.GetOidcInsecureSkipVerify(ctx)
+		return err == nil && insecure
+	})
+	sqlHandler := handlers.NewSqlHandler(sqlService)
+
+	// The identity block is checked once, at startup. A platform whose
+	// provisioning backend is misconfigured would deploy services fine and fail
+	// much later, when a deleted service leaves its OIDC client behind.
+	checkIdentityConfiguration(context.Background(), contextRepo)
 
 	verifier := buildTokenVerifier(context.Background(), cfg, contextRepo)
 
-	r := router.SetupRouter(cfg, verifier, capabilitiesHandler, projectHandler, identityHandler, secretStoreHandler, externalSecretHandler, serviceHandler, sparkHandler, connectionHandler)
+	// Release mode unless asked otherwise: debug mode prints every route and
+	// warns on each start, which is noise in a pod. GIN_MODE=debug brings it back.
+	if os.Getenv(gin.EnvGinMode) == "" {
+		gin.SetMode(gin.ReleaseMode)
+	}
+
+	r := router.SetupRouter(cfg, verifier, capabilitiesHandler, projectHandler, identityHandler, secretStoreHandler, externalSecretHandler, serviceHandler, sparkHandler, connectionHandler, sqlHandler)
 
 	// Start Server
 	//
@@ -167,17 +218,17 @@ func main() {
 		IdleTimeout:       120 * time.Second,
 	}
 
-	logrus.WithField("port", cfg.ServerPort).Info("Starting server")
+	logrus.WithField("port", cfg.ServerPort).WithField("version", buildinfo.CurrentVersion()).Info("Starting server")
 	if err := server.ListenAndServe(); err != nil {
 		logrus.Fatalf("Failed to start server: %v", err)
 	}
 }
 
 // checkIdentityConfiguration fails fast on an identity block that cannot hold,
-// and stays quiet otherwise. A Context that cannot be read at all is not fatal:
-// the platform Context may simply not be there yet on a fresh cluster, and the
-// routes that need it already report their own absence.
-func checkIdentityConfiguration(ctx context.Context, contextRepo repository.ContextRepository, identityRepo repository.IdentityRepository) {
+// and stays quiet otherwise. Platform values that cannot be read at all are not
+// fatal: they may simply not be there yet on a fresh cluster, and the routes
+// that need them already report their own absence.
+func checkIdentityConfiguration(ctx context.Context, contextRepo repository.PlatformRepository) {
 	identity, err := contextRepo.GetIdentity(ctx)
 	if err != nil {
 		// A block that is present and wrong is a configuration error worth
@@ -198,38 +249,44 @@ func checkIdentityConfiguration(ctx context.Context, contextRepo repository.Cont
 		return
 	}
 
-	// Every provider is checked here, not just kubauth: an unsupported value or
-	// an incomplete Keycloak block would otherwise start fine and fail at the
+	// Every provider is checked here: an unsupported value or an incomplete
+	// Keycloak block would otherwise start fine and fail at the
 	// first client cleanup, leaving stale OIDC clients behind.
 	switch provider {
 	case "", provisioning.ProviderNone:
-	case provisioning.ProviderKubauth:
-		if !identityRepo.Available(ctx) {
-			logrus.Fatalf(
-				"identity.provisioning.provider is %q but the kubauth CRDs are not installed on this cluster. "+
-					"Install kubauth, or set it to %q if another mechanism makes the OAuth client Secrets.",
-				provisioning.ProviderKubauth, provisioning.ProviderNone)
-		}
-		if _, err := contextRepo.GetKubauthNamespace(ctx); err != nil {
-			logrus.Fatalf("identity.provisioning.provider is %q but the kubauth namespace is unreadable: %v",
-				provisioning.ProviderKubauth, err)
-		}
 	case provisioning.ProviderKeycloak:
 		if _, err := contextRepo.GetKeycloakProvisioningConfig(ctx); err != nil {
 			logrus.Fatalf("identity.provisioning.provider is %q but its configuration is unusable: %v",
 				provisioning.ProviderKeycloak, err)
 		}
 	default:
-		logrus.Fatalf("identity.provisioning.provider is %q, which is not supported. Use %q, %q or %q.",
-			provider, provisioning.ProviderNone, provisioning.ProviderKubauth, provisioning.ProviderKeycloak)
+		logrus.Fatalf("identity.provisioning.provider is %q, which is not supported. Use %q or %q.",
+			provider, provisioning.ProviderNone, provisioning.ProviderKeycloak)
 	}
 
 	logrus.WithField("provisioningProvider", provider).Info("Identity configuration accepted")
 }
 
+// keycloakIssuerSource locates the Keycloak realm when KEYCLOAK_URL or
+// KEYCLOAK_REALM is unset: it is the issuer the API trusts (OIDC_ISSUER, else
+// the platform values), with the platform's oidc.insecureSkipVerify.
+func keycloakIssuerSource(cfg *config.Config, contextRepo repository.PlatformRepository) repository.KeycloakIssuerSource {
+	return func(ctx context.Context) (string, bool, error) {
+		issuer, err := auth.ResolveIssuer(ctx, cfg.OIDC.Issuer, contextRepo.GetOidcIssuer)
+		if err != nil {
+			return "", false, err
+		}
+		insecure, err := contextRepo.GetOidcInsecureSkipVerify(ctx)
+		if err != nil {
+			insecure = false
+		}
+		return issuer, insecure, nil
+	}
+}
+
 // buildTokenVerifier resolves the issuer the API will trust, or returns nil
 // when the deployment asked to run without verification.
-func buildTokenVerifier(ctx context.Context, cfg *config.Config, contextRepo repository.ContextRepository) auth.Verifier {
+func buildTokenVerifier(ctx context.Context, cfg *config.Config, contextRepo repository.PlatformRepository) auth.Verifier {
 	if cfg.OIDC.Disabled {
 		logrus.Warn("AUTH_DISABLED is set: the API accepts unauthenticated requests. Never do this outside local development.")
 		return nil
@@ -264,4 +321,27 @@ func buildTokenVerifier(ctx context.Context, cfg *config.Config, contextRepo rep
 
 	logrus.WithField("issuer", issuer).Info("API token verification enabled")
 	return verifier
+}
+
+// buildDeployments opens the deployments Git repository.
+func buildDeployments(cfg config.GitOpsConfig) (*gitops.Deployments, error) {
+	authMethod, err := gitops.AuthFromDir(cfg.RepoURL, cfg.CredentialsDir, cfg.InsecureIgnoreHostKey)
+	if err != nil {
+		return nil, err
+	}
+	store, err := gitops.NewGitStore(gitops.GitOptions{
+		URL:         cfg.RepoURL,
+		Branch:      cfg.Branch,
+		PathPrefix:  cfg.Path,
+		Auth:        authMethod,
+		AuthorName:  cfg.AuthorName,
+		AuthorEmail: cfg.AuthorEmail,
+		CloneDir:    cfg.CloneDir,
+	})
+	if err != nil {
+		return nil, err
+	}
+	logrus.WithField("url", cfg.RepoURL).WithField("branch", cfg.Branch).WithField("path", cfg.Path).
+		WithField("engine", cfg.Engine).Info("Desired state lives in the deployments repository")
+	return gitops.NewDeployments(store, gitops.NewDefaultFluxRenderer()), nil
 }

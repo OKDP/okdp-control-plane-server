@@ -8,29 +8,25 @@ import (
 	"k8s.io/client-go/dynamic"
 )
 
-// Provider names accepted in the Context (identity.provisioning.provider).
+// Provider names accepted in the platform values (global.okdp.identity.provisioning.provider).
 const (
 	ProviderNone     = "none"
-	ProviderKubauth  = "kubauth"
 	ProviderKeycloak = "keycloak"
 )
 
 type ContextConfig interface {
 	GetIdentityProvisioningProvider(ctx context.Context) (string, error)
-	GetKubauthNamespace(ctx context.Context) (string, error)
 	GetKeycloakProvisioningConfig(ctx context.Context) (*KeycloakConfig, error)
 }
 
 type contextSelector struct {
 	cfg      ContextConfig
-	kubauth  *kubauthProvisioner
 	keycloak *keycloakProvisioner
 }
 
 func NewContextSelector(cfg ContextConfig, client dynamic.Interface) OidcClientProvisioner {
 	return &contextSelector{
 		cfg:      cfg,
-		kubauth:  newKubauthProvisioner(client, cfg.GetKubauthNamespace),
 		keycloak: newKeycloakProvisioner(client, cfg.GetKeycloakProvisioningConfig),
 	}
 }
@@ -43,8 +39,6 @@ func (s *contextSelector) resolve(ctx context.Context) (OidcClientProvisioner, e
 	switch provider {
 	case "", ProviderNone:
 		return noneProvisioner{}, nil
-	case ProviderKubauth:
-		return s.kubauth, nil
 	case ProviderKeycloak:
 		return s.keycloak, nil
 	default:

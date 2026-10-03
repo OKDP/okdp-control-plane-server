@@ -1,0 +1,203 @@
+package repository
+
+import (
+	"context"
+	"encoding/json"
+	"testing"
+
+	"github.com/okdp/okdp-control-plane-server/internal/gitops"
+	"github.com/okdp/okdp-control-plane-server/internal/models"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
+)
+
+// newContextWith builds a platform repository whose global.okdp is the given
+// body, served by the okdp-platform-values ConfigMap; a serviceCatalog key
+// becomes platform/catalog.yaml in Git instead, where the catalog now lives.
+func newContextWith(t *testing.T, body map[string]interface{}) PlatformRepository {
+	t.Helper()
+	values := map[string]interface{}{}
+	files := map[string]string{}
+	for k, v := range body {
+		if k == "serviceCatalog" {
+			catalog, err := gitops.MarshalYAML(v)
+			if err != nil {
+				t.Fatal(err)
+			}
+			files[gitops.CatalogPath] = string(catalog)
+			continue
+		}
+		values[k] = v
+	}
+	raw, err := gitops.MarshalYAML(map[string]interface{}{"global": map[string]interface{}{"okdp": values}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := fake.NewSimpleClientset(&corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: gitops.PlatformValuesConfigMap, Namespace: gitops.ReleasesNamespace},
+		Data:       map[string]string{gitops.ValuesKey: string(raw)},
+	})
+	return NewPlatformRepository(client, gitops.ReleasesNamespace, gitops.NewDeployments(gitops.NewMemoryStore(files), nil))
+}
+
+func TestGetMenuCategories(t *testing.T) {
+	repo := newContextWith(t, map[string]interface{}{"serviceCatalog": map[string]interface{}{
+		"categories": []interface{}{
+			map[string]interface{}{"title": "Data Processing", "icon": "pi-cog", "services": []interface{}{
+				map[string]interface{}{"name": "spark-operator", "default": "0.3.0"},
+			}},
+			map[string]interface{}{"title": "Data Science"},
+		},
+	}})
+
+	cats, err := repo.GetMenuCategories(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cats) != 2 {
+		t.Fatalf("expected 2 categories, got %d (%+v)", len(cats), cats)
+	}
+	// The section title is both key and label, the position is the order.
+	if cats[0].Key != "Data Processing" || cats[0].Label != "Data Processing" || cats[0].Icon != "pi-cog" || cats[0].Order != 1 {
+		t.Errorf("category[0] = %+v, want {Data Processing Data Processing pi-cog 1}", cats[0])
+	}
+	if cats[1].Key != "Data Science" || cats[1].Order != 2 || cats[1].Icon != "" {
+		t.Errorf("category[1] = %+v, want key=Data Science order=2 icon empty", cats[1])
+	}
+}
+
+// A catalog without categories lists as [] in JSON, not null: the console
+// iterates the answer.
+func TestGetMenuCategoriesAndServicesAbsentAreEmpty(t *testing.T) {
+	repo := newContextWith(t, map[string]interface{}{"serviceCatalog": map[string]interface{}{
+		"defaultRepository": "quay.io/okdp/platform-packages",
+	}})
+
+	cats, err := repo.GetMenuCategories(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	services, err := repo.GetPlatformServices(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for name, list := range map[string]any{"categories": cats, "services": services} {
+		data, err := json.Marshal(list)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(data) != "[]" {
+			t.Errorf("%s marshal to %s, want []", name, data)
+		}
+	}
+}
+
+func TestGetPlatformServicesLabelAndExposesUI(t *testing.T) {
+	repo := newContextWith(t, map[string]interface{}{"serviceCatalog": map[string]interface{}{
+		"categories": []interface{}{
+			map[string]interface{}{"title": "Spark", "services": []interface{}{
+				map[string]interface{}{"name": "spark-operator", "default": "0.3.0", "exposesUI": false},
+			}},
+			map[string]interface{}{"title": "Interactive Query", "services": []interface{}{
+				map[string]interface{}{"name": "trino", "default": "0.3.0", "label": "Trino SQL"},
+			}},
+		},
+	}})
+
+	services, err := repo.GetPlatformServices(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	byName := map[string]models.PlatformService{}
+	for _, s := range services {
+		byName[s.Name] = s
+	}
+
+	sparkOp, ok := byName["spark-operator"]
+	if !ok {
+		t.Fatal("spark-operator not returned")
+	}
+	if sparkOp.ExposesUI == nil || *sparkOp.ExposesUI != false {
+		t.Errorf("spark-operator ExposesUI = %v, want explicit false", sparkOp.ExposesUI)
+	}
+	if sparkOp.Category != "Spark" {
+		t.Errorf("spark-operator Category = %q, want the section title %q", sparkOp.Category, "Spark")
+	}
+
+	trino := byName["trino"]
+	if trino.Label != "Trino SQL" {
+		t.Errorf("trino Label = %q, want %q", trino.Label, "Trino SQL")
+	}
+	if trino.Category != "Interactive Query" {
+		t.Errorf("trino Category = %q, want %q", trino.Category, "Interactive Query")
+	}
+	// exposesUI absent stays nil so the console can default it to "exposes a UI".
+	if trino.ExposesUI != nil {
+		t.Errorf("trino ExposesUI = %v, want nil when unset", *trino.ExposesUI)
+	}
+}
+
+// The sandbox shape: no identity.oidc block, but the platform-wide one every
+// service package already reads names the realm.
+func TestGetOidcIssuerFallsBackToThePlatformBlock(t *testing.T) {
+	repo := newContextWith(t, map[string]interface{}{
+		"oidc": map[string]interface{}{"issuerUri": "https://keycloak.okdp.sandbox/realms/master"},
+	})
+
+	issuer, err := repo.GetOidcIssuer(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if issuer != "https://keycloak.okdp.sandbox/realms/master" {
+		t.Errorf("issuer = %q, want the platform oidc.issuerUri", issuer)
+	}
+}
+
+// When the platform publishes the console client, that block wins: it is the
+// client the console's tokens are actually issued to.
+func TestGetOidcIssuerPrefersTheConsoleBlock(t *testing.T) {
+	repo := newContextWith(t, map[string]interface{}{
+		"identity": map[string]interface{}{"oidc": map[string]interface{}{
+			"authority": "https://keycloak.example.org/realms/okdp",
+			"clientId":  "okdp-console",
+		}},
+		"oidc": map[string]interface{}{"issuerUri": "https://keycloak.example.org/realms/platform"},
+	})
+
+	issuer, err := repo.GetOidcIssuer(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if issuer != "https://keycloak.example.org/realms/okdp" {
+		t.Errorf("issuer = %q, want the identity.oidc.authority", issuer)
+	}
+}
+
+// A Context naming no issuer is not an error here: the caller decides, and it
+// may have an override in the environment.
+func TestGetOidcIssuerIsEmptyWhenTheContextNamesNone(t *testing.T) {
+	repo := newContextWith(t, map[string]interface{}{})
+
+	issuer, err := repo.GetOidcIssuer(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if issuer != "" {
+		t.Errorf("issuer = %q, want empty", issuer)
+	}
+}
+
+func TestGetOidcInsecureSkipVerify(t *testing.T) {
+	// Absent means the certificate is checked: the safe reading of silence.
+	repo := newContextWith(t, map[string]interface{}{"oidc": map[string]interface{}{"issuerUri": "https://idp"}})
+	if insecure, err := repo.GetOidcInsecureSkipVerify(context.Background()); err != nil || insecure {
+		t.Errorf("insecure = %v (err %v), want false when the platform values are silent", insecure, err)
+	}
+
+	repo = newContextWith(t, map[string]interface{}{"oidc": map[string]interface{}{"insecureSkipVerify": true}})
+	if insecure, err := repo.GetOidcInsecureSkipVerify(context.Background()); err != nil || !insecure {
+		t.Errorf("insecure = %v (err %v), want true", insecure, err)
+	}
+}

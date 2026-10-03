@@ -3,7 +3,6 @@ package handlers
 import (
 	"fmt"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -311,7 +310,7 @@ func (h *SparkHandler) GetSparkUI(c *gin.Context) {
 // @Param        name path string true "Project name"
 // @Param        appName path string true "Spark application name"
 // @Param        container query string false "Container name (defaults to spark-kubernetes-driver)"
-// @Param        tailLines query int false "Number of lines from the end (default 100)"
+// @Param        tailLines query int false "Number of lines from the end (default 100, at most 10000)"
 // @Param        follow query bool false "Stream logs in real-time (default false)"
 // @Success      200  {string}  string  "log output"
 // @Failure      404  {object}  map[string]string
@@ -323,12 +322,7 @@ func (h *SparkHandler) GetSparkAppLogs(c *gin.Context) {
 	container := c.Query("container")
 	follow := c.Query("follow") == "true"
 
-	tailLines := int64(100)
-	if tl := c.Query("tailLines"); tl != "" {
-		if v, err := strconv.ParseInt(tl, 10, 64); err == nil && v > 0 {
-			tailLines = v
-		}
-	}
+	tailLines := tailLinesParam(c)
 
 	stream, err := h.service.GetDriverLogs(c.Request.Context(), project, appName, container, tailLines, follow)
 	if err != nil {
@@ -410,7 +404,7 @@ func (h *SparkHandler) GetSparkAppLogs(c *gin.Context) {
 
 // GetSparkConfig godoc
 // @Summary      Get Spark operator configuration
-// @Description  Returns Spark operator configuration from the KuboCD Context (images, defaults, versions)
+// @Description  Returns Spark operator configuration from the platform values, global.okdp.sparkOperator (images, defaults, versions)
 // @Tags         spark-apps
 // @Produce      json
 // @Success      200  {object}  models.SparkConfig

@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -12,18 +11,32 @@ import (
 	"github.com/okdp/okdp-control-plane-server/internal/service"
 	"github.com/sirupsen/logrus"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+)
+
+// Error codes carried next to "error" in 409 answers of POST .../services.
+const (
+	// ErrorCodeInstanceExists: the project already has an instance of that name.
+	ErrorCodeInstanceExists = "instance-exists"
+	// ErrorCodeReleaseNameTaken: the release name <project>-<instance> is
+	// already used by an instance of another project (or a platform component).
+	ErrorCodeReleaseNameTaken = "release-name-taken"
 )
 
 // ServiceHandler handles platform service and catalog requests
 type ServiceHandler struct {
-	service       service.ServiceService
-	schemaService service.PackageSchemaService
+	service        service.ServiceService
+	schemaService  service.PackageSchemaService
+	renderedValues service.RenderedValuesService
 }
 
 // NewServiceHandler creates a new ServiceHandler
 func NewServiceHandler(svc service.ServiceService, schemaSvc service.PackageSchemaService) *ServiceHandler {
 	return &ServiceHandler{service: svc, schemaService: schemaSvc}
+}
+
+// SetRenderedValuesService enables GET …/services/:serviceName/values.
+func (h *ServiceHandler) SetRenderedValuesService(svc service.RenderedValuesService) {
+	h.renderedValues = svc
 }
 
 // --- Platform services (managed by OKDP) ---
@@ -66,7 +79,7 @@ func (h *ServiceHandler) GetMenuCategories(c *gin.Context) {
 
 // CreatePlatformService godoc
 // @Summary      Add a service to the catalog
-// @Description  Expose a new managed service in the catalog (writes the default KuboCD Context)
+// @Description  Expose a new managed service in the catalog (commits platform/catalog.yaml to the deployments repository)
 // @Tags         platform-services
 // @Accept       json
 // @Produce      json
@@ -120,7 +133,7 @@ func (h *ServiceHandler) UpdatePlatformService(c *gin.Context) {
 
 // DeletePlatformService godoc
 // @Summary      Remove a catalog service
-// @Description  Remove an exposed service from the catalog (writes the default KuboCD Context)
+// @Description  Remove an exposed service from the catalog (commits platform/catalog.yaml to the deployments repository)
 // @Tags         platform-services
 // @Produce      json
 // @Param        serviceName path string true "Service name"
@@ -175,7 +188,7 @@ func (h *ServiceHandler) ListServices(c *gin.Context) {
 
 // DeployService godoc
 // @Summary      Deploy a platform service
-// @Description  Deploy a managed platform service into a project
+// @Description  Deploy a managed platform service into a project: commits the instance files to the deployments Git repository. The answer carries the commit (revision) and the status Pending until the GitOps engine reconciles it. Only the submitted parameters are written to values.yaml. 400 on invalid parameters; 409 with code instance-exists or release-name-taken.
 // @Tags         services
 // @Accept       json
 // @Produce      json
@@ -197,6 +210,10 @@ func (h *ServiceHandler) DeployService(c *gin.Context) {
 
 	instance, err := h.service.DeployService(c.Request.Context(), project, req)
 	if err != nil {
+		if service.IsReleaseNameTaken(err) {
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error(), "code": ErrorCodeReleaseNameTaken})
+			return
+		}
 		if apierrors.IsAlreadyExists(err) {
 			instanceName := req.InstanceName
 			if instanceName == "" {
@@ -204,7 +221,12 @@ func (h *ServiceHandler) DeployService(c *gin.Context) {
 			}
 			c.JSON(http.StatusConflict, gin.H{
 				"error": fmt.Sprintf("Instance '%s' already exists in project '%s'", instanceName, project),
+				"code":  ErrorCodeInstanceExists,
 			})
+			return
+		}
+		if service.IsValidationError(err) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
 		logrus.WithError(err).Error("Failed to deploy service")
@@ -246,7 +268,7 @@ func (h *ServiceHandler) GetService(c *gin.Context) {
 
 // DeleteService godoc
 // @Summary      Delete a deployed service
-// @Description  Remove a deployed service from a project
+// @Description  Remove a deployed service from a project: removes its directory from the deployments Git repository; the GitOps engine uninstalls it.
 // @Tags         services
 // @Produce      json
 // @Param        name path string true "Project name"
@@ -275,7 +297,7 @@ func (h *ServiceHandler) DeleteService(c *gin.Context) {
 
 // StreamServices godoc
 // @Summary      Stream service updates
-// @Description  Stream service status updates using Server-Sent Events (SSE)
+// @Description  Stream service status updates using Server-Sent Events (SSE): instance descriptors, GitOps engine objects and the console's own commits. Each message is {type: ADDED|MODIFIED|DELETED, object: ServiceInstance}.
 // @Tags         services
 // @Produce      text/event-stream
 // @Param        name path string true "Project name"
@@ -291,12 +313,11 @@ func (h *ServiceHandler) StreamServices(c *gin.Context) {
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("Transfer-Encoding", "chunked")
 
-	watcher, err := h.service.WatchServices(c.Request.Context(), project)
+	events, err := h.service.WatchServices(c.Request.Context(), project)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	defer watcher.Stop()
 
 	keepalive := time.NewTicker(30 * time.Second)
 	defer keepalive.Stop()
@@ -313,22 +334,11 @@ func (h *ServiceHandler) StreamServices(c *gin.Context) {
 				return
 			}
 			c.Writer.Flush()
-		case event, ok := <-watcher.ResultChan():
+		case event, ok := <-events:
 			if !ok {
 				return
 			}
-
-			var instance models.ServiceInstance
-			if u, ok := event.Object.(*unstructured.Unstructured); ok {
-				instance = models.FromUnstructuredToServiceInstance(u)
-			} else {
-				continue
-			}
-
-			h.service.EnrichURL(c.Request.Context(), &instance)
-			h.service.EnrichPodHealth(c.Request.Context(), &instance)
-
-			c.SSEvent("message", gin.H{"type": event.Type, "object": instance})
+			c.SSEvent("message", gin.H{"type": event.Type, "object": event.Object})
 			c.Writer.Flush()
 		}
 	}
@@ -338,7 +348,7 @@ func (h *ServiceHandler) StreamServices(c *gin.Context) {
 
 // GetServiceVersions godoc
 // @Summary      List available versions for a platform service
-// @Description  Returns the list of versions declared in the KuboCD Context CR
+// @Description  Returns the chart versions published in the OCI registry, and the catalog default
 // @Tags         platform-services
 // @Produce      json
 // @Param        serviceName path string true "Service name"
@@ -362,7 +372,7 @@ func (h *ServiceHandler) GetServiceVersions(c *gin.Context) {
 // @Tags         platform-services
 // @Produce      json
 // @Param        serviceName path string true "Service name"
-// @Param        tag query string false "Package version tag (defaults to Context CR tag)"
+// @Param        tag query string false "Package version tag (defaults to the catalog default version)"
 // @Success      200  {array}  models.PackageInput
 // @Router       /api/platform-services/{serviceName}/inputs [get]
 func (h *ServiceHandler) GetServiceInputs(c *gin.Context) {
@@ -389,7 +399,7 @@ func (h *ServiceHandler) GetServiceInputs(c *gin.Context) {
 // @Tags         platform-services
 // @Produce      json
 // @Param        serviceName path string true "Service name"
-// @Param        tag query string false "Package version tag (defaults to Context CR tag)"
+// @Param        tag query string false "Package version tag (defaults to the catalog default version)"
 // @Success      200  {object}  map[string]interface{}
 // @Failure      404  {object}  map[string]string
 // @Failure      500  {object}  map[string]string
@@ -411,7 +421,7 @@ func (h *ServiceHandler) GetServiceSchema(c *gin.Context) {
 
 // GetProfileImages godoc
 // @Summary      Get available profile images
-// @Description  Returns the list of available container images per profile type from the KuboCD Context
+// @Description  Returns the list of available container images per profile type from the platform values (global.okdp.jupyter.profiles)
 // @Tags         platform-services
 // @Produce      json
 // @Success      200  {object}  map[string][]models.ProfileImage
@@ -429,7 +439,7 @@ func (h *ServiceHandler) GetProfileImages(c *gin.Context) {
 
 // UpdateServiceParameters godoc
 // @Summary      Update service parameters and/or version
-// @Description  Merge new parameters and optionally update the package version of a deployed service
+// @Description  JSON Merge Patch (RFC 7386) of the parameters (null deletes a key, objects merge, arrays replace) and optionally update the chart version of a deployed service, committed to values.yaml/instance.yaml in the deployments Git repository. 400 on invalid parameters.
 // @Tags         services
 // @Accept       json
 // @Produce      json
@@ -459,11 +469,48 @@ func (h *ServiceHandler) UpdateServiceParameters(c *gin.Context) {
 			})
 			return
 		}
+		if service.IsValidationError(err) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
 		logrus.WithError(err).Error("Failed to update service")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, instance)
+}
+
+// GetRenderedValues godoc
+// @Summary      Values passed to the vendored upstream charts
+// @Description  For each upstream chart the instance's chart vendors (okdp.vendor.render), the values.yaml it was rendered with (from the ConfigMap <release>-<chart>-values the chart emits), the vendored chart's default values.yaml, and the lines of the former that differ from the latter. Empty when the chart vendors nothing or predates the values ConfigMaps. Defaults that cannot be read (registry unreachable) leave defaultsError set instead of failing.
+// @Tags         services
+// @Produce      json
+// @Param        name path string true "Project name"
+// @Param        serviceName path string true "Service instance name"
+// @Success      200  {array}   models.RenderedValues
+// @Failure      404  {object}  map[string]string
+// @Failure      500  {object}  map[string]string
+// @Router       /api/projects/{name}/services/{serviceName}/values [get]
+func (h *ServiceHandler) GetRenderedValues(c *gin.Context) {
+	project := c.Param("name")
+	serviceName := c.Param("serviceName")
+	if h.renderedValues == nil {
+		c.JSON(http.StatusNotImplemented, gin.H{"error": "rendered values are not available"})
+		return
+	}
+	values, err := h.renderedValues.GetRenderedValues(c.Request.Context(), project, serviceName)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": fmt.Sprintf("Service '%s' not found in project '%s'", serviceName, project),
+			})
+			return
+		}
+		logrus.WithError(err).Error("Failed to get the rendered values")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, values)
 }
 
 // --- Pod operations ---
@@ -543,26 +590,29 @@ func (h *ServiceHandler) GetServiceMetrics(c *gin.Context) {
 // @Param        serviceName path string true "Service instance name"
 // @Param        podName path string true "Pod name"
 // @Param        container query string false "Container name (defaults to first app container)"
-// @Param        tailLines query int false "Number of lines from the end (default 100)"
+// @Param        tailLines query int false "Number of lines from the end (default 100, at most 10000)"
 // @Param        follow query bool false "Stream logs in real-time (default false)"
 // @Success      200  {string}  string  "log output"
+// @Failure      404  {object}  map[string]string
 // @Failure      500  {object}  map[string]string
 // @Router       /api/projects/{name}/services/{serviceName}/pods/{podName}/logs [get]
 func (h *ServiceHandler) GetPodLogs(c *gin.Context) {
 	project := c.Param("name")
+	serviceName := c.Param("serviceName")
 	podName := c.Param("podName")
 	container := c.Query("container")
 	follow := c.Query("follow") == "true"
 
-	tailLines := int64(100)
-	if tl := c.Query("tailLines"); tl != "" {
-		if v, err := strconv.ParseInt(tl, 10, 64); err == nil && v > 0 {
-			tailLines = v
-		}
-	}
+	tailLines := tailLinesParam(c)
 
-	stream, err := h.service.GetPodLogs(c.Request.Context(), project, podName, container, tailLines, follow)
+	stream, err := h.service.GetPodLogs(c.Request.Context(), project, serviceName, podName, container, tailLines, follow)
 	if err != nil {
+		if apierrors.IsNotFound(err) {
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": fmt.Sprintf("Pod '%s' of service '%s' not found in project '%s'", podName, serviceName, project),
+			})
+			return
+		}
 		logrus.WithError(err).Error("Failed to get pod logs")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

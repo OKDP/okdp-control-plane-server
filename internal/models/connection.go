@@ -31,7 +31,7 @@ type ConnectionField struct {
 	Type     string `json:"type"`
 	Required bool   `json:"required"`
 	// Secret says where the value is stored: in the credentials Secret rather
-	// than in the Connection spec. It says nothing about how it is typed in.
+	// than in the connection file. It says nothing about how it is typed in.
 	Secret bool `json:"secret,omitempty"`
 	// Masked hides the value as it is typed. A database user name lives in the
 	// Secret because the contract puts it there, but hiding it behind dots only
@@ -80,10 +80,10 @@ func (f *ConnectionField) Applies(values map[string]any) bool {
 // recognition of deployed services as connection providers, and the
 // ready-to-use snippets shown when a connection is opened.
 type ContractDescriptor struct {
-	// Name IS the KuboCD Contract this descriptor produces. One descriptor, one
-	// contract, deliberately: an entry form that produced a differently named
-	// contract would mean nothing a package asks for could be found by its own
-	// name.
+	// Name IS the contract this descriptor produces (x-okdp-connection-ref).
+	// One descriptor, one contract, deliberately: an entry form that produced a
+	// differently named contract would mean nothing a chart asks for could be
+	// found by its own name.
 	Name        string `json:"name"`
 	DisplayName string `json:"displayName"`
 	Description string `json:"description"`
@@ -93,7 +93,11 @@ type ContractDescriptor struct {
 	// contract by hand. A contract that is not external is listed for the
 	// internal view, where the connections come from the deployed services,
 	// but offers no creation form.
-	External bool              `json:"external"`
+	External bool `json:"external"`
+	// Internal reports that an instance of the project can provide this
+	// contract by naming convention (x-okdp-internal in the contract schema:
+	// hive, iceberg-catalog, trino). Only those outputs are selectable.
+	Internal bool              `json:"internal"`
 	Fields   []ConnectionField `json:"fields"`
 	// EndpointFrom names the value fields carrying the address a consumer would
 	// reach, most specific first. A contract publishing a plain host and port
@@ -112,7 +116,7 @@ func (t *ContractDescriptor) Field(name string) (*ConnectionField, bool) {
 }
 
 // SecretFields lists the fields of the type that hold credentials. Their values
-// live in a Kubernetes Secret and never in the Connection spec.
+// live in a Kubernetes Secret and never in Git.
 func (t *ContractDescriptor) SecretFields() []string {
 	var names []string
 	for i := range t.Fields {
@@ -126,10 +130,9 @@ func (t *ContractDescriptor) SecretFields() []string {
 // ConnectionCatalogResponse is the payload of GET /api/contracts.
 type ConnectionCatalogResponse struct {
 	Types []ContractDescriptor `json:"types"`
-	// CRDAvailable reports whether the KuboCD connection CRDs are installed.
-	// While they are not, external connections cannot be persisted and the
-	// console says so instead of failing on save. Internal connections are
-	// derived from deployed services and stay available either way.
+	// CRDAvailable reports whether external connections can be persisted,
+	// which is whenever a deployments repository is configured (always, in a
+	// running server). The name is kept for API compatibility.
 	CRDAvailable bool `json:"crdAvailable"`
 }
 
@@ -229,8 +232,8 @@ type InternalConnection struct {
 	Host     string         `json:"host"`
 	Port     int32          `json:"port"`
 	Values   map[string]any `json:"values"`
-	// Managed reports that the entry comes from a Connection the KuboCD release
-	// controller owns, rather than being derived from the deployed service.
+	// Managed reports that the entry is published by a deployed instance (its
+	// descriptor's outputs), not declared by hand. Always true here.
 	Managed   bool   `json:"managed"`
 	CreatedAt string `json:"createdAt,omitempty"`
 }
@@ -245,16 +248,17 @@ type PackageInput struct {
 	// Contract names the contract the chosen connection must satisfy. It is what
 	// makes the choice safe: only connections of that contract are offered.
 	Contract string `json:"contract"`
-	// Parameter is the package parameter carrying the chosen connection name,
-	// derived from the input's namedConnection template. Empty when the input
-	// binds some other way, in which case the console offers no choice.
+	// Parameter is the root chart parameter carrying the chosen connection
+	// name (the property marked x-okdp-connection-ref). Empty for a ref nested
+	// in an object or a list, which the form fills inside that structure.
 	Parameter string `json:"parameter,omitempty"`
+	// Path is the JSON path of the marked property: "metadataDb" at the root,
+	// "hiveCatalogs[].metastore" inside the items of a list.
+	Path string `json:"path"`
 	// Optional reports that the package tolerates no connection at all.
 	Optional bool `json:"optional"`
-	// Default is the template the package falls back to when the deployer picks
-	// nothing. KuboCD forbids a literal here, so it is always rendered against
-	// the Context: this is how an Environment says "here, the database is that
-	// one" without the deployer naming it. The console must therefore leave the
+	// Default is the connection the chart falls back to when the deployer picks
+	// nothing (the property's schema default). The console must leave the
 	// parameter out rather than send an empty string, which would win over it.
 	Default string `json:"default,omitempty"`
 	// Description is shown next to the field.
@@ -282,11 +286,11 @@ type SelectableConnection struct {
 // CreateContainerConfigError, far from the dialog that caused it.
 type ConnectionConsumer struct {
 	// Service is the instance name as the console displays it, ReleaseName the
-	// underlying KuboCD Release.
+	// Helm release (<project>-<instance>).
 	Service     string `json:"service"`
 	ReleaseName string `json:"releaseName"`
 	Status      string `json:"status"`
-	// Effective reports that the release actually resolved this connection, as
-	// opposed to merely waiting for it.
+	// Effective reports that the connection exists (declared, or published by
+	// a deployed instance), as opposed to merely being named.
 	Effective bool `json:"effective"`
 }

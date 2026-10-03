@@ -2,29 +2,25 @@ package service
 
 import (
 	"bytes"
-	"embed"
 	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
 
 	"github.com/okdp/okdp-control-plane-server/internal/models"
+	okdpcontracts "github.com/okdp/okdp-lib-chart/contracts"
+	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 )
 
-// contractsFS holds the built-in contracts. Adding one is a matter of dropping
-// a JSON file here: the same descriptor drives the form rendered by the
-// console, the server-side validation of submitted values, and the address
-// shown for a connection of that contract.
-//
-//go:embed contracts/*.json
-var contractsFS embed.FS
+// contractsFS holds the contract schemas: the canonical JSON Schemas of
+// okdp-lib (github.com/okdp/okdp-lib-chart/contracts), which the charts and
+// scripts/check.sh validate against too. The same document drives the form
+// rendered by the console (converted to a ContractDescriptor), the
+// server-side validation of submitted values, and the address shown for a
+// connection of that contract.
+var contractsFS = okdpcontracts.FS
 
 // ContractCatalog exposes the known contracts.
-//
-// It is deliberately an interface: once the KuboCD `Contract` CRD is available
-// on the cluster, an implementation backed by it can be layered on so that
-// cluster-provided schemas take precedence over the built-in ones, without any
-// change to the callers or to the API contract.
 type ContractCatalog interface {
 	List() []models.ContractDescriptor
 	Get(name string) (*models.ContractDescriptor, bool)
@@ -38,42 +34,49 @@ type ContractCatalog interface {
 	// values put out of play, so that validation and storage see a coherent
 	// set. Called before Validate, on both create and update.
 	Normalize(typeName string, values map[string]any) map[string]any
+	// ValidatePublic checks the non-secret values, as they are written to the
+	// connection file, against the contract's JSON Schema itself.
+	ValidatePublic(typeName string, values map[string]any) error
 }
 
 type embeddedCatalog struct {
-	types  []models.ContractDescriptor
-	byName map[string]*models.ContractDescriptor
+	types   []models.ContractDescriptor
+	byName  map[string]*models.ContractDescriptor
+	schemas map[string]*jsonschema.Schema
 }
 
 // NewEmbeddedContractCatalog loads the built-in contracts. It fails at startup
-// rather than at request time: a malformed descriptor is a build mistake, not a
+// rather than at request time: a malformed schema is a build mistake, not a
 // runtime condition.
 func NewEmbeddedContractCatalog() (ContractCatalog, error) {
-	entries, err := contractsFS.ReadDir("contracts")
+	entries, err := contractsFS.ReadDir(".")
 	if err != nil {
 		return nil, fmt.Errorf("failed to read embedded contracts: %w", err)
 	}
 
-	c := &embeddedCatalog{byName: map[string]*models.ContractDescriptor{}}
+	c := &embeddedCatalog{byName: map[string]*models.ContractDescriptor{}, schemas: map[string]*jsonschema.Schema{}}
 
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".schema.json") {
 			continue
 		}
-		raw, err := contractsFS.ReadFile("contracts/" + entry.Name())
+		raw, err := contractsFS.ReadFile(entry.Name())
 		if err != nil {
 			return nil, fmt.Errorf("failed to read contract %s: %w", entry.Name(), err)
 		}
-		var ct models.ContractDescriptor
-		decoder := json.NewDecoder(bytes.NewReader(raw))
-		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&ct); err != nil {
-			return nil, fmt.Errorf("failed to parse contract %s: %w", entry.Name(), err)
-		}
-		if err := validateTypeDescriptor(&ct); err != nil {
+		ct, err := descriptorFromSchema(raw)
+		if err != nil {
 			return nil, fmt.Errorf("invalid contract %s: %w", entry.Name(), err)
 		}
-		c.types = append(c.types, ct)
+		if err := validateTypeDescriptor(ct); err != nil {
+			return nil, fmt.Errorf("invalid contract %s: %w", entry.Name(), err)
+		}
+		compiled, err := compileSchema(entry.Name(), raw)
+		if err != nil {
+			return nil, fmt.Errorf("invalid contract %s: %w", entry.Name(), err)
+		}
+		c.types = append(c.types, *ct)
+		c.schemas[ct.Name] = compiled
 	}
 
 	sort.Slice(c.types, func(i, j int) bool { return c.types[i].Name < c.types[j].Name })
@@ -87,6 +90,140 @@ func NewEmbeddedContractCatalog() (ContractCatalog, error) {
 	}
 
 	return c, nil
+}
+
+func compileSchema(name string, raw []byte) (*jsonschema.Schema, error) {
+	doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(raw))
+	if err != nil {
+		return nil, err
+	}
+	compiler := jsonschema.NewCompiler()
+	if err := compiler.AddResource(name, doc); err != nil {
+		return nil, err
+	}
+	return compiler.Compile(name)
+}
+
+// contractSchema is the part of a contract schema the console form needs.
+type contractSchema struct {
+	Title        string                    `json:"title"`
+	Description  string                    `json:"description"`
+	Contract     string                    `json:"x-okdp-contract"`
+	Icon         string                    `json:"x-okdp-icon"`
+	Category     string                    `json:"x-okdp-category"`
+	External     bool                      `json:"x-okdp-external"`
+	EndpointFrom []string                  `json:"x-okdp-endpoint-from"`
+	Internal     map[string]any            `json:"x-okdp-internal"`
+	Required     []string                  `json:"required"`
+	Properties   map[string]propertySchema `json:"properties"`
+}
+
+type propertySchema struct {
+	Type           string                  `json:"type"`
+	Title          string                  `json:"title"`
+	Description    string                  `json:"description"`
+	Enum           []any                   `json:"enum"`
+	Default        any                     `json:"default"`
+	Minimum        *float64                `json:"minimum"`
+	Maximum        *float64                `json:"maximum"`
+	Secret         bool                    `json:"x-okdp-secret"`
+	SecretRequired bool                    `json:"x-okdp-required"`
+	Derived        *models.FieldDerivation `json:"x-okdp-derived"`
+	Condition      *models.FieldCondition  `json:"x-ui-condition"`
+	Placeholder    string                  `json:"x-ui-placeholder"`
+	Widget         string                  `json:"x-ui-widget"`
+}
+
+// propertyOrder returns the keys of the "properties" object in document order:
+// Go maps lose it, and it is the order of the form.
+func propertyOrder(raw []byte) ([]string, error) {
+	var doc struct {
+		Properties json.RawMessage `json:"properties"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return nil, err
+	}
+	dec := json.NewDecoder(bytes.NewReader(doc.Properties))
+	if _, err := dec.Token(); err != nil { // {
+		return nil, err
+	}
+	var keys []string
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return nil, err
+		}
+		key, _ := tok.(string)
+		keys = append(keys, key)
+		var skip json.RawMessage
+		if err := dec.Decode(&skip); err != nil {
+			return nil, err
+		}
+	}
+	return keys, nil
+}
+
+// descriptorFromSchema converts a contract schema into the descriptor the
+// console renders its form from (GET /api/contracts).
+func descriptorFromSchema(raw []byte) (*models.ContractDescriptor, error) {
+	var cs contractSchema
+	if err := json.Unmarshal(raw, &cs); err != nil {
+		return nil, err
+	}
+	order, err := propertyOrder(raw)
+	if err != nil {
+		return nil, err
+	}
+	required := map[string]bool{}
+	for _, r := range cs.Required {
+		required[r] = true
+	}
+	ct := &models.ContractDescriptor{
+		Name:         cs.Contract,
+		DisplayName:  cs.Title,
+		Description:  cs.Description,
+		Icon:         cs.Icon,
+		Category:     cs.Category,
+		External:     cs.External,
+		Internal:     len(cs.Internal) > 0,
+		EndpointFrom: cs.EndpointFrom,
+	}
+	for _, name := range order {
+		p := cs.Properties[name]
+		field := models.ConnectionField{
+			Name:        name,
+			Label:       p.Title,
+			Required:    required[name] || (p.Secret && p.SecretRequired),
+			Secret:      p.Secret,
+			Masked:      p.Widget == "password",
+			Default:     p.Default,
+			Placeholder: p.Placeholder,
+			Help:        p.Description,
+			Min:         p.Minimum,
+			Max:         p.Maximum,
+			ShowWhen:    p.Condition,
+			Derived:     p.Derived,
+		}
+		switch {
+		case len(p.Enum) > 0:
+			field.Type = models.FieldTypeEnum
+			for _, option := range p.Enum {
+				field.Options = append(field.Options, fmt.Sprint(option))
+			}
+		case p.Type == "integer" || p.Type == "number":
+			field.Type = models.FieldTypeNumber
+		case p.Type == "boolean":
+			field.Type = models.FieldTypeBoolean
+		case p.Type == "string":
+			field.Type = models.FieldTypeString
+		default:
+			// Lists (trino catalogs) are published by charts, never typed into
+			// a form: they are validated by the schema, not offered.
+			continue
+		}
+		ct.Fields = append(ct.Fields, field)
+	}
+	return ct, nil
 }
 
 func validateTypeDescriptor(ct *models.ContractDescriptor) error {
@@ -114,6 +251,26 @@ func validateTypeDescriptor(ct *models.ContractDescriptor) error {
 		default:
 			return fmt.Errorf("field %q has unsupported type %q", f.Name, f.Type)
 		}
+	}
+	return nil
+}
+
+func (c *embeddedCatalog) ValidatePublic(typeName string, values map[string]any) error {
+	sch, ok := c.schemas[typeName]
+	if !ok {
+		return fmt.Errorf("unknown contract %q", typeName)
+	}
+	// Through JSON, so numbers and nested values have the validator's types.
+	raw, err := json.Marshal(values)
+	if err != nil {
+		return err
+	}
+	doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(raw))
+	if err != nil {
+		return err
+	}
+	if err := sch.Validate(doc); err != nil {
+		return fmt.Errorf("the values do not satisfy the %s contract: %v", typeName, err)
 	}
 	return nil
 }

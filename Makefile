@@ -1,12 +1,17 @@
 .PHONY: dev build test test-verbose lint swagger help
 
+# Version named by the binary (startup log, commit co-author trailer), without
+# the leading "v" of the tag.
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null | sed 's/^v//')
+LDFLAGS := -X github.com/okdp/okdp-control-plane-server/internal/buildinfo.Version=$(VERSION)
+
 # ── Development ──────────────────────────────────────────────────────────────
 
 dev: ## Start the server with hot-reload (KUBECONFIG from your env or the devcontainer)
 	air -c .air.toml
 
 build: ## Compile the binary to bin/server
-	go build -o bin/server ./cmd/server
+	go build -ldflags "$(LDFLAGS)" -o bin/server ./cmd/server
 
 test: ## Run all tests
 	go test ./...

@@ -13,13 +13,15 @@ import (
 
 // SetupRouter initializes the Gin router and defines routes. A nil verifier
 // serves the API without token verification, which only AUTH_DISABLED produces.
-func SetupRouter(cfg *config.Config, verifier auth.Verifier, capabilitiesHandler *handlers.CapabilitiesHandler, projectHandler *handlers.ProjectHandler, identityHandler *handlers.IdentityHandler, secretStoreHandler *handlers.SecretStoreHandler, externalSecretHandler *handlers.ExternalSecretHandler, serviceHandler *handlers.ServiceHandler, sparkHandler *handlers.SparkHandler, connectionHandler *handlers.ConnectionHandler) *gin.Engine {
+func SetupRouter(cfg *config.Config, verifier auth.Verifier, capabilitiesHandler *handlers.CapabilitiesHandler, projectHandler *handlers.ProjectHandler, identityHandler *handlers.IdentityHandler, secretStoreHandler *handlers.SecretStoreHandler, externalSecretHandler *handlers.ExternalSecretHandler, serviceHandler *handlers.ServiceHandler, sparkHandler *handlers.SparkHandler, connectionHandler *handlers.ConnectionHandler, sqlHandler *handlers.SqlHandler) *gin.Engine {
 	r := gin.New() // Use New() to skip default logger/recovery (we add them manually)
 
 	// Middleware
 	r.Use(middleware.RequestLogger())
 	r.Use(gin.Recovery())
+	r.Use(middleware.SecurityHeaders())
 	r.Use(corsMiddleware(cfg))
+	r.Use(middleware.LimitRequestBody(middleware.DefaultMaxBodyBytes))
 
 	// Swagger documentation
 	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
@@ -36,11 +38,15 @@ func SetupRouter(cfg *config.Config, verifier auth.Verifier, capabilitiesHandler
 		// unless the middleware lists it as public.
 		api.Use(middleware.RequireAuthentication(verifier))
 	}
+	// After authentication, before any group middleware: an object name that
+	// could leave its directory never reaches a store (RequireProject
+	// included).
+	api.Use(middleware.ValidatePathNames())
 	{
 		// Platform capabilities (UI feature discovery)
 		api.GET("/capabilities", capabilitiesHandler.GetCapabilities)
 
-		// Projects (backed by Kubernetes Namespaces)
+		// Projects (projects/<p>/project.yaml in the deployments repository)
 		api.GET("/projects", projectHandler.ListProjects)
 		api.GET("/projects/stream", projectHandler.StreamProjects)
 		api.POST("/projects", projectHandler.CreateProject)
@@ -48,16 +54,11 @@ func SetupRouter(cfg *config.Config, verifier auth.Verifier, capabilitiesHandler
 		api.PUT("/projects/:name", projectHandler.UpdateProject)
 		api.DELETE("/projects/:name", projectHandler.DeleteProject)
 
-		// Identity. Two independent conditions, both required: the configured
-		// provider must be kubauth, and its CRDs must actually be installed. A
-		// cluster can declare the provider without carrying them. Guarded once
-		// here rather than in each handler, so a route added later cannot slip
-		// through unguarded.
-		identity := api.Group("/v1/identity",
-			capabilitiesHandler.RequireIdentityAPI(
-				func(c *gin.Context) bool { return identityHandler.Available(c.Request.Context()) },
-			),
-		)
+		// Identity: users and groups in the platform Keycloak realm, through
+		// the Admin REST API. Guarded once here rather than in each handler, so
+		// a route added later cannot slip through unguarded: without Keycloak
+		// admin credentials the whole group answers 501.
+		identity := api.Group("/v1/identity", identityHandler.RequireAPI())
 		{
 			// Users
 			identity.GET("/users", identityHandler.ListUsers)
@@ -112,8 +113,8 @@ func SetupRouter(cfg *config.Config, verifier auth.Verifier, capabilitiesHandler
 			externalSecrets.GET("/:esName/status", externalSecretHandler.GetExternalSecretStatus)
 		}
 
-		// Contracts available for creation, and whether the KuboCD connection
-		// CRDs are installed (external connections need them).
+		// Contracts available for creation, and whether connections can be
+		// stored (a deployments repository is configured).
 		api.GET("/contracts", connectionHandler.GetContracts)
 
 		// Connections (scoped per project namespace). "internal" lists what the
@@ -124,6 +125,7 @@ func SetupRouter(cfg *config.Config, verifier auth.Verifier, capabilitiesHandler
 			connections.GET("/internal", connectionHandler.ListInternalConnections)
 			connections.GET("/selectable", connectionHandler.ListSelectable)
 			connections.GET("/:connName/consumers", connectionHandler.ListConsumers)
+			connections.POST("/:connName/sql", sqlHandler.ExecuteOnConnection)
 			connections.POST("", connectionHandler.CreateConnection)
 			connections.POST("/test", connectionHandler.TestConnection)
 			connections.PUT("/:connName", connectionHandler.UpdateConnection)
@@ -141,7 +143,7 @@ func SetupRouter(cfg *config.Config, verifier auth.Verifier, capabilitiesHandler
 		api.GET("/platform-services/:serviceName/inputs", serviceHandler.GetServiceInputs)
 		api.GET("/profile-images", serviceHandler.GetProfileImages)
 
-		// Deployed services per project (KuboCD Releases)
+		// Deployed services per project (instances in the deployments repository)
 		services := api.Group("/projects/:name/services", requireProject)
 		{
 			services.GET("", serviceHandler.ListServices)
@@ -153,10 +155,12 @@ func SetupRouter(cfg *config.Config, verifier auth.Verifier, capabilitiesHandler
 			services.GET("/:serviceName/pods", serviceHandler.ListPods)
 			services.GET("/:serviceName/pods/:podName/logs", serviceHandler.GetPodLogs)
 			services.GET("/:serviceName/metrics", serviceHandler.GetServiceMetrics)
+			services.GET("/:serviceName/values", serviceHandler.GetRenderedValues)
+			services.POST("/:serviceName/sql", sqlHandler.ExecuteQuery)
 		}
 		api.GET("/projects/:name/metrics", requireProject, serviceHandler.GetProjectMetrics)
 
-		// Spark config (from Context) + CRD schema
+		// Spark config (from the platform values) + CRD schema
 		api.GET("/spark-config", sparkHandler.GetSparkConfig)
 		api.GET("/spark-app-schema", sparkHandler.GetSparkAppSchema)
 
@@ -184,6 +188,9 @@ func corsMiddleware(cfg *config.Config) gin.HandlerFunc {
 		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
 		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With")
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE, PATCH")
+		// Tells caches the CORS answer is about the requesting origin, so one
+		// origin's cached response is never replayed to another.
+		c.Writer.Header().Add("Vary", "Origin")
 
 		if c.Request.Method == "OPTIONS" {
 			c.AbortWithStatus(204)

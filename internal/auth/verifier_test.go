@@ -213,3 +213,20 @@ func TestVerifyReturnsTheSubjectAndUsername(t *testing.T) {
 	assert.Equal(t, "e5a0-1234", identity.Subject)
 	assert.Equal(t, "alice", identity.Username)
 }
+
+func TestVerifyReturnsTheNameAndEmail(t *testing.T) {
+	idp := newFakeIDP(t)
+	verifier, err := NewVerifier(context.Background(), Config{Issuer: idp.server.URL, ClientID: "okdp-ui"})
+	require.NoError(t, err)
+
+	c := idp.claims()
+	c["aud"] = "okdp-ui"
+	c["preferred_username"] = "alice"
+	c["name"] = "Alice Martin"
+	c["email"] = "alice@example.com"
+
+	identity, err := verifier.Verify(context.Background(), idp.mint(t, c))
+	require.NoError(t, err)
+	assert.Equal(t, "Alice Martin", identity.Name)
+	assert.Equal(t, "alice@example.com", identity.Email)
+}

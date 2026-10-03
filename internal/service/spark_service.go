@@ -32,11 +32,11 @@ type SparkService interface {
 
 type DefaultSparkService struct {
 	sparkRepo   repository.SparkAppRepository
-	contextRepo repository.ContextRepository
+	contextRepo repository.PlatformRepository
 	typedClient kubernetes.Interface
 }
 
-func NewDefaultSparkService(sparkRepo repository.SparkAppRepository, contextRepo repository.ContextRepository, typedClient kubernetes.Interface) *DefaultSparkService {
+func NewDefaultSparkService(sparkRepo repository.SparkAppRepository, contextRepo repository.PlatformRepository, typedClient kubernetes.Interface) *DefaultSparkService {
 	return &DefaultSparkService{
 		sparkRepo:   sparkRepo,
 		contextRepo: contextRepo,

@@ -13,12 +13,12 @@ import (
 	"github.com/okdp/okdp-control-plane-server/internal/repository/crd"
 )
 
-func secretRepo(secrets ...*corev1.Secret) *k8sConnectionRepository {
+func secretRepo(secrets ...*corev1.Secret) *k8sConnectionSecretRepository {
 	objects := make([]runtime.Object, 0, len(secrets))
 	for _, secret := range secrets {
 		objects = append(objects, secret)
 	}
-	return &k8sConnectionRepository{typedClient: k8sfake.NewSimpleClientset(objects...)}
+	return &k8sConnectionSecretRepository{typedClient: k8sfake.NewSimpleClientset(objects...)}
 }
 
 // The credentials name is derived from the connection name, so anyone can park

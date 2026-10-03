@@ -47,7 +47,8 @@ func (s *DefaultSecretStoreService) ListSecretStores(ctx context.Context, namesp
 		return nil, err
 	}
 
-	var result []models.SecretStoreResponse
+	// Never nil: no store answers [] in JSON, not null.
+	result := make([]models.SecretStoreResponse, 0, len(stores))
 	for i := range stores {
 		result = append(result, s.toResponse(&stores[i], namespace))
 	}
@@ -71,7 +72,7 @@ func (s *DefaultSecretStoreService) CreateSecretStore(ctx context.Context, names
 		}
 		secretData := map[string][]byte{"token": []byte(req.Auth.Config.Token)}
 		if err := s.repo.CreateOrUpdateSecret(ctx, namespace, credSecretName, secretData); err != nil {
-			return nil, fmt.Errorf("failed to create credentials secret: %w", err)
+			return nil, storeCredentialsError(err)
 		}
 	}
 
@@ -119,7 +120,7 @@ func (s *DefaultSecretStoreService) UpdateSecretStore(ctx context.Context, names
 		if req.Auth.Config.Token != "" {
 			secretData := map[string][]byte{"token": []byte(req.Auth.Config.Token)}
 			if err := s.repo.CreateOrUpdateSecret(ctx, namespace, credSecretName, secretData); err != nil {
-				return nil, fmt.Errorf("failed to update credentials secret: %w", err)
+				return nil, storeCredentialsError(err)
 			}
 		} else if !usedTokenAuth {
 			// The CR would reference a Secret that was never written, so the
@@ -440,7 +441,7 @@ func (s *DefaultSecretStoreService) toResponse(store *crd.ESOSecretStore, namesp
 }
 
 func mapConditions(conditions []crd.ESOCondition) []models.SecretStoreCondition {
-	var out []models.SecretStoreCondition
+	out := make([]models.SecretStoreCondition, 0, len(conditions))
 	for _, c := range conditions {
 		out = append(out, models.SecretStoreCondition{
 			Type:               c.Type,

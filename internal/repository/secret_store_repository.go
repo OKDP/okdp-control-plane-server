@@ -128,12 +128,19 @@ func (r *k8sSecretStoreRepository) Delete(ctx context.Context, namespace, name s
 
 var secretGVR = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "secrets"}
 
+// CreateOrUpdateSecret writes the credentials Secret of a store, labelled as
+// ours. The name is derived from the store name (<store>-credentials), so any
+// Secret of the namespace is reachable by picking a store name: one this
+// server did not create is refused with ErrForeignSecret, never overwritten
+// (a store named p-hive would otherwise replace the p-hive-credentials of the
+// hive instance p-hive).
 func (r *k8sSecretStoreRepository) CreateOrUpdateSecret(ctx context.Context, namespace, name string, data map[string][]byte) error {
 	secret := &corev1.Secret{
 		TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Secret"},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: namespace,
+			Labels:    map[string]string{crd.LabelManagedBy: crd.ManagedByValue},
 		},
 		Type: corev1.SecretTypeOpaque,
 		Data: data,
@@ -146,14 +153,18 @@ func (r *k8sSecretStoreRepository) CreateOrUpdateSecret(ctx context.Context, nam
 
 	u := &unstructured.Unstructured{Object: unstructuredMap}
 
-	_, getErr := r.client.Resource(secretGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	existing, getErr := r.client.Resource(secretGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 	if apierrors.IsNotFound(getErr) {
 		_, err = r.client.Resource(secretGVR).Namespace(namespace).Create(ctx, u, metav1.CreateOptions{})
-	} else if getErr != nil {
-		return getErr
-	} else {
-		_, err = r.client.Resource(secretGVR).Namespace(namespace).Update(ctx, u, metav1.UpdateOptions{})
+		return err
 	}
+	if getErr != nil {
+		return getErr
+	}
+	if existing.GetLabels()[crd.LabelManagedBy] != crd.ManagedByValue {
+		return fmt.Errorf("%w: secret %q in namespace %q", ErrForeignSecret, name, namespace)
+	}
+	_, err = r.client.Resource(secretGVR).Namespace(namespace).Update(ctx, u, metav1.UpdateOptions{})
 	return err
 }
 
@@ -170,8 +181,22 @@ func (r *k8sSecretStoreRepository) GetSecretData(ctx context.Context, namespace,
 	return secret.Data, nil
 }
 
+// DeleteSecret removes a credentials Secret this server created; one it did
+// not (no managed-by label) is left alone with ErrForeignSecret.
 func (r *k8sSecretStoreRepository) DeleteSecret(ctx context.Context, namespace, name string) error {
-	return r.client.Resource(secretGVR).Namespace(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+	existing, err := r.client.Resource(secretGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return err
+	}
+	if existing.GetLabels()[crd.LabelManagedBy] != crd.ManagedByValue {
+		return fmt.Errorf("%w: secret %q in namespace %q", ErrForeignSecret, name, namespace)
+	}
+	// Preconditioned on the object just inspected: a Secret replaced in
+	// between is not deleted on the strength of the old one's label.
+	uid := existing.GetUID()
+	return r.client.Resource(secretGVR).Namespace(namespace).Delete(ctx, name, metav1.DeleteOptions{
+		Preconditions: &metav1.Preconditions{UID: &uid},
+	})
 }
 
 // RemoveDefaultLabel lists all SecretStores with the default label and removes it.

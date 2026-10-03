@@ -30,7 +30,7 @@ func projectNamespace(c *gin.Context) string {
 
 // GetContracts godoc
 // @Summary      List the available contracts
-// @Description  Descriptors of every contract, used to build the creation form, plus whether connections can currently be persisted
+// @Description  Descriptors of every contract, used to build the creation form, plus whether connections can currently be persisted (crdAvailable: true when the deployments repository is configured)
 // @Tags         connections
 // @Produce      json
 // @Success      200  {object}  models.ConnectionCatalogResponse
@@ -41,7 +41,7 @@ func (h *ConnectionHandler) GetContracts(c *gin.Context) {
 
 // ListConnections godoc
 // @Summary      List the external connections of a project
-// @Description  Connections declared in the project namespace. Connections owned by a deployed release are excluded. They are returned by the internal endpoint.
+// @Description  Connections declared in the project (projects/<p>/connections/<name>.yaml in the deployments repository). Connections published by deployed instances are returned by the internal endpoint.
 // @Tags         connections
 // @Produce      json
 // @Param        name path string true "Project name (= Kubernetes namespace)"
@@ -106,7 +106,7 @@ func (h *ConnectionHandler) ListConsumers(c *gin.Context) {
 
 // ListInternalConnections godoc
 // @Summary      List the internal connections of a project
-// @Description  Connections provided by the services already deployed in the project, that the project's other services can consume
+// @Description  Connections provided by the services already deployed in the project (the outputs of their instance descriptor), that the project's other services can consume
 // @Tags         connections
 // @Produce      json
 // @Param        name path string true "Project name (= Kubernetes namespace)"
@@ -125,7 +125,7 @@ func (h *ConnectionHandler) ListInternalConnections(c *gin.Context) {
 
 // CreateConnection godoc
 // @Summary      Create an external connection in a project
-// @Description  Stores the credential fields in a Kubernetes Secret and creates the Connection CRD referencing it
+// @Description  Stores the credential fields in a Kubernetes Secret of the project namespace and commits the connection file referencing it (secretRef) to the deployments repository
 // @Tags         connections
 // @Accept       json
 // @Produce      json
@@ -195,7 +195,7 @@ func (h *ConnectionHandler) update(c *gin.Context, namespace string) {
 
 // DeleteConnection godoc
 // @Summary      Delete an external connection of a project
-// @Description  Removes the Connection CRD and the Secret holding its credentials
+// @Description  Removes the connection file from the deployments repository and the Secret the console wrote for it. 400 while an instance still layers the connection in.
 // @Tags         connections
 // @Produce      json
 // @Param        name path string true "Project name (= Kubernetes namespace)"

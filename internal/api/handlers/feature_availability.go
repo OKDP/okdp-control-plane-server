@@ -20,10 +20,6 @@ type FeatureUnavailable struct {
 // ReasonFeatureNotInstalled marks a feature whose CRDs are absent.
 const ReasonFeatureNotInstalled = "feature-not-installed"
 
-// identityFeature names the identity surface in FeatureUnavailable bodies. The
-// console keys off it, so it must stay stable.
-const identityFeature = "kubauth identity"
-
 // abortUnavailable answers 501 and reports true when the feature is absent, so
 // a handler reads: `if abortUnavailable(c, ok, ...) { return }`.
 func abortUnavailable(c *gin.Context, available bool, feature, message string) bool {

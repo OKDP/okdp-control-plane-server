@@ -2,90 +2,26 @@ package mocks
 
 import (
 	"context"
-	"io"
 
 	"github.com/okdp/okdp-control-plane-server/internal/models"
 	"github.com/okdp/okdp-control-plane-server/internal/repository"
 	"github.com/okdp/okdp-control-plane-server/internal/repository/crd"
 	"github.com/stretchr/testify/mock"
-	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/watch"
 )
 
-// ProjectRepository Mock
-type ProjectRepository struct {
+// ProjectNamespaceRepository Mock
+type ProjectNamespaceRepository struct {
 	mock.Mock
 }
 
-func (m *ProjectRepository) List(ctx context.Context) ([]models.Project, error) {
-	args := m.Called(ctx)
-	return args.Get(0).([]models.Project), args.Error(1)
-}
-
-func (m *ProjectRepository) Get(ctx context.Context, name string) (*models.Project, error) {
-	args := m.Called(ctx, name)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(*models.Project), args.Error(1)
-}
-
-func (m *ProjectRepository) Create(ctx context.Context, project *models.Project) error {
+func (m *ProjectNamespaceRepository) CreateNamespace(ctx context.Context, project *models.Project) (bool, error) {
 	args := m.Called(ctx, project)
-	return args.Error(0)
+	return args.Bool(0), args.Error(1)
 }
 
-func (m *ProjectRepository) Update(ctx context.Context, project *models.Project) (*models.Project, error) {
-	args := m.Called(ctx, project)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(*models.Project), args.Error(1)
-}
-
-func (m *ProjectRepository) Delete(ctx context.Context, name string) error {
+func (m *ProjectNamespaceRepository) DeleteNamespace(ctx context.Context, name string) (bool, error) {
 	args := m.Called(ctx, name)
-	return args.Error(0)
-}
-
-func (m *ProjectRepository) Watch(ctx context.Context) (watch.Interface, error) {
-	args := m.Called(ctx)
-	return args.Get(0).(watch.Interface), args.Error(1)
-}
-
-// ContextWriterRepository Mock
-type ContextWriterRepository struct {
-	mock.Mock
-}
-
-func (m *ContextWriterRepository) CreateFromDefault(ctx context.Context, projectName string) error {
-	args := m.Called(ctx, projectName)
-	return args.Error(0)
-}
-
-func (m *ContextWriterRepository) SyncFromDefault(ctx context.Context, projectName string) error {
-	args := m.Called(ctx, projectName)
-	return args.Error(0)
-}
-
-func (m *ContextWriterRepository) Delete(ctx context.Context, projectName string) error {
-	args := m.Called(ctx, projectName)
-	return args.Error(0)
-}
-
-func (m *ContextWriterRepository) AddPlatformService(ctx context.Context, svc models.PlatformService) error {
-	args := m.Called(ctx, svc)
-	return args.Error(0)
-}
-
-func (m *ContextWriterRepository) UpdatePlatformService(ctx context.Context, name string, svc models.PlatformService) error {
-	args := m.Called(ctx, name, svc)
-	return args.Error(0)
-}
-
-func (m *ContextWriterRepository) RemovePlatformService(ctx context.Context, name string) error {
-	args := m.Called(ctx, name)
-	return args.Error(0)
+	return args.Bool(0), args.Error(1)
 }
 
 // SecretStoreRepository Mock
@@ -181,13 +117,13 @@ func (m *IdentityRepository) GetUser(ctx context.Context, name string) (*models.
 	return args.Get(0).(*models.User), args.Error(1)
 }
 
-func (m *IdentityRepository) CreateUser(ctx context.Context, user *crd.User) error {
+func (m *IdentityRepository) CreateUser(ctx context.Context, user *models.User) error {
 	args := m.Called(ctx, user)
 	return args.Error(0)
 }
 
-func (m *IdentityRepository) UpdateUser(ctx context.Context, user *crd.User) error {
-	args := m.Called(ctx, user)
+func (m *IdentityRepository) UpdateUser(ctx context.Context, name string, user *models.User) error {
+	args := m.Called(ctx, name, user)
 	return args.Error(0)
 }
 
@@ -209,13 +145,13 @@ func (m *IdentityRepository) GetGroup(ctx context.Context, name string) (*models
 	return args.Get(0).(*models.Group), args.Error(1)
 }
 
-func (m *IdentityRepository) CreateGroup(ctx context.Context, group *crd.Group) error {
+func (m *IdentityRepository) CreateGroup(ctx context.Context, group *models.Group) error {
 	args := m.Called(ctx, group)
 	return args.Error(0)
 }
 
-func (m *IdentityRepository) UpdateGroup(ctx context.Context, group *crd.Group) error {
-	args := m.Called(ctx, group)
+func (m *IdentityRepository) UpdateGroup(ctx context.Context, name string, group *models.Group) error {
+	args := m.Called(ctx, name, group)
 	return args.Error(0)
 }
 
@@ -229,13 +165,8 @@ func (m *IdentityRepository) ListGroupBindings(ctx context.Context, userFilter s
 	return args.Get(0).([]models.GroupBinding), args.Error(1)
 }
 
-func (m *IdentityRepository) CreateGroupBinding(ctx context.Context, binding *crd.GroupBinding) error {
-	args := m.Called(ctx, binding)
-	return args.Error(0)
-}
-
-func (m *IdentityRepository) DeleteGroupBinding(ctx context.Context, name string) error {
-	args := m.Called(ctx, name)
+func (m *IdentityRepository) CreateGroupBinding(ctx context.Context, user, group string) error {
+	args := m.Called(ctx, user, group)
 	return args.Error(0)
 }
 
@@ -277,216 +208,22 @@ func (m *ExternalSecretRepository) Delete(ctx context.Context, namespace, name s
 	return args.Error(0)
 }
 
-// ServiceService Mock
-type ServiceService struct {
+// ConnectionSecretRepository Mock (credentials Secrets of external connections)
+type ConnectionSecretRepository struct {
 	mock.Mock
 }
 
-func (m *ServiceService) GetPlatformServices(ctx context.Context) ([]models.PlatformService, error) {
-	args := m.Called(ctx)
-	return args.Get(0).([]models.PlatformService), args.Error(1)
-}
-
-func (m *ServiceService) AddPlatformService(ctx context.Context, svc models.PlatformService) (*models.PlatformService, error) {
-	args := m.Called(ctx, svc)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(*models.PlatformService), args.Error(1)
-}
-
-func (m *ServiceService) UpdatePlatformService(ctx context.Context, name string, svc models.PlatformService) (*models.PlatformService, error) {
-	args := m.Called(ctx, name, svc)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(*models.PlatformService), args.Error(1)
-}
-
-func (m *ServiceService) RemovePlatformService(ctx context.Context, name string) error {
-	args := m.Called(ctx, name)
-	return args.Error(0)
-}
-
-func (m *ServiceService) DeployService(ctx context.Context, project string, req models.ServiceRequest) (*models.ServiceInstance, error) {
-	args := m.Called(ctx, project, req)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(*models.ServiceInstance), args.Error(1)
-}
-
-func (m *ServiceService) ListServices(ctx context.Context, project string) ([]models.ServiceInstance, error) {
-	args := m.Called(ctx, project)
-	return args.Get(0).([]models.ServiceInstance), args.Error(1)
-}
-
-func (m *ServiceService) GetService(ctx context.Context, project, name string) (*models.ServiceInstance, error) {
-	args := m.Called(ctx, project, name)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(*models.ServiceInstance), args.Error(1)
-}
-
-func (m *ServiceService) UpdateServiceParameters(ctx context.Context, project, name string, params map[string]any) (*models.ServiceInstance, error) {
-	args := m.Called(ctx, project, name, params)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(*models.ServiceInstance), args.Error(1)
-}
-
-func (m *ServiceService) DeleteService(ctx context.Context, project, name string) error {
-	args := m.Called(ctx, project, name)
-	return args.Error(0)
-}
-
-func (m *ServiceService) WatchServices(ctx context.Context, project string) (watch.Interface, error) {
-	args := m.Called(ctx, project)
-	return args.Get(0).(watch.Interface), args.Error(1)
-}
-
-func (m *ServiceService) GetMenuCategories(ctx context.Context) ([]models.MenuCategory, error) {
-	args := m.Called(ctx)
-	return args.Get(0).([]models.MenuCategory), args.Error(1)
-}
-
-func (m *ServiceService) GetIngressSuffix(ctx context.Context) (string, error) {
-	args := m.Called(ctx)
-	return args.String(0), args.Error(1)
-}
-
-func (m *ServiceService) GetProfileImages(ctx context.Context) (map[string][]models.ProfileImage, error) {
-	args := m.Called(ctx)
-	return args.Get(0).(map[string][]models.ProfileImage), args.Error(1)
-}
-
-func (m *ServiceService) EnrichURL(ctx context.Context, instance *models.ServiceInstance) {
-	m.Called(ctx, instance)
-}
-
-func (m *ServiceService) EnrichPodHealth(ctx context.Context, instance *models.ServiceInstance) {
-	m.Called(ctx, instance)
-}
-
-func (m *ServiceService) ListPods(ctx context.Context, project, serviceName string) ([]models.Pod, error) {
-	args := m.Called(ctx, project, serviceName)
-	return args.Get(0).([]models.Pod), args.Error(1)
-}
-
-func (m *ServiceService) GetServiceMetrics(ctx context.Context, project, serviceName string) (*models.ServiceMetrics, error) {
-	args := m.Called(ctx, project, serviceName)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(*models.ServiceMetrics), args.Error(1)
-}
-
-func (m *ServiceService) GetPodLogs(ctx context.Context, project, podName, container string, tailLines int64, follow bool) (io.ReadCloser, error) {
-	args := m.Called(ctx, project, podName, container, tailLines, follow)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(io.ReadCloser), args.Error(1)
-}
-
-// ServiceRepository Mock (KuboCD Releases)
-type ServiceRepository struct {
-	mock.Mock
-}
-
-func (m *ServiceRepository) Create(ctx context.Context, namespace string, release *crd.Release) error {
-	args := m.Called(ctx, namespace, release)
-	return args.Error(0)
-}
-
-func (m *ServiceRepository) Get(ctx context.Context, namespace, name string) (*crd.Release, error) {
-	args := m.Called(ctx, namespace, name)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(*crd.Release), args.Error(1)
-}
-
-func (m *ServiceRepository) List(ctx context.Context, namespace, project string) ([]crd.Release, error) {
-	args := m.Called(ctx, namespace, project)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).([]crd.Release), args.Error(1)
-}
-
-func (m *ServiceRepository) Update(ctx context.Context, namespace string, release *crd.Release) error {
-	args := m.Called(ctx, namespace, release)
-	return args.Error(0)
-}
-
-func (m *ServiceRepository) Delete(ctx context.Context, namespace, name string) error {
-	args := m.Called(ctx, namespace, name)
-	return args.Error(0)
-}
-
-func (m *ServiceRepository) Watch(ctx context.Context, namespace, project string) (watch.Interface, error) {
-	args := m.Called(ctx, namespace, project)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(watch.Interface), args.Error(1)
-}
-
-// ConnectionRepository Mock (KuboCD Connections)
-type ConnectionRepository struct {
-	mock.Mock
-}
-
-func (m *ConnectionRepository) Available(ctx context.Context) bool {
-	args := m.Called(ctx)
-	return args.Bool(0)
-}
-
-func (m *ConnectionRepository) List(ctx context.Context, namespace string) ([]crd.Connection, error) {
-	args := m.Called(ctx, namespace)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).([]crd.Connection), args.Error(1)
-}
-
-func (m *ConnectionRepository) Get(ctx context.Context, namespace, name string) (*crd.Connection, error) {
-	args := m.Called(ctx, namespace, name)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(*crd.Connection), args.Error(1)
-}
-
-func (m *ConnectionRepository) Create(ctx context.Context, namespace string, connection *crd.Connection) error {
-	args := m.Called(ctx, namespace, connection)
-	return args.Error(0)
-}
-
-func (m *ConnectionRepository) Update(ctx context.Context, namespace string, connection *crd.Connection) error {
-	args := m.Called(ctx, namespace, connection)
-	return args.Error(0)
-}
-
-func (m *ConnectionRepository) Delete(ctx context.Context, namespace, name string) error {
-	args := m.Called(ctx, namespace, name)
-	return args.Error(0)
-}
-
-func (m *ConnectionRepository) CreateOrUpdateSecret(ctx context.Context, namespace, name string, data map[string][]byte) error {
+func (m *ConnectionSecretRepository) CreateOrUpdateSecret(ctx context.Context, namespace, name string, data map[string][]byte) error {
 	args := m.Called(ctx, namespace, name, data)
 	return args.Error(0)
 }
 
-func (m *ConnectionRepository) DeleteSecret(ctx context.Context, namespace, name string) error {
+func (m *ConnectionSecretRepository) DeleteSecret(ctx context.Context, namespace, name string) error {
 	args := m.Called(ctx, namespace, name)
 	return args.Error(0)
 }
 
-func (m *ConnectionRepository) InspectSecret(ctx context.Context, namespace, name string) (repository.SecretContent, bool, error) {
+func (m *ConnectionSecretRepository) InspectSecret(ctx context.Context, namespace, name string) (repository.SecretContent, bool, error) {
 	args := m.Called(ctx, namespace, name)
 	var content repository.SecretContent
 	if raw := args.Get(0); raw != nil {
@@ -495,10 +232,11 @@ func (m *ConnectionRepository) InspectSecret(ctx context.Context, namespace, nam
 	return content, args.Bool(1), args.Error(2)
 }
 
-func (m *ConnectionRepository) ListKubeServices(ctx context.Context, namespace string) ([]corev1.Service, error) {
-	args := m.Called(ctx, namespace)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
+func (m *ConnectionSecretRepository) ReadSecret(ctx context.Context, namespace, name string) (map[string][]byte, bool, error) {
+	args := m.Called(ctx, namespace, name)
+	var data map[string][]byte
+	if raw := args.Get(0); raw != nil {
+		data = raw.(map[string][]byte)
 	}
-	return args.Get(0).([]corev1.Service), args.Error(1)
+	return data, args.Bool(1), args.Error(2)
 }

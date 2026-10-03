@@ -26,7 +26,7 @@ const docTemplate = `{
     "paths": {
         "/api/capabilities": {
             "get": {
-                "description": "Capabilities the platform is configured with (identity provider, user management, OIDC client provisioning), so the UI can adapt",
+                "description": "Capabilities the platform is configured with (user management through Keycloak, console OIDC client, OIDC client provisioning backend), so the UI can adapt",
                 "produces": [
                     "application/json"
                 ],
@@ -46,7 +46,7 @@ const docTemplate = `{
         },
         "/api/contracts": {
             "get": {
-                "description": "Descriptors of every contract, used to build the creation form, plus whether connections can currently be persisted",
+                "description": "Descriptors of every contract, used to build the creation form, plus whether connections can currently be persisted (crdAvailable: true when the deployments repository is configured)",
                 "produces": [
                     "application/json"
                 ],
@@ -128,7 +128,7 @@ const docTemplate = `{
                 }
             },
             "post": {
-                "description": "Expose a new managed service in the catalog (writes the default KuboCD Context)",
+                "description": "Expose a new managed service in the catalog (commits platform/catalog.yaml to the deployments repository)",
                 "consumes": [
                     "application/json"
                 ],
@@ -255,7 +255,7 @@ const docTemplate = `{
                 }
             },
             "delete": {
-                "description": "Remove an exposed service from the catalog (writes the default KuboCD Context)",
+                "description": "Remove an exposed service from the catalog (commits platform/catalog.yaml to the deployments repository)",
                 "produces": [
                     "application/json"
                 ],
@@ -316,7 +316,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "Package version tag (defaults to Context CR tag)",
+                        "description": "Package version tag (defaults to the catalog default version)",
                         "name": "tag",
                         "in": "query"
                     }
@@ -354,7 +354,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "Package version tag (defaults to Context CR tag)",
+                        "description": "Package version tag (defaults to the catalog default version)",
                         "name": "tag",
                         "in": "query"
                     }
@@ -390,7 +390,7 @@ const docTemplate = `{
         },
         "/api/platform-services/{serviceName}/versions": {
             "get": {
-                "description": "Returns the list of versions declared in the KuboCD Context CR",
+                "description": "Returns the chart versions published in the OCI registry, and the catalog default",
                 "produces": [
                     "application/json"
                 ],
@@ -428,7 +428,7 @@ const docTemplate = `{
         },
         "/api/profile-images": {
             "get": {
-                "description": "Returns the list of available container images per profile type from the KuboCD Context",
+                "description": "Returns the list of available container images per profile type from the platform values (global.okdp.jupyter.profiles)",
                 "produces": [
                     "application/json"
                 ],
@@ -463,7 +463,7 @@ const docTemplate = `{
         },
         "/api/projects": {
             "get": {
-                "description": "Get a list of all projects (backed by Kubernetes Namespaces)",
+                "description": "List the projects declared in the deployments repository (projects/\u003cp\u003e/project.yaml), whether written by the console or by hand in Git",
                 "consumes": [
                     "application/json"
                 ],
@@ -496,7 +496,7 @@ const docTemplate = `{
                 }
             },
             "post": {
-                "description": "Create a new project (materialized as a Kubernetes Namespace)",
+                "description": "Create a project: commits projects/\u003cname\u003e/project.yaml and creates the project Namespace. 409 when the project is already declared, or when a Namespace of that name exists and is not a project's",
                 "consumes": [
                     "application/json"
                 ],
@@ -526,7 +526,16 @@ const docTemplate = `{
                         }
                     },
                     "400": {
-                        "description": "Bad Request",
+                        "description": "Invalid project name",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Project or Namespace already exists",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -548,7 +557,7 @@ const docTemplate = `{
         },
         "/api/projects/stream": {
             "get": {
-                "description": "Stream project updates using Server-Sent Events (SSE)",
+                "description": "Stream project updates using Server-Sent Events (SSE): an ADDED event per existing project, then ADDED/MODIFIED/DELETED as project.yaml files change in the deployments repository (read every few seconds, at once after a console change)",
                 "produces": [
                     "text/event-stream"
                 ],
@@ -577,7 +586,7 @@ const docTemplate = `{
         },
         "/api/projects/{name}": {
             "get": {
-                "description": "Get a single project by name",
+                "description": "Get a project declared in the deployments repository (projects/\u003cname\u003e/project.yaml)",
                 "consumes": [
                     "application/json"
                 ],
@@ -625,7 +634,7 @@ const docTemplate = `{
                 }
             },
             "put": {
-                "description": "Update a project's mutable metadata (currently its description)",
+                "description": "Update a project's mutable metadata (currently its description) in projects/\u003cname\u003e/project.yaml; the file's other keys are kept",
                 "consumes": [
                     "application/json"
                 ],
@@ -691,7 +700,7 @@ const docTemplate = `{
                 }
             },
             "delete": {
-                "description": "Delete a project by name",
+                "description": "Delete a project: removes projects/\u003cname\u003e/ from the deployments repository (the GitOps engine uninstalls its releases), then its Namespace if the console created it",
                 "consumes": [
                     "application/json"
                 ],
@@ -738,7 +747,7 @@ const docTemplate = `{
         },
         "/api/projects/{name}/connections": {
             "get": {
-                "description": "Connections declared in the project namespace. Connections owned by a deployed release are excluded. They are returned by the internal endpoint.",
+                "description": "Connections declared in the project (projects/\u003cp\u003e/connections/\u003cname\u003e.yaml in the deployments repository). Connections published by deployed instances are returned by the internal endpoint.",
                 "produces": [
                     "application/json"
                 ],
@@ -777,7 +786,7 @@ const docTemplate = `{
                 }
             },
             "post": {
-                "description": "Stores the credential fields in a Kubernetes Secret and creates the Connection CRD referencing it",
+                "description": "Stores the credential fields in a Kubernetes Secret of the project namespace and commits the connection file referencing it (secretRef) to the deployments repository",
                 "consumes": [
                     "application/json"
                 ],
@@ -845,7 +854,7 @@ const docTemplate = `{
         },
         "/api/projects/{name}/connections/internal": {
             "get": {
-                "description": "Connections provided by the services already deployed in the project, that the project's other services can consume",
+                "description": "Connections provided by the services already deployed in the project (the outputs of their instance descriptor), that the project's other services can consume",
                 "produces": [
                     "application/json"
                 ],
@@ -1045,7 +1054,7 @@ const docTemplate = `{
                 }
             },
             "delete": {
-                "description": "Removes the Connection CRD and the Secret holding its credentials",
+                "description": "Removes the connection file from the deployments repository and the Secret the console wrote for it. 400 while an instance still layers the connection in.",
                 "produces": [
                     "application/json"
                 ],
@@ -1126,6 +1135,81 @@ const docTemplate = `{
                             "type": "array",
                             "items": {
                                 "$ref": "#/definitions/models.ConnectionConsumer"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/projects/{name}/connections/{connName}/sql": {
+            "post": {
+                "description": "Runs a statement batch on a database-server connection of the project (engine postgresql) with the connection's credentials, writes included: every project member acts as the connection's database user. Several statements separated by ';' run in one implicit transaction; the result is the last statement that returned columns, with the command tag of the last statement. Rows past maxRows are dropped (not cancelled). SQL errors (errorName = SQLSTATE) and the 2-minute timeout answer 200 with ` + "`" + `error` + "`" + ` set.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "sql"
+                ],
+                "summary": "Execute SQL on an external database connection",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Connection name",
+                        "name": "connName",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "SQL Query Request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/models.SqlQueryRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.SqlQueryResult"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "502": {
+                        "description": "Bad Gateway",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
                             }
                         }
                     }
@@ -1214,7 +1298,7 @@ const docTemplate = `{
                 }
             },
             "post": {
-                "description": "Deploy a managed platform service into a project",
+                "description": "Deploy a managed platform service into a project: commits the instance files to the deployments Git repository. The answer carries the commit (revision) and the status Pending until the GitOps engine reconciles it. Only the submitted parameters are written to values.yaml. 400 on invalid parameters; 409 with code instance-exists or release-name-taken.",
                 "consumes": [
                     "application/json"
                 ],
@@ -1282,7 +1366,7 @@ const docTemplate = `{
         },
         "/api/projects/{name}/services/stream": {
             "get": {
-                "description": "Stream service status updates using Server-Sent Events (SSE)",
+                "description": "Stream service status updates using Server-Sent Events (SSE): instance descriptors, GitOps engine objects and the console's own commits. Each message is {type: ADDED|MODIFIED|DELETED, object: ServiceInstance}.",
                 "produces": [
                     "text/event-stream"
                 ],
@@ -1372,7 +1456,7 @@ const docTemplate = `{
                 }
             },
             "delete": {
-                "description": "Remove a deployed service from a project",
+                "description": "Remove a deployed service from a project: removes its directory from the deployments Git repository; the GitOps engine uninstalls it.",
                 "produces": [
                     "application/json"
                 ],
@@ -1468,7 +1552,7 @@ const docTemplate = `{
         },
         "/api/projects/{name}/services/{serviceName}/parameters": {
             "patch": {
-                "description": "Merge new parameters and optionally update the package version of a deployed service",
+                "description": "JSON Merge Patch (RFC 7386) of the parameters (null deletes a key, objects merge, arrays replace) and optionally update the chart version of a deployed service, committed to values.yaml/instance.yaml in the deployments Git repository. 400 on invalid parameters.",
                 "consumes": [
                     "application/json"
                 ],
@@ -1629,7 +1713,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "integer",
-                        "description": "Number of lines from the end (default 100)",
+                        "description": "Number of lines from the end (default 100, at most 10000)",
                         "name": "tailLines",
                         "in": "query"
                     },
@@ -1645,6 +1729,147 @@ const docTemplate = `{
                         "description": "log output",
                         "schema": {
                             "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/projects/{name}/services/{serviceName}/sql": {
+            "post": {
+                "description": "Proxies the statement to the service instance (Trino only), forwarding the caller's bearer token. Engine-side SQL errors answer 200 with ` + "`" + `error` + "`" + ` set.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "sql"
+                ],
+                "summary": "Execute a SQL query on a deployed SQL engine",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Service instance name",
+                        "name": "serviceName",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "SQL Query Request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/models.SqlQueryRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.SqlQueryResult"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "502": {
+                        "description": "Bad Gateway",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/projects/{name}/services/{serviceName}/values": {
+            "get": {
+                "description": "For each upstream chart the instance's chart vendors (okdp.vendor.render), the values.yaml it was rendered with (from the ConfigMap \u003crelease\u003e-\u003cchart\u003e-values the chart emits), the vendored chart's default values.yaml, and the lines of the former that differ from the latter. Empty when the chart vendors nothing or predates the values ConfigMaps. Defaults that cannot be read (registry unreachable) leave defaultsError set instead of failing.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "services"
+                ],
+                "summary": "Values passed to the vendored upstream charts",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Service instance name",
+                        "name": "serviceName",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/models.RenderedValues"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     },
                     "500": {
@@ -2081,7 +2306,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "integer",
-                        "description": "Number of lines from the end (default 100)",
+                        "description": "Number of lines from the end (default 100, at most 10000)",
                         "name": "tailLines",
                         "in": "query"
                     },
@@ -2862,7 +3087,7 @@ const docTemplate = `{
         },
         "/api/spark-config": {
             "get": {
-                "description": "Returns Spark operator configuration from the KuboCD Context (images, defaults, versions)",
+                "description": "Returns Spark operator configuration from the platform values, global.okdp.sparkOperator (images, defaults, versions)",
                 "produces": [
                     "application/json"
                 ],
@@ -2891,7 +3116,7 @@ const docTemplate = `{
         },
         "/api/v1/identity/groups": {
             "get": {
-                "description": "Get all groups from Kubauth",
+                "description": "Get all groups from the identity provider (Keycloak)",
                 "consumes": [
                     "application/json"
                 ],
@@ -2915,7 +3140,7 @@ const docTemplate = `{
                 }
             },
             "post": {
-                "description": "Create a new group in Kubauth",
+                "description": "Create a new group in the identity provider (Keycloak)",
                 "consumes": [
                     "application/json"
                 ],
@@ -2949,7 +3174,7 @@ const docTemplate = `{
         },
         "/api/v1/identity/groups/{name}": {
             "put": {
-                "description": "Update a group in Kubauth",
+                "description": "Update a group in the identity provider (Keycloak)",
                 "consumes": [
                     "application/json"
                 ],
@@ -2988,7 +3213,7 @@ const docTemplate = `{
                 }
             },
             "delete": {
-                "description": "Delete a group from Kubauth",
+                "description": "Delete a group from the identity provider (Keycloak)",
                 "consumes": [
                     "application/json"
                 ],
@@ -3017,7 +3242,7 @@ const docTemplate = `{
         },
         "/api/v1/identity/users": {
             "get": {
-                "description": "Get all users from Kubauth",
+                "description": "Get all users from the identity provider (Keycloak)",
                 "consumes": [
                     "application/json"
                 ],
@@ -3041,7 +3266,7 @@ const docTemplate = `{
                 }
             },
             "post": {
-                "description": "Create a new user in Kubauth",
+                "description": "Create a new user in the identity provider (Keycloak)",
                 "consumes": [
                     "application/json"
                 ],
@@ -3105,7 +3330,7 @@ const docTemplate = `{
                 }
             },
             "put": {
-                "description": "Update a user in Kubauth",
+                "description": "Update a user in the identity provider (Keycloak)",
                 "consumes": [
                     "application/json"
                 ],
@@ -3144,7 +3369,7 @@ const docTemplate = `{
                 }
             },
             "delete": {
-                "description": "Delete a user from Kubauth",
+                "description": "Delete a user from the identity provider (Keycloak)",
                 "consumes": [
                     "application/json"
                 ],
@@ -3188,7 +3413,7 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "crdAvailable": {
-                    "description": "CRDAvailable reports whether the KuboCD connection CRDs are installed.\nWhile they are not, external connections cannot be persisted and the\nconsole says so instead of failing on save. Internal connections are\nderived from deployed services and stay available either way.",
+                    "description": "CRDAvailable reports whether external connections can be persisted,\nwhich is whenever a deployments repository is configured (always, in a\nrunning server). The name is kept for API compatibility.",
                     "type": "boolean"
                 },
                 "types": {
@@ -3203,14 +3428,14 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "effective": {
-                    "description": "Effective reports that the release actually resolved this connection, as\nopposed to merely waiting for it.",
+                    "description": "Effective reports that the connection exists (declared, or published by\na deployed instance), as opposed to merely being named.",
                     "type": "boolean"
                 },
                 "releaseName": {
                     "type": "string"
                 },
                 "service": {
-                    "description": "Service is the instance name as the console displays it, ReleaseName the\nunderlying KuboCD Release.",
+                    "description": "Service is the instance name as the console displays it, ReleaseName the\nHelm release (\u003cproject\u003e-\u003cinstance\u003e).",
                     "type": "string"
                 },
                 "status": {
@@ -3262,7 +3487,7 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "secret": {
-                    "description": "Secret says where the value is stored: in the credentials Secret rather\nthan in the Connection spec. It says nothing about how it is typed in.",
+                    "description": "Secret says where the value is stored: in the credentials Secret rather\nthan in the connection file. It says nothing about how it is typed in.",
                     "type": "boolean"
                 },
                 "showWhen": {
@@ -3462,8 +3687,12 @@ const docTemplate = `{
                 "icon": {
                     "type": "string"
                 },
+                "internal": {
+                    "description": "Internal reports that an instance of the project can provide this\ncontract by naming convention (x-okdp-internal in the contract schema:\nhive, iceberg-catalog, trino). Only those outputs are selectable.",
+                    "type": "boolean"
+                },
                 "name": {
-                    "description": "Name IS the KuboCD Contract this descriptor produces. One descriptor, one\ncontract, deliberately: an entry form that produced a differently named\ncontract would mean nothing a package asks for could be found by its own\nname.",
+                    "description": "Name IS the contract this descriptor produces (x-okdp-connection-ref).\nOne descriptor, one contract, deliberately: an entry form that produced a\ndifferently named contract would mean nothing a chart asks for could be\nfound by its own name.",
                     "type": "string"
                 }
             }
@@ -3685,7 +3914,7 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "oidc": {
-                    "description": "Oidc is the OIDC client the console UI should authenticate with,\nresolved from the Context (identity.oidc). Absent when the platform\ndoes not publish it: the UI falls back to its build-time configuration.",
+                    "description": "Oidc is the OIDC client the console UI should authenticate with,\nresolved from the platform values (global.okdp.identity.oidc). Absent when the platform\ndoes not publish it: the UI falls back to its build-time configuration.",
                     "allOf": [
                         {
                             "$ref": "#/definitions/models.IdentityOidcConfig"
@@ -3693,11 +3922,11 @@ const docTemplate = `{
                     ]
                 },
                 "provider": {
-                    "description": "Provider is the configured identity provider: \"external\" (BYO OIDC,\ndefault) or \"kubauth\".",
+                    "description": "Provider is who manages the platform users: \"keycloak\" when this server\nmanages them through the Keycloak Admin API, \"external\" otherwise\n(users are managed in Keycloak directly).",
                     "type": "string"
                 },
                 "userManagement": {
-                    "description": "UserManagement is true when the kubauth-specific user/group management\nAPI (/api/v1/identity) is available.",
+                    "description": "UserManagement is true when the user/group management API\n(/api/v1/identity) is available: the server has Keycloak admin\ncredentials and a realm to apply them to.",
                     "type": "boolean"
                 }
             }
@@ -3739,7 +3968,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "managed": {
-                    "description": "Managed reports that the entry comes from a Connection the KuboCD release\ncontroller owns, rather than being derived from the deployed service.",
+                    "description": "Managed reports that the entry is published by a deployed instance (its\ndescriptor's outputs), not declared by hand. Always true here.",
                     "type": "boolean"
                 },
                 "name": {
@@ -3817,7 +4046,7 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "provider": {
-                    "description": "Provider is the configured provisioning backend: \"none\" (default),\n\"kubauth\" or \"keycloak\".",
+                    "description": "Provider is the configured provisioning backend: \"none\" (default) or\n\"keycloak\".",
                     "type": "string"
                 }
             }
@@ -3834,7 +4063,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "default": {
-                    "description": "Default is the template the package falls back to when the deployer picks\nnothing. KuboCD forbids a literal here, so it is always rendered against\nthe Context: this is how an Environment says \"here, the database is that\none\" without the deployer naming it. The console must therefore leave the\nparameter out rather than send an empty string, which would win over it.",
+                    "description": "Default is the connection the chart falls back to when the deployer picks\nnothing (the property's schema default). The console must leave the\nparameter out rather than send an empty string, which would win over it.",
                     "type": "string"
                 },
                 "description": {
@@ -3846,7 +4075,11 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "parameter": {
-                    "description": "Parameter is the package parameter carrying the chosen connection name,\nderived from the input's namedConnection template. Empty when the input\nbinds some other way, in which case the console offers no choice.",
+                    "description": "Parameter is the root chart parameter carrying the chosen connection\nname (the property marked x-okdp-connection-ref). Empty for a ref nested\nin an object or a list, which the form fills inside that structure.",
+                    "type": "string"
+                },
+                "path": {
+                    "description": "Path is the JSON path of the marked property: \"metadataDb\" at the root,\n\"hiveCatalogs[].metastore\" inside the items of a list.",
                     "type": "string"
                 }
             }
@@ -3932,6 +4165,50 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.RenderedValues": {
+            "type": "object",
+            "properties": {
+                "changedLines": {
+                    "description": "ChangedLines are the 1-based lines of Values that differ from Defaults.\nEmpty when nothing differs or when the defaults could not be read.",
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "chart": {
+                    "description": "Chart is the vendored chart (its directory under vendor/).",
+                    "type": "string",
+                    "example": "trino"
+                },
+                "chartVersion": {
+                    "description": "ChartVersion is the vendored chart, \u003cname\u003e-\u003cversion\u003e.",
+                    "type": "string",
+                    "example": "trino-1.42.1"
+                },
+                "defaults": {
+                    "description": "Defaults is the vendored chart's own values.yaml, as published (with\nits comments). Empty when it could not be read (see DefaultsError).",
+                    "type": "string"
+                },
+                "defaultsError": {
+                    "description": "DefaultsError says why the defaults are missing.",
+                    "type": "string"
+                },
+                "name": {
+                    "description": "Name is the values ConfigMap.",
+                    "type": "string",
+                    "example": "demo-trino-trino-values"
+                },
+                "serviceVersion": {
+                    "description": "ServiceVersion is the version of the instance's chart that rendered\nthese values (it can differ from the declared one during an update).",
+                    "type": "string",
+                    "example": "480.0.0-1.0.2"
+                },
+                "values": {
+                    "description": "Values is the values.yaml the vendored chart was rendered with.",
                     "type": "string"
                 }
             }
@@ -4137,7 +4414,7 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "kind": {
-                    "description": "Kind separates a Connection from a ClusterConnection, which may share a\nname, and tells the console which page to link to.",
+                    "description": "Kind is Connection (external, declared in the project) or Instance\n(provided by another instance), and tells the console which page to\nlink to.",
                     "type": "string"
                 },
                 "name": {
@@ -4147,7 +4424,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "resolved": {
-                    "description": "Resolved is false while the release is still waiting for it.",
+                    "description": "Resolved is false while the connection does not exist.",
                     "type": "boolean"
                 }
             }
@@ -4156,7 +4433,7 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "connections": {
-                    "description": "Connections is what the release actually resolved, published by the\ncontroller. Without it the console can only show what a service asked\nfor, never what it runs against.",
+                    "description": "Connections lists what the instance is wired to: the external\nconnections its declaration layers in, and the connections of other\ninstances its parameters name.",
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/models.ServiceConnection"
@@ -4175,7 +4452,12 @@ const docTemplate = `{
                 "releaseName": {
                     "type": "string"
                 },
+                "revision": {
+                    "description": "Revision is the Git commit holding the change, set on the responses of\na deployment or an update only.",
+                    "type": "string"
+                },
                 "roles": {
+                    "description": "Roles is no longer filled: KuboCD package roles have no successor.",
                     "type": "array",
                     "items": {
                         "type": "string"
@@ -4197,6 +4479,10 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "url": {
+                    "type": "string"
+                },
+                "usage": {
+                    "description": "Usage is the rendered Markdown the chart publishes in its instance\ndescriptor (the former package usage).",
                     "type": "string"
                 }
             }
@@ -4474,6 +4760,86 @@ const docTemplate = `{
                 }
             }
         },
+        "models.SqlColumn": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.SqlQueryError": {
+            "type": "object",
+            "properties": {
+                "columnNumber": {
+                    "type": "integer"
+                },
+                "errorName": {
+                    "type": "string"
+                },
+                "lineNumber": {
+                    "type": "integer"
+                },
+                "message": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.SqlQueryRequest": {
+            "type": "object",
+            "required": [
+                "query"
+            ],
+            "properties": {
+                "maxRows": {
+                    "description": "MaxRows caps the number of result rows returned (default 1000).",
+                    "type": "integer"
+                },
+                "query": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.SqlQueryResult": {
+            "type": "object",
+            "properties": {
+                "columns": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.SqlColumn"
+                    }
+                },
+                "commandTag": {
+                    "description": "CommandTag is the PostgreSQL command tag of the last statement\n(e.g. \"INSERT 0 5\"). Empty for Trino.",
+                    "type": "string"
+                },
+                "elapsedMs": {
+                    "type": "integer"
+                },
+                "error": {
+                    "$ref": "#/definitions/models.SqlQueryError"
+                },
+                "queryId": {
+                    "type": "string"
+                },
+                "rowCount": {
+                    "type": "integer"
+                },
+                "rows": {
+                    "type": "array",
+                    "items": {
+                        "type": "array",
+                        "items": {}
+                    }
+                },
+                "truncated": {
+                    "type": "boolean"
+                }
+            }
+        },
         "models.TestConnectionResponse": {
             "type": "object",
             "properties": {
@@ -4498,25 +4864,25 @@ const docTemplate = `{
                     }
                 },
                 "groups": {
-                    "description": "Groups is a computed field, not directly in the User CRD but useful for API",
+                    "description": "Groups is a computed field (memberships), useful for API",
                     "type": "array",
                     "items": {
                         "type": "string"
                     }
                 },
                 "name": {
-                    "description": "spec.name (Display Name / Full Name)",
+                    "description": "Display Name / Full Name",
                     "type": "string"
                 },
                 "password": {
-                    "description": "Password is write-only, used for creation/update",
+                    "description": "Password is write-only, used for creation/update; credentials are\nmanaged by the identity backend and never stored by this server.",
                     "type": "string"
                 },
                 "uid": {
                     "type": "integer"
                 },
                 "username": {
-                    "description": "metadata.name (ID / Login)",
+                    "description": "ID / Login",
                     "type": "string"
                 }
             }

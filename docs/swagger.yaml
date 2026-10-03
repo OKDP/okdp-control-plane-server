@@ -11,10 +11,9 @@ definitions:
     properties:
       crdAvailable:
         description: |-
-          CRDAvailable reports whether the KuboCD connection CRDs are installed.
-          While they are not, external connections cannot be persisted and the
-          console says so instead of failing on save. Internal connections are
-          derived from deployed services and stay available either way.
+          CRDAvailable reports whether external connections can be persisted,
+          which is whenever a deployments repository is configured (always, in a
+          running server). The name is kept for API compatibility.
         type: boolean
       types:
         items:
@@ -25,15 +24,15 @@ definitions:
     properties:
       effective:
         description: |-
-          Effective reports that the release actually resolved this connection, as
-          opposed to merely waiting for it.
+          Effective reports that the connection exists (declared, or published by
+          a deployed instance), as opposed to merely being named.
         type: boolean
       releaseName:
         type: string
       service:
         description: |-
           Service is the instance name as the console displays it, ReleaseName the
-          underlying KuboCD Release.
+          Helm release (<project>-<instance>).
         type: string
       status:
         type: string
@@ -75,7 +74,7 @@ definitions:
       secret:
         description: |-
           Secret says where the value is stored: in the credentials Secret rather
-          than in the Connection spec. It says nothing about how it is typed in.
+          than in the connection file. It says nothing about how it is typed in.
         type: boolean
       showWhen:
         allOf:
@@ -227,12 +226,18 @@ definitions:
         type: array
       icon:
         type: string
+      internal:
+        description: |-
+          Internal reports that an instance of the project can provide this
+          contract by naming convention (x-okdp-internal in the contract schema:
+          hive, iceberg-catalog, trino). Only those outputs are selectable.
+        type: boolean
       name:
         description: |-
-          Name IS the KuboCD Contract this descriptor produces. One descriptor, one
-          contract, deliberately: an entry form that produced a differently named
-          contract would mean nothing a package asks for could be found by its own
-          name.
+          Name IS the contract this descriptor produces (x-okdp-connection-ref).
+          One descriptor, one contract, deliberately: an entry form that produced a
+          differently named contract would mean nothing a chart asks for could be
+          found by its own name.
         type: string
     type: object
   models.CredentialsSecretRef:
@@ -385,17 +390,19 @@ definitions:
         - $ref: '#/definitions/models.IdentityOidcConfig'
         description: |-
           Oidc is the OIDC client the console UI should authenticate with,
-          resolved from the Context (identity.oidc). Absent when the platform
+          resolved from the platform values (global.okdp.identity.oidc). Absent when the platform
           does not publish it: the UI falls back to its build-time configuration.
       provider:
         description: |-
-          Provider is the configured identity provider: "external" (BYO OIDC,
-          default) or "kubauth".
+          Provider is who manages the platform users: "keycloak" when this server
+          manages them through the Keycloak Admin API, "external" otherwise
+          (users are managed in Keycloak directly).
         type: string
       userManagement:
         description: |-
-          UserManagement is true when the kubauth-specific user/group management
-          API (/api/v1/identity) is available.
+          UserManagement is true when the user/group management API
+          (/api/v1/identity) is available: the server has Keycloak admin
+          credentials and a realm to apply them to.
         type: boolean
     type: object
   models.IdentityOidcConfig:
@@ -426,8 +433,8 @@ definitions:
         type: string
       managed:
         description: |-
-          Managed reports that the entry comes from a Connection the KuboCD release
-          controller owns, rather than being derived from the deployed service.
+          Managed reports that the entry is published by a deployed instance (its
+          descriptor's outputs), not declared by hand. Always true here.
         type: boolean
       name:
         type: string
@@ -481,8 +488,8 @@ definitions:
     properties:
       provider:
         description: |-
-          Provider is the configured provisioning backend: "none" (default),
-          "kubauth" or "keycloak".
+          Provider is the configured provisioning backend: "none" (default) or
+          "keycloak".
         type: string
     type: object
   models.PackageInput:
@@ -499,10 +506,8 @@ definitions:
         type: string
       default:
         description: |-
-          Default is the template the package falls back to when the deployer picks
-          nothing. KuboCD forbids a literal here, so it is always rendered against
-          the Context: this is how an Environment says "here, the database is that
-          one" without the deployer naming it. The console must therefore leave the
+          Default is the connection the chart falls back to when the deployer picks
+          nothing (the property's schema default). The console must leave the
           parameter out rather than send an empty string, which would win over it.
         type: string
       description:
@@ -514,9 +519,14 @@ definitions:
         type: boolean
       parameter:
         description: |-
-          Parameter is the package parameter carrying the chosen connection name,
-          derived from the input's namedConnection template. Empty when the input
-          binds some other way, in which case the console offers no choice.
+          Parameter is the root chart parameter carrying the chosen connection
+          name (the property marked x-okdp-connection-ref). Empty for a ref nested
+          in an object or a list, which the form fills inside that structure.
+        type: string
+      path:
+        description: |-
+          Path is the JSON path of the marked property: "metadataDb" at the root,
+          "hiveCatalogs[].metastore" inside the items of a list.
         type: string
     type: object
   models.PlatformService:
@@ -579,6 +589,45 @@ definitions:
       description:
         type: string
       name:
+        type: string
+    type: object
+  models.RenderedValues:
+    properties:
+      changedLines:
+        description: |-
+          ChangedLines are the 1-based lines of Values that differ from Defaults.
+          Empty when nothing differs or when the defaults could not be read.
+        items:
+          type: integer
+        type: array
+      chart:
+        description: Chart is the vendored chart (its directory under vendor/).
+        example: trino
+        type: string
+      chartVersion:
+        description: ChartVersion is the vendored chart, <name>-<version>.
+        example: trino-1.42.1
+        type: string
+      defaults:
+        description: |-
+          Defaults is the vendored chart's own values.yaml, as published (with
+          its comments). Empty when it could not be read (see DefaultsError).
+        type: string
+      defaultsError:
+        description: DefaultsError says why the defaults are missing.
+        type: string
+      name:
+        description: Name is the values ConfigMap.
+        example: demo-trino-trino-values
+        type: string
+      serviceVersion:
+        description: |-
+          ServiceVersion is the version of the instance's chart that rendered
+          these values (it can differ from the declared one during an update).
+        example: 480.0.0-1.0.2
+        type: string
+      values:
+        description: Values is the values.yaml the vendored chart was rendered with.
         type: string
     type: object
   models.ResourceDefaults:
@@ -723,24 +772,25 @@ definitions:
     properties:
       kind:
         description: |-
-          Kind separates a Connection from a ClusterConnection, which may share a
-          name, and tells the console which page to link to.
+          Kind is Connection (external, declared in the project) or Instance
+          (provided by another instance), and tells the console which page to
+          link to.
         type: string
       name:
         type: string
       namespace:
         type: string
       resolved:
-        description: Resolved is false while the release is still waiting for it.
+        description: Resolved is false while the connection does not exist.
         type: boolean
     type: object
   models.ServiceInstance:
     properties:
       connections:
         description: |-
-          Connections is what the release actually resolved, published by the
-          controller. Without it the console can only show what a service asked
-          for, never what it runs against.
+          Connections lists what the instance is wired to: the external
+          connections its declaration layers in, and the connections of other
+          instances its parameters name.
         items:
           $ref: '#/definitions/models.ServiceConnection'
         type: array
@@ -753,7 +803,13 @@ definitions:
         type: object
       releaseName:
         type: string
+      revision:
+        description: |-
+          Revision is the Git commit holding the change, set on the responses of
+          a deployment or an update only.
+        type: string
       roles:
+        description: 'Roles is no longer filled: KuboCD package roles have no successor.'
         items:
           type: string
         type: array
@@ -768,6 +824,11 @@ definitions:
       targetNamespace:
         type: string
       url:
+        type: string
+      usage:
+        description: |-
+          Usage is the rendered Markdown the chart publishes in its instance
+          descriptor (the former package usage).
         type: string
     type: object
   models.ServiceMetrics:
@@ -949,6 +1010,61 @@ definitions:
       uiAddress:
         type: string
     type: object
+  models.SqlColumn:
+    properties:
+      name:
+        type: string
+      type:
+        type: string
+    type: object
+  models.SqlQueryError:
+    properties:
+      columnNumber:
+        type: integer
+      errorName:
+        type: string
+      lineNumber:
+        type: integer
+      message:
+        type: string
+    type: object
+  models.SqlQueryRequest:
+    properties:
+      maxRows:
+        description: MaxRows caps the number of result rows returned (default 1000).
+        type: integer
+      query:
+        type: string
+    required:
+    - query
+    type: object
+  models.SqlQueryResult:
+    properties:
+      columns:
+        items:
+          $ref: '#/definitions/models.SqlColumn'
+        type: array
+      commandTag:
+        description: |-
+          CommandTag is the PostgreSQL command tag of the last statement
+          (e.g. "INSERT 0 5"). Empty for Trino.
+        type: string
+      elapsedMs:
+        type: integer
+      error:
+        $ref: '#/definitions/models.SqlQueryError'
+      queryId:
+        type: string
+      rowCount:
+        type: integer
+      rows:
+        items:
+          items: {}
+          type: array
+        type: array
+      truncated:
+        type: boolean
+    type: object
   models.TestConnectionResponse:
     properties:
       message:
@@ -965,21 +1081,22 @@ definitions:
           type: string
         type: array
       groups:
-        description: Groups is a computed field, not directly in the User CRD but
-          useful for API
+        description: Groups is a computed field (memberships), useful for API
         items:
           type: string
         type: array
       name:
-        description: spec.name (Display Name / Full Name)
+        description: Display Name / Full Name
         type: string
       password:
-        description: Password is write-only, used for creation/update
+        description: |-
+          Password is write-only, used for creation/update; credentials are
+          managed by the identity backend and never stored by this server.
         type: string
       uid:
         type: integer
       username:
-        description: metadata.name (ID / Login)
+        description: ID / Login
         type: string
     type: object
   models.VaultConfig:
@@ -1022,8 +1139,9 @@ info:
 paths:
   /api/capabilities:
     get:
-      description: Capabilities the platform is configured with (identity provider,
-        user management, OIDC client provisioning), so the UI can adapt
+      description: Capabilities the platform is configured with (user management through
+        Keycloak, console OIDC client, OIDC client provisioning backend), so the UI
+        can adapt
       produces:
       - application/json
       responses:
@@ -1036,8 +1154,9 @@ paths:
       - capabilities
   /api/contracts:
     get:
-      description: Descriptors of every contract, used to build the creation form,
-        plus whether connections can currently be persisted
+      description: 'Descriptors of every contract, used to build the creation form,
+        plus whether connections can currently be persisted (crdAvailable: true when
+        the deployments repository is configured)'
       produces:
       - application/json
       responses:
@@ -1095,8 +1214,8 @@ paths:
     post:
       consumes:
       - application/json
-      description: Expose a new managed service in the catalog (writes the default
-        KuboCD Context)
+      description: Expose a new managed service in the catalog (commits platform/catalog.yaml
+        to the deployments repository)
       parameters:
       - description: Catalog service
         in: body
@@ -1134,8 +1253,8 @@ paths:
       - platform-services
   /api/platform-services/{serviceName}:
     delete:
-      description: Remove an exposed service from the catalog (writes the default
-        KuboCD Context)
+      description: Remove an exposed service from the catalog (commits platform/catalog.yaml
+        to the deployments repository)
       parameters:
       - description: Service name
         in: path
@@ -1215,7 +1334,7 @@ paths:
         name: serviceName
         required: true
         type: string
-      - description: Package version tag (defaults to Context CR tag)
+      - description: Package version tag (defaults to the catalog default version)
         in: query
         name: tag
         type: string
@@ -1241,7 +1360,7 @@ paths:
         name: serviceName
         required: true
         type: string
-      - description: Package version tag (defaults to Context CR tag)
+      - description: Package version tag (defaults to the catalog default version)
         in: query
         name: tag
         type: string
@@ -1270,7 +1389,8 @@ paths:
       - platform-services
   /api/platform-services/{serviceName}/versions:
     get:
-      description: Returns the list of versions declared in the KuboCD Context CR
+      description: Returns the chart versions published in the OCI registry, and the
+        catalog default
       parameters:
       - description: Service name
         in: path
@@ -1296,7 +1416,7 @@ paths:
   /api/profile-images:
     get:
       description: Returns the list of available container images per profile type
-        from the KuboCD Context
+        from the platform values (global.okdp.jupyter.profiles)
       produces:
       - application/json
       responses:
@@ -1321,7 +1441,8 @@ paths:
     get:
       consumes:
       - application/json
-      description: Get a list of all projects (backed by Kubernetes Namespaces)
+      description: List the projects declared in the deployments repository (projects/<p>/project.yaml),
+        whether written by the console or by hand in Git
       produces:
       - application/json
       responses:
@@ -1343,7 +1464,9 @@ paths:
     post:
       consumes:
       - application/json
-      description: Create a new project (materialized as a Kubernetes Namespace)
+      description: 'Create a project: commits projects/<name>/project.yaml and creates
+        the project Namespace. 409 when the project is already declared, or when a
+        Namespace of that name exists and is not a project''s'
       parameters:
       - description: Project Object
         in: body
@@ -1359,7 +1482,13 @@ paths:
           schema:
             $ref: '#/definitions/models.Project'
         "400":
-          description: Bad Request
+          description: Invalid project name
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Project or Namespace already exists
           schema:
             additionalProperties:
               type: string
@@ -1377,7 +1506,9 @@ paths:
     delete:
       consumes:
       - application/json
-      description: Delete a project by name
+      description: 'Delete a project: removes projects/<name>/ from the deployments
+        repository (the GitOps engine uninstalls its releases), then its Namespace
+        if the console created it'
       parameters:
       - description: Project Name
         in: path
@@ -1407,7 +1538,7 @@ paths:
     get:
       consumes:
       - application/json
-      description: Get a single project by name
+      description: Get a project declared in the deployments repository (projects/<name>/project.yaml)
       parameters:
       - description: Project Name
         in: path
@@ -1440,6 +1571,7 @@ paths:
       consumes:
       - application/json
       description: Update a project's mutable metadata (currently its description)
+        in projects/<name>/project.yaml; the file's other keys are kept
       parameters:
       - description: Project Name
         in: path
@@ -1482,8 +1614,9 @@ paths:
       - projects
   /api/projects/{name}/connections:
     get:
-      description: Connections declared in the project namespace. Connections owned
-        by a deployed release are excluded. They are returned by the internal endpoint.
+      description: Connections declared in the project (projects/<p>/connections/<name>.yaml
+        in the deployments repository). Connections published by deployed instances
+        are returned by the internal endpoint.
       parameters:
       - description: Project name (= Kubernetes namespace)
         in: path
@@ -1511,8 +1644,9 @@ paths:
     post:
       consumes:
       - application/json
-      description: Stores the credential fields in a Kubernetes Secret and creates
-        the Connection CRD referencing it
+      description: Stores the credential fields in a Kubernetes Secret of the project
+        namespace and commits the connection file referencing it (secretRef) to the
+        deployments repository
       parameters:
       - description: Project name (= Kubernetes namespace)
         in: path
@@ -1555,7 +1689,9 @@ paths:
       - connections
   /api/projects/{name}/connections/{connName}:
     delete:
-      description: Removes the Connection CRD and the Secret holding its credentials
+      description: Removes the connection file from the deployments repository and
+        the Secret the console wrote for it. 400 while an instance still layers the
+        connection in.
       parameters:
       - description: Project name (= Kubernetes namespace)
         in: path
@@ -1660,10 +1796,67 @@ paths:
       summary: Services of the project bound to a connection
       tags:
       - connections
+  /api/projects/{name}/connections/{connName}/sql:
+    post:
+      consumes:
+      - application/json
+      description: 'Runs a statement batch on a database-server connection of the
+        project (engine postgresql) with the connection''s credentials, writes included:
+        every project member acts as the connection''s database user. Several statements
+        separated by '';'' run in one implicit transaction; the result is the last
+        statement that returned columns, with the command tag of the last statement.
+        Rows past maxRows are dropped (not cancelled). SQL errors (errorName = SQLSTATE)
+        and the 2-minute timeout answer 200 with `error` set.'
+      parameters:
+      - description: Project name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Connection name
+        in: path
+        name: connName
+        required: true
+        type: string
+      - description: SQL Query Request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.SqlQueryRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.SqlQueryResult'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "502":
+          description: Bad Gateway
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Execute SQL on an external database connection
+      tags:
+      - sql
   /api/projects/{name}/connections/internal:
     get:
-      description: Connections provided by the services already deployed in the project,
-        that the project's other services can consume
+      description: Connections provided by the services already deployed in the project
+        (the outputs of their instance descriptor), that the project's other services
+        can consume
       parameters:
       - description: Project name (= Kubernetes namespace)
         in: path
@@ -1805,7 +1998,11 @@ paths:
     post:
       consumes:
       - application/json
-      description: Deploy a managed platform service into a project
+      description: 'Deploy a managed platform service into a project: commits the
+        instance files to the deployments Git repository. The answer carries the commit
+        (revision) and the status Pending until the GitOps engine reconciles it. Only
+        the submitted parameters are written to values.yaml. 400 on invalid parameters;
+        409 with code instance-exists or release-name-taken.'
       parameters:
       - description: Project name
         in: path
@@ -1848,7 +2045,8 @@ paths:
       - services
   /api/projects/{name}/services/{serviceName}:
     delete:
-      description: Remove a deployed service from a project
+      description: 'Remove a deployed service from a project: removes its directory
+        from the deployments Git repository; the GitOps engine uninstalls it.'
       parameters:
       - description: Project name
         in: path
@@ -1950,8 +2148,10 @@ paths:
     patch:
       consumes:
       - application/json
-      description: Merge new parameters and optionally update the package version
-        of a deployed service
+      description: JSON Merge Patch (RFC 7386) of the parameters (null deletes a key,
+        objects merge, arrays replace) and optionally update the chart version of
+        a deployed service, committed to values.yaml/instance.yaml in the deployments
+        Git repository. 400 on invalid parameters.
       parameters:
       - description: Project name
         in: path
@@ -2053,7 +2253,7 @@ paths:
         in: query
         name: container
         type: string
-      - description: Number of lines from the end (default 100)
+      - description: Number of lines from the end (default 100, at most 10000)
         in: query
         name: tailLines
         type: integer
@@ -2068,6 +2268,12 @@ paths:
           description: log output
           schema:
             type: string
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
         "500":
           description: Internal Server Error
           schema:
@@ -2077,9 +2283,106 @@ paths:
       summary: Get pod logs
       tags:
       - services
+  /api/projects/{name}/services/{serviceName}/sql:
+    post:
+      consumes:
+      - application/json
+      description: Proxies the statement to the service instance (Trino only), forwarding
+        the caller's bearer token. Engine-side SQL errors answer 200 with `error`
+        set.
+      parameters:
+      - description: Project name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Service instance name
+        in: path
+        name: serviceName
+        required: true
+        type: string
+      - description: SQL Query Request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.SqlQueryRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.SqlQueryResult'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "502":
+          description: Bad Gateway
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Execute a SQL query on a deployed SQL engine
+      tags:
+      - sql
+  /api/projects/{name}/services/{serviceName}/values:
+    get:
+      description: For each upstream chart the instance's chart vendors (okdp.vendor.render),
+        the values.yaml it was rendered with (from the ConfigMap <release>-<chart>-values
+        the chart emits), the vendored chart's default values.yaml, and the lines
+        of the former that differ from the latter. Empty when the chart vendors nothing
+        or predates the values ConfigMaps. Defaults that cannot be read (registry
+        unreachable) leave defaultsError set instead of failing.
+      parameters:
+      - description: Project name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Service instance name
+        in: path
+        name: serviceName
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/models.RenderedValues'
+            type: array
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Values passed to the vendored upstream charts
+      tags:
+      - services
   /api/projects/{name}/services/stream:
     get:
-      description: Stream service status updates using Server-Sent Events (SSE)
+      description: 'Stream service status updates using Server-Sent Events (SSE):
+        instance descriptors, GitOps engine objects and the console''s own commits.
+        Each message is {type: ADDED|MODIFIED|DELETED, object: ServiceInstance}.'
       parameters:
       - description: Project name
         in: path
@@ -2310,7 +2613,7 @@ paths:
         in: query
         name: container
         type: string
-      - description: Number of lines from the end (default 100)
+      - description: Number of lines from the end (default 100, at most 10000)
         in: query
         name: tailLines
         type: integer
@@ -2885,7 +3188,10 @@ paths:
       - secret-stores
   /api/projects/stream:
     get:
-      description: Stream project updates using Server-Sent Events (SSE)
+      description: 'Stream project updates using Server-Sent Events (SSE): an ADDED
+        event per existing project, then ADDED/MODIFIED/DELETED as project.yaml files
+        change in the deployments repository (read every few seconds, at once after
+        a console change)'
       produces:
       - text/event-stream
       responses:
@@ -2931,8 +3237,8 @@ paths:
       - spark-apps
   /api/spark-config:
     get:
-      description: Returns Spark operator configuration from the KuboCD Context (images,
-        defaults, versions)
+      description: Returns Spark operator configuration from the platform values,
+        global.okdp.sparkOperator (images, defaults, versions)
       produces:
       - application/json
       responses:
@@ -2953,7 +3259,7 @@ paths:
     get:
       consumes:
       - application/json
-      description: Get all groups from Kubauth
+      description: Get all groups from the identity provider (Keycloak)
       produces:
       - application/json
       responses:
@@ -2969,7 +3275,7 @@ paths:
     post:
       consumes:
       - application/json
-      description: Create a new group in Kubauth
+      description: Create a new group in the identity provider (Keycloak)
       parameters:
       - description: Group
         in: body
@@ -2991,7 +3297,7 @@ paths:
     delete:
       consumes:
       - application/json
-      description: Delete a group from Kubauth
+      description: Delete a group from the identity provider (Keycloak)
       parameters:
       - description: Group Name
         in: path
@@ -3009,7 +3315,7 @@ paths:
     put:
       consumes:
       - application/json
-      description: Update a group in Kubauth
+      description: Update a group in the identity provider (Keycloak)
       parameters:
       - description: Group Name
         in: path
@@ -3036,7 +3342,7 @@ paths:
     get:
       consumes:
       - application/json
-      description: Get all users from Kubauth
+      description: Get all users from the identity provider (Keycloak)
       produces:
       - application/json
       responses:
@@ -3052,7 +3358,7 @@ paths:
     post:
       consumes:
       - application/json
-      description: Create a new user in Kubauth
+      description: Create a new user in the identity provider (Keycloak)
       parameters:
       - description: User
         in: body
@@ -3074,7 +3380,7 @@ paths:
     delete:
       consumes:
       - application/json
-      description: Delete a user from Kubauth
+      description: Delete a user from the identity provider (Keycloak)
       parameters:
       - description: User Name
         in: path
@@ -3112,7 +3418,7 @@ paths:
     put:
       consumes:
       - application/json
-      description: Update a user in Kubauth
+      description: Update a user in the identity provider (Keycloak)
       parameters:
       - description: User Name
         in: path

@@ -9,26 +9,88 @@ image:
 # Rendered as environment variables (see internal/config/config.go).
 configuration:
   platformNamespace: okdp-system
-  kubocdNamespace: kubocd-system
-  # The platform Context, read by the server and written for its service
-  # catalog. Empty namespace: the namespace the server runs in.
-  contextName: platform
-  contextNamespace: ""
   # Single origin, set verbatim in the Access-Control-Allow-Origin header.
   allowedOrigins: https://okdp-ui.example.com
   logLevel: info
-  releaseInterval: 30m
-  releaseTimeout: 10m
   # Comma-separated registry hosts to reach over plain HTTP (dev sandboxes
   # with a local registry). Leave empty in any real deployment.
   insecureOciRegistries: ""
 
+# The deployments Git repository: the only desired-state store. The server
+# commits instances, connections, projects and the catalog there, and the
+# GitOps engine reconciles them.
+gitops:
+  # Required. https://…, ssh://… or git@host:org/repo.git
+  repoURL: ""
+  branch: main
+  # Directory of the repository holding the layout (platform/, projects/…),
+  # empty for the root.
+  path: ""
+  # flux or argocd: which objects carry the render/sync status.
+  engine: flux
+  # Namespace of the Flux HelmReleases and values ConfigMaps, including
+  # okdp-platform-values.
+  releasesNamespace: okdp-releases
+  # Namespace of the Argo CD Applications (engine: argocd).
+  argocdNamespace: argocd
+  # Name of a Secret, in the release namespace, with write access to the
+  # repository. Flux GitRepository keys: username + password (a token as
+  # password) or bearerToken for HTTPS; identity + known_hosts for SSH.
+  credentialsSecret: ""
+  # Accept any SSH host key. Sandboxes only.
+  sshInsecureIgnoreHostKey: false
+  author:
+    name: OKDP control plane
+    email: okdp-control-plane@okdp.io
+
+# Keycloak Admin REST API, backing user and group management
+# (/api/v1/identity). The client is a confidential service account of the
+# platform realm holding the roles view-users, query-users, manage-users and
+# query-groups of the realm's management client (realm-management, or
+# master-realm when the realm is master). Without credentialsSecret.name, user
+# management is off (the identity routes answer 501 and /api/capabilities
+# reports identity.userManagement: false).
+keycloak:
+  # Keycloak base URL (no /realms/...) and realm (KEYCLOAK_URL,
+  # KEYCLOAK_REALM). Empty: taken from the platform OIDC issuer
+  # (<url>/realms/<realm>).
+  url: ""
+  realm: ""
+  # Secret, in the release namespace, with the service-account client
+  # credentials (KEYCLOAK_CLIENT_ID, KEYCLOAK_CLIENT_SECRET). Same default keys
+  # as global.okdp.identity.provisioning.keycloak.credentialsSecret.
+  credentialsSecret:
+    name: ""
+    clientIdKey: client_id
+    clientSecretKey: client_secret
+  # Skip the certificate check of Keycloak. Sandboxes only
+  # (KEYCLOAK_TLS_INSECURE; global.okdp.oidc.insecureSkipVerify also applies
+  # when the URL comes from the platform issuer).
+  tlsInsecure: false
 
 service:
   type: ClusterIP
   port: 8093
 
 resources: {}
+
+# The server runs as nobody (the image's USER 65534) on a read-only root
+# filesystem: it writes only to the Git clone (/var/cache/okdp/gitops) and
+# /tmp (HOME), both emptyDirs.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65534
+  runAsGroup: 65534
+  fsGroup: 65534
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  capabilities:
+    drop: [ALL]
 
 # Forward proxy the pod must go through to reach anything outside the cluster.
 # Empty means no proxy, which is the case on any sandbox. Rendered as the three

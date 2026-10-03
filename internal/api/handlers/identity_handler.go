@@ -19,17 +19,33 @@ func NewIdentityHandler(service service.IdentityService) *IdentityHandler {
 	return &IdentityHandler{service: service}
 }
 
-// Available reports whether the kubauth CRDs back this API, for the guard the
-// router puts in front of the whole group.
+// Available reports whether the Keycloak Admin API backs this API, for the
+// guard the router puts in front of the whole group.
 func (h *IdentityHandler) Available(ctx context.Context) bool {
 	return h.service.Available(ctx)
+}
+
+// identityFeature names the identity surface in FeatureUnavailable bodies. The
+// console shows it in its empty state, so it must stay stable.
+const identityFeature = "Keycloak user management"
+
+// RequireAPI guards the whole /api/v1/identity group: without Keycloak admin
+// credentials every route answers 501 with the FeatureUnavailable contract,
+// the same condition /api/capabilities reports as identity.userManagement.
+// Resolved per request, so the platform issuer may change without a restart.
+func (h *IdentityHandler) RequireAPI() gin.HandlerFunc {
+	return RequireFeature(
+		func(c *gin.Context) bool { return h.Available(c.Request.Context()) },
+		identityFeature,
+		"User management is not available on this platform: the control plane has no Keycloak admin credentials (KEYCLOAK_CLIENT_SECRET), or cannot locate the Keycloak realm (KEYCLOAK_URL/KEYCLOAK_REALM, else the platform OIDC issuer).",
+	)
 }
 
 // --- Users ---
 
 // ListUsers godoc
 // @Summary      List all users
-// @Description  Get all users from Kubauth
+// @Description  Get all users from the identity provider (Keycloak)
 // @Tags         identity
 // @Accept       json
 // @Produce      json
@@ -71,7 +87,7 @@ func (h *IdentityHandler) GetUser(c *gin.Context) {
 
 // CreateUser godoc
 // @Summary      Create a new user
-// @Description  Create a new user in Kubauth
+// @Description  Create a new user in the identity provider (Keycloak)
 // @Tags         identity
 // @Accept       json
 // @Produce      json
@@ -90,12 +106,15 @@ func (h *IdentityHandler) CreateUser(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	// Write-only: the answer must not carry the password back (logs, proxies,
+	// browser caches).
+	user.Password = ""
 	c.JSON(http.StatusCreated, user)
 }
 
 // UpdateUser godoc
 // @Summary      Update a user
-// @Description  Update a user in Kubauth
+// @Description  Update a user in the identity provider (Keycloak)
 // @Tags         identity
 // @Accept       json
 // @Produce      json
@@ -111,20 +130,21 @@ func (h *IdentityHandler) UpdateUser(c *gin.Context) {
 		return
 	}
 
-	// Ensure name consistency
-	user.Name = name
+	// The path names the user: it is the login, not the display name.
+	user.Username = name
 
 	if err := h.service.UpdateUser(c.Request.Context(), name, &user); err != nil {
 		logrus.WithError(err).Error("Failed to update user")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	user.Password = ""
 	c.JSON(http.StatusOK, user)
 }
 
 // DeleteUser godoc
 // @Summary      Delete a user
-// @Description  Delete a user from Kubauth
+// @Description  Delete a user from the identity provider (Keycloak)
 // @Tags         identity
 // @Accept       json
 // @Produce      json
@@ -145,7 +165,7 @@ func (h *IdentityHandler) DeleteUser(c *gin.Context) {
 
 // ListGroups godoc
 // @Summary      List all groups
-// @Description  Get all groups from Kubauth
+// @Description  Get all groups from the identity provider (Keycloak)
 // @Tags         identity
 // @Accept       json
 // @Produce      json
@@ -163,7 +183,7 @@ func (h *IdentityHandler) ListGroups(c *gin.Context) {
 
 // CreateGroup godoc
 // @Summary      Create a new group
-// @Description  Create a new group in Kubauth
+// @Description  Create a new group in the identity provider (Keycloak)
 // @Tags         identity
 // @Accept       json
 // @Produce      json
@@ -187,7 +207,7 @@ func (h *IdentityHandler) CreateGroup(c *gin.Context) {
 
 // UpdateGroup godoc
 // @Summary      Update a group
-// @Description  Update a group in Kubauth
+// @Description  Update a group in the identity provider (Keycloak)
 // @Tags         identity
 // @Accept       json
 // @Produce      json
@@ -213,7 +233,7 @@ func (h *IdentityHandler) UpdateGroup(c *gin.Context) {
 
 // DeleteGroup godoc
 // @Summary      Delete a group
-// @Description  Delete a group from Kubauth
+// @Description  Delete a group from the identity provider (Keycloak)
 // @Tags         identity
 // @Accept       json
 // @Produce      json

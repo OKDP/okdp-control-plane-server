@@ -1,7 +1,6 @@
 FROM golang:1.25-bookworm
 
 ARG KUBECTL_VERSION=v1.32.2
-ARG KUBOCD_VERSION=v0.3.0
 ARG SWAG_VERSION=v1.16.6
 ARG DELVE_VERSION=v1.26.3
 ARG AIR_VERSION=v1.65.3
@@ -21,21 +20,6 @@ RUN set -eux; \
     echo "$(cat kubectl.sha256)  kubectl" | sha256sum -c -; \
     install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl; \
     rm kubectl kubectl.sha256
-
-# kubocd CLI: the server shells out to `kubocd dump package` (package-schema endpoint)
-RUN set -eux; \
-    arch="$(dpkg --print-architecture)"; \
-    case "$arch" in \
-        amd64) asset="kubocd_Linux_x86_64" ;; \
-        arm64) asset="kubocd_Linux_arm64" ;; \
-        *) echo "unsupported architecture: $arch" >&2; exit 1 ;; \
-    esac; \
-    base="https://github.com/kubocd/kubocd/releases/download/${KUBOCD_VERSION}"; \
-    curl -fsSLO "${base}/${asset}"; \
-    curl -fsSLO "${base}/checksums.txt"; \
-    grep " ${asset}\$" checksums.txt | sha256sum -c -; \
-    install -o root -g root -m 0755 "${asset}" /usr/local/bin/kubocd; \
-    rm "${asset}" checksums.txt
 
 # Go dev tooling, built from source so golangci-lint matches the project's Go version
 # (its release binaries embed their build Go and refuse a newer target).
