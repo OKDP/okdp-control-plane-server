@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0](https://github.com/OKDP/okdp-control-plane-server/compare/v0.9.0...v0.10.0) (2026-10-09)
+
+
+### Features
+
+* support private registries for package tags and schemas ([dfe56e0](https://github.com/OKDP/okdp-control-plane-server/commit/dfe56e02b30af7326c6f70c011babdf2b8ba4a95))
+
 ## [0.9.0](https://github.com/OKDP/okdp-control-plane-server/compare/v0.8.0...v0.9.0) (2026-09-25)
 
 
