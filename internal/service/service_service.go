@@ -737,7 +737,7 @@ func ingressHostsFromItems(items []unstructured.Unstructured) map[string]string 
 	return hosts
 }
 
-// enrichWithPodHealth overrides a "Ready" Release status when pods are actually unhealthy.
+// enrichWithPodHealth overrides a "Ready" Release status from the real pod state (see checkPodHealth).
 func (s *DefaultServiceService) enrichWithPodHealth(ctx context.Context, instances []models.ServiceInstance) {
 	podGVR := schema.GroupVersionResource{Version: "v1", Resource: "pods"}
 
@@ -791,10 +791,21 @@ func (s *DefaultServiceService) EnrichPodHealth(ctx context.Context, instance *m
 	instance.Status = s.checkPodHealth(podList.Items, names, instance.Status)
 }
 
+// checkPodHealth downgrades a "Ready" Release, which only means Helm applied
+// the manifests, using what the pods actually do: "Error" when a container is
+// crashing or cannot pull its image, "Installing" while a pod is not ready yet.
 func (s *DefaultServiceService) checkPodHealth(pods []unstructured.Unstructured, names []string, currentStatus string) string {
+	notReady := false
 	for _, pod := range pods {
-		if !matchesInstance(pod.GetName(), names) {
+		if !podBelongsToInstance(&pod, names) {
 			continue
+		}
+		phase, _, _ := unstructured.NestedString(pod.Object, "status", "phase")
+		if phase == "Succeeded" {
+			continue
+		}
+		if phase == "Pending" {
+			notReady = true
 		}
 		containerStatuses, _, _ := unstructured.NestedSlice(pod.Object, "status", "containerStatuses")
 		for _, cs := range containerStatuses {
@@ -809,6 +820,7 @@ func (s *DefaultServiceService) checkPodHealth(pods []unstructured.Unstructured,
 			if ready {
 				continue
 			}
+			notReady = true
 			waiting, _, _ := unstructured.NestedMap(csMap, "state", "waiting")
 			if reason, ok := waiting["reason"].(string); ok {
 				if reason == "CrashLoopBackOff" || reason == "Error" || reason == "ImagePullBackOff" || reason == "ErrImagePull" {
@@ -820,6 +832,9 @@ func (s *DefaultServiceService) checkPodHealth(pods []unstructured.Unstructured,
 				return "Error"
 			}
 		}
+	}
+	if notReady {
+		return "Installing"
 	}
 	return currentStatus
 }
@@ -929,6 +944,21 @@ func (s *DefaultServiceService) releaseInstanceSelector(ctx context.Context, pro
 		return "", err
 	}
 	return fmt.Sprintf("app.kubernetes.io/instance in (%s)", strings.Join(names, ",")), nil
+}
+
+// podBelongsToInstance matches on the Helm instance label first, the one the pod
+// list uses, because operators name pods after their own CR (test-nifi-1-node…)
+// rather than after the HelmRelease (test-nifi-main). The name prefix stays as a
+// fallback for charts that do not set the label.
+func podBelongsToInstance(pod *unstructured.Unstructured, instanceNames []string) bool {
+	if instance := pod.GetLabels()["app.kubernetes.io/instance"]; instance != "" {
+		for _, n := range instanceNames {
+			if instance == n {
+				return true
+			}
+		}
+	}
+	return matchesInstance(pod.GetName(), instanceNames)
 }
 
 func matchesInstance(name string, instanceNames []string) bool {
