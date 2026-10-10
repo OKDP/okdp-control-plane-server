@@ -682,7 +682,8 @@ var roleHostConventions = map[string]func(namespace string) string{
 
 // candidateHosts lists the Ingress hosts, in priority order, that could
 // expose instance: its own release name first, then any role-specific
-// convention that applies to it, then the platform-packages catalog's own
+// convention that applies to it, then "<instance>[-console]-<namespace>" for an
+// instance not named after its service, then the platform-packages catalog's own
 // "<service>[-console]-<namespace>" convention, most service contexts
 // (Trino, Superset, JupyterHub, Spark History, Polaris, ...) publish their
 // endpoint at a host built from the service name and namespace rather than
@@ -693,6 +694,15 @@ func candidateHosts(instance *models.ServiceInstance, suffix string) []string {
 		if hostname, ok := roleHostConventions[role]; ok {
 			hosts = append(hosts, fmt.Sprintf("%s.%s", hostname(instance.TargetNamespace), suffix))
 		}
+	}
+	// The instance name the user chose, which packages publish as
+	// "<instance>[-console]-<namespace>" so that two instances of a service in
+	// one project get distinct hosts.
+	if instance.Name != "" && instance.Name != instance.Service {
+		hosts = append(hosts,
+			fmt.Sprintf("%s-console-%s.%s", instance.Name, instance.TargetNamespace, suffix),
+			fmt.Sprintf("%s-%s.%s", instance.Name, instance.TargetNamespace, suffix),
+		)
 	}
 	if instance.Service != "" {
 		hosts = append(hosts,
