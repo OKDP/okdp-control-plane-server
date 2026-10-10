@@ -118,6 +118,24 @@ func TestCandidateHosts(t *testing.T) {
 		}
 	})
 
+	t.Run("instance name before the service name, when they differ (second instance of a service)", func(t *testing.T) {
+		instance := &models.ServiceInstance{Name: "nifi2", ReleaseName: "test-nifi2", TargetNamespace: "test", Service: "nifi"}
+		got := candidateHosts(instance, "okdp.sandbox")
+		want := []string{"test-nifi2.okdp.sandbox", "nifi2-console-test.okdp.sandbox", "nifi2-test.okdp.sandbox", "nifi-console-test.okdp.sandbox", "nifi-test.okdp.sandbox"}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("got %v, want %v", got, want)
+		}
+	})
+
+	t.Run("instance named after its service contributes no duplicate candidate", func(t *testing.T) {
+		instance := &models.ServiceInstance{Name: "trino", ReleaseName: "demo-trino", TargetNamespace: "demo", Service: "trino"}
+		got := candidateHosts(instance, "okdp.sandbox")
+		want := []string{"demo-trino.okdp.sandbox", "trino-console-demo.okdp.sandbox", "trino-demo.okdp.sandbox"}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("got %v, want %v", got, want)
+		}
+	})
+
 	t.Run("no service name contributes no extra candidate", func(t *testing.T) {
 		instance := &models.ServiceInstance{ReleaseName: "demo-something", TargetNamespace: "demo"}
 		got := candidateHosts(instance, "okdp.sandbox")
