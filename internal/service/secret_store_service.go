@@ -389,7 +389,7 @@ func buildSecretStoreCRD(namespace string, req models.SecretStoreRequest, credSe
 func (s *DefaultSecretStoreService) toResponse(store *crd.ESOSecretStore, namespace string) models.SecretStoreResponse {
 	resp := models.SecretStoreResponse{
 		Name:      store.Name,
-		Provider:  "vault",
+		Provider:  store.Spec.Provider.Name,
 		Namespace: namespace,
 		Status:    deriveOverallStatus(store.Status.Conditions),
 		IsDefault: store.Labels[crd.LabelDefaultStore] == "true",

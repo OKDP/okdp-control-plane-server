@@ -3,6 +3,8 @@ package repository
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 
 	"github.com/okdp/okdp-control-plane-server/internal/repository/crd"
 	"github.com/sirupsen/logrus"
@@ -76,11 +78,11 @@ func (r *k8sSecretStoreRepository) Get(ctx context.Context, namespace, name stri
 		return nil, err
 	}
 
-	var store crd.ESOSecretStore
-	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(u.Object, &store); err != nil {
+	store, err := toSecretStore(u.Object)
+	if err != nil {
 		return nil, fmt.Errorf("failed to convert from unstructured: %w", err)
 	}
-	return &store, nil
+	return store, nil
 }
 
 func (r *k8sSecretStoreRepository) List(ctx context.Context, namespace string) ([]crd.ESOSecretStore, error) {
@@ -91,14 +93,26 @@ func (r *k8sSecretStoreRepository) List(ctx context.Context, namespace string) (
 
 	var stores []crd.ESOSecretStore
 	for _, item := range list.Items {
-		var store crd.ESOSecretStore
-		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(item.Object, &store); err != nil {
+		store, err := toSecretStore(item.Object)
+		if err != nil {
 			logrus.WithError(err).Warn("Failed to convert SecretStore from unstructured")
 			continue
 		}
-		stores = append(stores, store)
+		stores = append(stores, *store)
 	}
 	return stores, nil
+}
+
+func toSecretStore(obj map[string]interface{}) (*crd.ESOSecretStore, error) {
+	var store crd.ESOSecretStore
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(obj, &store); err != nil {
+		return nil, err
+	}
+	provider, _, _ := unstructured.NestedMap(obj, "spec", "provider")
+	if names := slices.Sorted(maps.Keys(provider)); len(names) > 0 {
+		store.Spec.Provider.Name = names[0]
+	}
+	return &store, nil
 }
 
 func (r *k8sSecretStoreRepository) Update(ctx context.Context, namespace string, store *crd.ESOSecretStore) error {

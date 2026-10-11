@@ -22,6 +22,9 @@ type ESOSecretStoreSpec struct {
 
 // ESOProvider wraps the provider-specific configuration
 type ESOProvider struct {
+	// Name is the backend key set under spec.provider. Only Vault is mapped, so
+	// the repository reads it from the raw object.
+	Name  string            `json:"-"`
 	Vault *ESOVaultProvider `json:"vault,omitempty"`
 }
 
