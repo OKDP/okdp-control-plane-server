@@ -897,6 +897,8 @@ func (s *DefaultServiceService) isInfraSidecar(containerName string) bool {
 	return false
 }
 
+var errNoHelmRelease = errors.New("no helm release owned by release")
+
 func (s *DefaultServiceService) releaseInstanceNames(ctx context.Context, project, releaseName string) ([]string, error) {
 	release, err := s.releaseRepo.Get(ctx, project, releaseName)
 	if err != nil {
@@ -918,7 +920,7 @@ func (s *DefaultServiceService) releaseInstanceNames(ctx context.Context, projec
 		}
 	}
 	if len(names) == 0 {
-		return nil, fmt.Errorf("no helm release owned by %s", releaseName)
+		return nil, fmt.Errorf("%w %s", errNoHelmRelease, releaseName)
 	}
 	return names, nil
 }
@@ -944,6 +946,9 @@ func (s *DefaultServiceService) ListPods(ctx context.Context, project, serviceNa
 	releaseName := fmt.Sprintf("%s-%s", project, serviceName)
 
 	selector, err := s.releaseInstanceSelector(ctx, project, releaseName)
+	if errors.Is(err, errNoHelmRelease) {
+		return []models.Pod{}, nil
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -1267,6 +1272,9 @@ func (s *DefaultServiceService) GetServiceMetrics(ctx context.Context, project, 
 	releaseName := fmt.Sprintf("%s-%s", project, serviceName)
 
 	selector, err := s.releaseInstanceSelector(ctx, project, releaseName)
+	if errors.Is(err, errNoHelmRelease) {
+		return buildServiceMetrics(nil, nil), nil
+	}
 	if err != nil {
 		return nil, err
 	}
