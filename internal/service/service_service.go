@@ -382,6 +382,9 @@ func (s *DefaultServiceService) GetService(ctx context.Context, project, name st
 	// non-trivial API cost per request.
 	if instance.Status != "Ready" {
 		instance.StatusMessage = s.latestWarningMessage(ctx, project, instance.ReleaseName)
+		if instance.StatusMessage == "" {
+			instance.StatusMessage = release.Status.Message
+		}
 	}
 	return instance, nil
 }

@@ -56,6 +56,7 @@ type ContextRef struct {
 
 type ReleaseStatus struct {
 	Phase      string             `json:"phase,omitempty"`
+	Message    string             `json:"message,omitempty"`
 	Roles      []string           `json:"roles,omitempty"`
 	Conditions []ReleaseCondition `json:"conditions,omitempty"`
 	// WatchedInputConnections lists the connections this release depends on,
