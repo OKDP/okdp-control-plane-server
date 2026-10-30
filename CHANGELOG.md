@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.1](https://github.com/OKDP/okdp-control-plane-server/compare/v0.10.0...v0.10.1) (2026-10-30)
+
+
+### Bug Fixes
+
+* resolve Open URL for custom instance names ([bdbf0a5](https://github.com/OKDP/okdp-control-plane-server/commit/bdbf0a59595e31188704f51de67c982caa06244c))
+* **secret-stores:** report the actual provider of each store ([dd63157](https://github.com/OKDP/okdp-control-plane-server/commit/dd63157737d5ab71815bb00e3cf34387e55a50fd))
+
 ## [0.10.0](https://github.com/OKDP/okdp-control-plane-server/compare/v0.9.0...v0.10.0) (2026-10-09)
 
 
