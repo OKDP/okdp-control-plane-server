@@ -6,7 +6,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
-// ESOExternalSecret maps to the external-secrets.io/v1beta1 ExternalSecret CRD
+// ESOExternalSecret maps to the external-secrets.io/v1 ExternalSecret CRD
 type ESOExternalSecret struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -102,12 +102,12 @@ func (in *ESOExternalSecret) DeepCopyObject() runtime.Object {
 func GetExternalSecretGVR() schema.GroupVersionResource {
 	return schema.GroupVersionResource{
 		Group:    "external-secrets.io",
-		Version:  "v1beta1",
+		Version:  "v1",
 		Resource: "externalsecrets",
 	}
 }
 
 const (
-	ExternalSecretAPIVersion = "external-secrets.io/v1beta1"
+	ExternalSecretAPIVersion = "external-secrets.io/v1"
 	ExternalSecretKind       = "ExternalSecret"
 )
