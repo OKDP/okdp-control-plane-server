@@ -18,8 +18,6 @@ import (
 	"github.com/okdp/okdp-control-plane-server/internal/service/mocks"
 )
 
-// newServiceWithoutHelmRelease builds a service whose Release exists but owns
-// no HelmRelease yet, the state of an instance waiting for its dependencies.
 func newServiceWithoutHelmRelease(t *testing.T) *DefaultServiceService {
 	t.Helper()
 	releaseRepo := &mocks.ServiceRepository{}
@@ -43,7 +41,7 @@ func TestListPods_NoHelmReleaseYet_ReturnsEmptyList(t *testing.T) {
 	pods, err := s.ListPods(context.Background(), "my-project", "trino")
 
 	require.NoError(t, err)
-	assert.NotNil(t, pods, "an empty list must serialize as [] rather than null")
+	assert.NotNil(t, pods)
 	assert.Empty(t, pods)
 }
 

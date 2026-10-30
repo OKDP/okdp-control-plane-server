@@ -897,8 +897,6 @@ func (s *DefaultServiceService) isInfraSidecar(containerName string) bool {
 	return false
 }
 
-// errNoHelmRelease reports a Release that owns no HelmRelease yet, e.g. while
-// it waits for its dependencies (WAIT_DEPS). It is a normal state, not a failure.
 var errNoHelmRelease = errors.New("no helm release owned by release")
 
 func (s *DefaultServiceService) releaseInstanceNames(ctx context.Context, project, releaseName string) ([]string, error) {
