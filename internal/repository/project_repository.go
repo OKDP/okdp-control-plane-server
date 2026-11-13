@@ -3,8 +3,11 @@ package repository
 import (
 	"context"
 
+	"github.com/sirupsen/logrus"
+
 	"github.com/okdp/okdp-control-plane-server/internal/models"
 
+	authorizationv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -30,14 +33,19 @@ type ProjectRepository interface {
 }
 
 type k8sProjectRepository struct {
-	client kubernetes.Interface
+	client   kubernetes.Interface
+	platform kubernetes.Interface
 }
 
 // NewProjectRepository creates a project repository backed by Kubernetes Namespaces.
 // A project is materialized as a Namespace carrying the label okdp.io/project=<name>
 // and the annotation okdp.io/description=<description>.
-func NewProjectRepository(client kubernetes.Interface) ProjectRepository {
-	return &k8sProjectRepository{client: client}
+//
+// client acts as the caller. platform acts as the server and is only used to
+// list and watch: a caller with access to some projects cannot list
+// namespaces, so the server lists them and keeps those the caller can read.
+func NewProjectRepository(client, platform kubernetes.Interface) ProjectRepository {
+	return &k8sProjectRepository{client: client, platform: platform}
 }
 
 func (r *k8sProjectRepository) Create(ctx context.Context, project *models.Project) error {
@@ -71,7 +79,7 @@ func (r *k8sProjectRepository) Get(ctx context.Context, name string) (*models.Pr
 }
 
 func (r *k8sProjectRepository) List(ctx context.Context) ([]models.Project, error) {
-	list, err := r.client.CoreV1().Namespaces().List(ctx, metav1.ListOptions{
+	list, err := r.platform.CoreV1().Namespaces().List(ctx, metav1.ListOptions{
 		LabelSelector: ProjectLabel,
 	})
 	if err != nil {
@@ -80,9 +88,31 @@ func (r *k8sProjectRepository) List(ctx context.Context) ([]models.Project, erro
 
 	projects := make([]models.Project, 0, len(list.Items))
 	for i := range list.Items {
-		projects = append(projects, *namespaceToProject(&list.Items[i]))
+		if r.canRead(ctx, list.Items[i].Name) {
+			projects = append(projects, *namespaceToProject(&list.Items[i]))
+		}
 	}
 	return projects, nil
+}
+
+// canRead asks the API server whether the caller may get the namespace, which
+// a RoleBinding in that namespace grants. Any doubt hides the project.
+func (r *k8sProjectRepository) canRead(ctx context.Context, name string) bool {
+	review, err := r.client.AuthorizationV1().SelfSubjectAccessReviews().Create(ctx, &authorizationv1.SelfSubjectAccessReview{
+		Spec: authorizationv1.SelfSubjectAccessReviewSpec{
+			ResourceAttributes: &authorizationv1.ResourceAttributes{
+				Verb:      "get",
+				Resource:  "namespaces",
+				Name:      name,
+				Namespace: name,
+			},
+		},
+	}, metav1.CreateOptions{})
+	if err != nil {
+		logrus.WithError(err).WithField("project", name).Warn("Could not check access to a project, hiding it")
+		return false
+	}
+	return review.Status.Allowed
 }
 
 // Update mutates the project metadata (currently its description) on the
@@ -127,10 +157,39 @@ func (r *k8sProjectRepository) Delete(ctx context.Context, name string) error {
 	return r.client.CoreV1().Namespaces().Delete(ctx, name, metav1.DeleteOptions{})
 }
 
+// Watch only passes the events of projects the caller can read. A project the
+// caller loses access to is reported as deleted.
 func (r *k8sProjectRepository) Watch(ctx context.Context) (watch.Interface, error) {
-	return r.client.CoreV1().Namespaces().Watch(ctx, metav1.ListOptions{
+	w, err := r.platform.CoreV1().Namespaces().Watch(ctx, metav1.ListOptions{
 		LabelSelector: ProjectLabel,
 	})
+	if err != nil {
+		return nil, err
+	}
+
+	// watch.Filter calls this from a single goroutine.
+	shown := map[string]bool{}
+	return watch.Filter(w, func(event watch.Event) (watch.Event, bool) {
+		ns, ok := event.Object.(*corev1.Namespace)
+		if !ok {
+			return event, true
+		}
+		if event.Type == watch.Deleted {
+			wasShown := shown[ns.Name]
+			delete(shown, ns.Name)
+			return event, wasShown
+		}
+
+		if r.canRead(ctx, ns.Name) {
+			shown[ns.Name] = true
+			return event, true
+		}
+		if shown[ns.Name] {
+			delete(shown, ns.Name)
+			return watch.Event{Type: watch.Deleted, Object: ns}, true
+		}
+		return event, false
+	}), nil
 }
 
 func namespaceToProject(ns *corev1.Namespace) *models.Project {

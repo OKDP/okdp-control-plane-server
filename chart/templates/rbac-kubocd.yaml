@@ -1,0 +1,72 @@
+# KuboCD: services are Releases, the catalog lives in the platform Context,
+# connections are KuboCD Connections. Releases run as Flux HelmReleases.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: okdp-kubocd-control-plane
+  labels:
+    {{- include "okdp-control-plane-server.labels" . | nindent 4 }}
+    okdp.io/aggregate-to-control-plane: "true"
+rules:
+  - apiGroups: ["kubocd.kubotal.io"]
+    resources: ["contexts"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: okdp-kubocd-user
+  labels:
+    {{- include "okdp-control-plane-server.labels" . | nindent 4 }}
+    okdp.io/aggregate-to-user: "true"
+rules:
+  - apiGroups: ["kubocd.kubotal.io"]
+    resources: ["clusterconnections"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: okdp-kubocd-project-view
+  labels:
+    {{- include "okdp-control-plane-server.labels" . | nindent 4 }}
+    okdp.io/aggregate-to-project-view: "true"
+    okdp.io/aggregate-to-project-edit: "true"
+    okdp.io/aggregate-to-project-admin: "true"
+    okdp.io/aggregate-to-platform-admin: "true"
+rules:
+  - apiGroups: ["kubocd.kubotal.io"]
+    resources: ["releases", "connections"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["helm.toolkit.fluxcd.io"]
+    resources: ["helmreleases"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: okdp-kubocd-project-edit
+  labels:
+    {{- include "okdp-control-plane-server.labels" . | nindent 4 }}
+    okdp.io/aggregate-to-project-edit: "true"
+    okdp.io/aggregate-to-project-admin: "true"
+    okdp.io/aggregate-to-platform-admin: "true"
+rules:
+  - apiGroups: ["kubocd.kubotal.io"]
+    resources: ["releases", "connections"]
+    verbs: ["create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: okdp-kubocd-platform-admin
+  labels:
+    {{- include "okdp-control-plane-server.labels" . | nindent 4 }}
+    okdp.io/aggregate-to-platform-admin: "true"
+rules:
+  - apiGroups: ["kubocd.kubotal.io"]
+    resources: ["contexts"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: ["kubocd.kubotal.io"]
+    resources: ["clusterconnections"]
+    verbs: ["create", "update", "patch", "delete"]

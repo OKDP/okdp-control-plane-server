@@ -6,6 +6,7 @@ package auth
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -17,6 +18,9 @@ import (
 // Bounds the discovery call at startup and each later key refresh.
 const issuerTimeout = 30 * time.Second
 
+// DefaultGroupsClaim is where Keycloak, Okta and Entra ID put group membership.
+const DefaultGroupsClaim = "groups"
+
 // Verifier validates a bearer token and returns the identity it represents.
 type Verifier interface {
 	Verify(ctx context.Context, rawToken string) (*Identity, error)
@@ -26,6 +30,7 @@ type Verifier interface {
 type Identity struct {
 	Subject  string
 	Username string
+	Groups   []string
 }
 
 // Config describes the identity provider to trust.
@@ -34,11 +39,15 @@ type Config struct {
 	// InsecureSkipVerify takes the issuer's certificate on trust.
 	InsecureSkipVerify bool
 	ClientID           string
+	// GroupsClaim names the claim listing the caller's groups. Empty means
+	// DefaultGroupsClaim.
+	GroupsClaim string
 }
 
 type oidcVerifier struct {
-	verifier *oidc.IDTokenVerifier
-	clientID string
+	verifier    *oidc.IDTokenVerifier
+	clientID    string
+	groupsClaim string
 }
 
 // idClaims contains the claims needed by Verify to identify the client and user.
@@ -71,10 +80,16 @@ func NewVerifier(ctx context.Context, cfg Config) (Verifier, error) {
 		return nil, fmt.Errorf("could not reach the OIDC issuer %q: %w", cfg.Issuer, err)
 	}
 
+	groupsClaim := cfg.GroupsClaim
+	if groupsClaim == "" {
+		groupsClaim = DefaultGroupsClaim
+	}
+
 	// SkipClientIDCheck: Verify checks aud/azp/client_id itself, below.
 	return &oidcVerifier{
-		verifier: provider.Verifier(&oidc.Config{SkipClientIDCheck: true}),
-		clientID: cfg.ClientID,
+		verifier:    provider.Verifier(&oidc.Config{SkipClientIDCheck: true}),
+		clientID:    cfg.ClientID,
+		groupsClaim: groupsClaim,
 	}, nil
 }
 
@@ -101,7 +116,35 @@ func (v *oidcVerifier) Verify(ctx context.Context, rawToken string) (*Identity, 
 	if username == "" {
 		username = claims.Email
 	}
-	return &Identity{Subject: token.Subject, Username: username}, nil
+
+	groups, err := v.groups(token)
+	if err != nil {
+		return nil, err
+	}
+	return &Identity{Subject: token.Subject, Username: username, Groups: groups}, nil
+}
+
+// groups reads the groups claim, a list or a single string depending on the
+// provider. An absent claim is no groups, not an error.
+func (v *oidcVerifier) groups(token *oidc.IDToken) ([]string, error) {
+	var all map[string]json.RawMessage
+	if err := token.Claims(&all); err != nil {
+		return nil, fmt.Errorf("could not read the token claims: %w", err)
+	}
+	raw, found := all[v.groupsClaim]
+	if !found || string(raw) == "null" {
+		return nil, nil
+	}
+
+	var groups []string
+	if err := json.Unmarshal(raw, &groups); err == nil {
+		return groups, nil
+	}
+	var single string
+	if err := json.Unmarshal(raw, &single); err == nil {
+		return []string{single}, nil
+	}
+	return nil, fmt.Errorf("the %q claim is neither a string nor a list of strings", v.groupsClaim)
 }
 
 // ResolveIssuer prefers the environment override, then what the platform

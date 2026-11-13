@@ -36,7 +36,7 @@ func NewProjectHandler(service service.ProjectService) *ProjectHandler {
 func (h *ProjectHandler) ListProjects(c *gin.Context) {
 	projects, err := h.service.ListProjects(c.Request.Context())
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(serverErrorStatus(err), gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, projects)
@@ -62,7 +62,7 @@ func (h *ProjectHandler) GetProject(c *gin.Context) {
 			return
 		}
 		logrus.WithError(err).Error("Failed to get project")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(serverErrorStatus(err), gin.H{"error": err.Error()})
 		return
 	}
 
@@ -89,7 +89,7 @@ func (h *ProjectHandler) CreateProject(c *gin.Context) {
 
 	if err := h.service.CreateProject(c.Request.Context(), &project); err != nil {
 		logrus.Errorf("Failed to create project: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(serverErrorStatus(err), gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusCreated, project)
@@ -124,7 +124,7 @@ func (h *ProjectHandler) UpdateProject(c *gin.Context) {
 			return
 		}
 		logrus.WithError(err).Error("Failed to update project")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(serverErrorStatus(err), gin.H{"error": err.Error()})
 		return
 	}
 
@@ -150,7 +150,7 @@ func (h *ProjectHandler) DeleteProject(c *gin.Context) {
 			return
 		}
 		logrus.WithError(err).Error("Failed to delete project")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(serverErrorStatus(err), gin.H{"error": err.Error()})
 		return
 	}
 	c.Status(http.StatusNoContent)
@@ -173,7 +173,7 @@ func (h *ProjectHandler) StreamProjects(c *gin.Context) {
 
 	watcher, err := h.service.WatchProjects(c.Request.Context())
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(serverErrorStatus(err), gin.H{"error": err.Error()})
 		return
 	}
 	defer watcher.Stop()

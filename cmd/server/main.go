@@ -71,10 +71,29 @@ func main() {
 		logrus.Fatalf("Failed to initialize Kubernetes discovery client: %v", err)
 	}
 
+	// What a caller asks for is sent to Kubernetes as that caller, so RBAC,
+	// admission and the audit log decide and record it. The server's own
+	// clients above stay for what it reads for itself: the platform Context,
+	// the API discovery, OIDC client provisioning, and listing projects
+	// before filtering them.
+	callerClient, callerTypedClient := k8sClient, k8sTypedClient
+	if cfg.OIDC.Disabled {
+		logrus.Warn("AUTH_DISABLED is set: every request runs with the server's ServiceAccount.")
+	} else {
+		callerClient, err = repository.InitCallerK8sClient()
+		if err != nil {
+			logrus.Fatalf("Failed to initialize the caller Kubernetes client: %v", err)
+		}
+		callerTypedClient, err = repository.InitCallerK8sTypedClient()
+		if err != nil {
+			logrus.Fatalf("Failed to initialize the caller typed Kubernetes client: %v", err)
+		}
+	}
+
 	// Initialize Project stack (projects are Kubernetes Namespaces
 	// carrying the label okdp.io/project)
-	projectRepo := repository.NewProjectRepository(k8sTypedClient)
-	contextWriterRepo := repository.NewContextWriterRepository(k8sClient, cfg.ContextName, cfg.ContextNamespace)
+	projectRepo := repository.NewProjectRepository(callerTypedClient, k8sTypedClient)
+	contextWriterRepo := repository.NewContextWriterRepository(callerClient, cfg.ContextName, cfg.ContextNamespace)
 	projectService := service.NewDefaultProjectService(projectRepo)
 	projectHandler := handlers.NewProjectHandler(projectService)
 
@@ -93,7 +112,7 @@ func main() {
 		logrus.WithError(err).Warnf("Could not read the kubauth namespace, falling back to %s", cfg.PlatformNamespace)
 		return cfg.PlatformNamespace
 	}
-	identityRepo := repository.NewIdentityRepository(k8sClient, k8sDiscoveryClient, kubauthNamespace)
+	identityRepo := repository.NewIdentityRepository(callerClient, k8sDiscoveryClient, kubauthNamespace)
 	identityService := service.NewDefaultIdentityService(identityRepo)
 	identityHandler := handlers.NewIdentityHandler(identityService)
 
@@ -105,29 +124,29 @@ func main() {
 	capabilitiesHandler := handlers.NewCapabilitiesHandler(capabilityService)
 
 	// Initialize SecretStore stack (namespace is dynamic per project)
-	secretStoreRepo := repository.NewSecretStoreRepository(k8sClient, k8sDiscoveryClient)
+	secretStoreRepo := repository.NewSecretStoreRepository(callerClient, k8sDiscoveryClient)
 	secretStoreService := service.NewDefaultSecretStoreService(secretStoreRepo)
 	secretStoreHandler := handlers.NewSecretStoreHandler(secretStoreService)
 
 	// Initialize ExternalSecret stack (namespace is dynamic per project)
-	externalSecretRepo := repository.NewExternalSecretRepository(k8sClient, k8sDiscoveryClient)
+	externalSecretRepo := repository.NewExternalSecretRepository(callerClient, k8sDiscoveryClient)
 	externalSecretService := service.NewDefaultExternalSecretService(externalSecretRepo, secretStoreRepo)
 	externalSecretHandler := handlers.NewExternalSecretHandler(externalSecretService)
 
 	// Initialize Service stack (KuboCD Releases + Context-driven catalog)
-	serviceRepo := repository.NewServiceRepository(k8sClient)
+	serviceRepo := repository.NewServiceRepository(callerClient)
 	schemaService := service.NewDefaultPackageSchemaService(contextRepo)
 	schemaService.SetInsecureRegistries(cfg.InsecureOCIRegistries)
 	schemaService.SetRegistryAuthFile(cfg.RegistryAuthFile)
 	// OIDC client provisioning (backend selected per call from the Context)
 	oidcProvisioner := provisioning.NewContextSelector(contextRepo, k8sClient)
-	serviceService := service.NewDefaultServiceService(serviceRepo, contextRepo, contextWriterRepo, schemaService, oidcProvisioner, k8sClient, k8sTypedClient, cfg.ContextNamespace, cfg.ReleaseInterval, cfg.ReleaseTimeout, cfg.ExcludedSidecarPrefixes)
+	serviceService := service.NewDefaultServiceService(serviceRepo, contextRepo, contextWriterRepo, schemaService, oidcProvisioner, callerClient, callerTypedClient, cfg.ContextNamespace, cfg.ReleaseInterval, cfg.ReleaseTimeout, cfg.ExcludedSidecarPrefixes)
 	serviceService.SetInsecureRegistries(cfg.InsecureOCIRegistries)
 	serviceHandler := handlers.NewServiceHandler(serviceService, schemaService)
 
 	// Initialize Spark stack (SparkApplication CRUD)
-	sparkRepo := repository.NewSparkAppRepository(k8sClient)
-	sparkService := service.NewDefaultSparkService(sparkRepo, contextRepo, k8sTypedClient)
+	sparkRepo := repository.NewSparkAppRepository(callerClient)
+	sparkService := service.NewDefaultSparkService(sparkRepo, contextRepo, callerTypedClient)
 	sparkHandler := handlers.NewSparkHandler(sparkService)
 
 	// Setup router
@@ -137,7 +156,7 @@ func main() {
 	if err != nil {
 		logrus.Fatalf("Failed to load the contract catalog: %v", err)
 	}
-	connectionRepo := repository.NewConnectionRepository(k8sClient, k8sTypedClient, k8sDiscoveryClient)
+	connectionRepo := repository.NewConnectionRepository(callerClient, callerTypedClient, k8sDiscoveryClient)
 	connectionService := service.NewDefaultConnectionService(connectionRepo, serviceRepo, contractCatalog)
 	connectionHandler := handlers.NewConnectionHandler(connectionService)
 
@@ -254,10 +273,16 @@ func buildTokenVerifier(ctx context.Context, cfg *config.Config, contextRepo rep
 		logrus.Warn("oidc.insecureSkipVerify is set: the issuer's certificate is not checked. Trust its CA in the pod instead, anywhere that is not a sandbox.")
 	}
 
+	groupsClaim, err := contextRepo.GetOidcGroupsClaim(ctx)
+	if err != nil {
+		logrus.WithError(err).Warnf("Could not read oidc.groupsClaim, reading groups from %q", auth.DefaultGroupsClaim)
+	}
+
 	verifier, err := auth.NewVerifier(ctx, auth.Config{
 		Issuer:             issuer,
 		InsecureSkipVerify: insecure,
 		ClientID:           clientID,
+		GroupsClaim:        groupsClaim,
 	})
 	if err != nil {
 		logrus.Fatalf("Failed to initialize token verification: %v", err)
