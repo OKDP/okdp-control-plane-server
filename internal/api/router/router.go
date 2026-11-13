@@ -13,7 +13,7 @@ import (
 
 // SetupRouter initializes the Gin router and defines routes. A nil verifier
 // serves the API without token verification, which only AUTH_DISABLED produces.
-func SetupRouter(cfg *config.Config, verifier auth.Verifier, capabilitiesHandler *handlers.CapabilitiesHandler, projectHandler *handlers.ProjectHandler, identityHandler *handlers.IdentityHandler, secretStoreHandler *handlers.SecretStoreHandler, externalSecretHandler *handlers.ExternalSecretHandler, serviceHandler *handlers.ServiceHandler, sparkHandler *handlers.SparkHandler, connectionHandler *handlers.ConnectionHandler) *gin.Engine {
+func SetupRouter(cfg *config.Config, verifier auth.Verifier, capabilitiesHandler *handlers.CapabilitiesHandler, projectHandler *handlers.ProjectHandler, identityHandler *handlers.IdentityHandler, secretStoreHandler *handlers.SecretStoreHandler, externalSecretHandler *handlers.ExternalSecretHandler, serviceHandler *handlers.ServiceHandler, sparkHandler *handlers.SparkHandler, connectionHandler *handlers.ConnectionHandler, memberHandler *handlers.MemberHandler) *gin.Engine {
 	r := gin.New() // Use New() to skip default logger/recovery (we add them manually)
 
 	// Middleware
@@ -75,6 +75,15 @@ func SetupRouter(cfg *config.Config, verifier auth.Verifier, capabilitiesHandler
 
 		// Secret Stores (scoped per project namespace)
 		requireProject := middleware.RequireProject(projectHandler.Resolve)
+
+		// Members: who holds which role on the project. The API server
+		// decides who may read or change them.
+		members := api.Group("/projects/:name/members", requireProject)
+		{
+			members.GET("", memberHandler.ListMembers)
+			members.PUT("", memberHandler.SetMember)
+			members.DELETE("", memberHandler.RemoveMember)
+		}
 
 		// Both groups rest on the external-secrets CRDs, absent from a cluster
 		// with no vault integration. Each group is gated on the CRD it actually

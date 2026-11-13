@@ -176,6 +176,10 @@ rules:
   - apiGroups: ["metrics.k8s.io"]
     resources: ["pods"]
     verbs: ["get", "list"]
+  # Project members, which are RoleBindings to an okdp-project-* role.
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["rolebindings"]
+    verbs: ["get", "list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -209,6 +213,15 @@ rules:
   - apiGroups: [""]
     resources: ["namespaces"]
     verbs: ["update", "patch", "delete"]
+  # Grant and revoke the project roles. A binding to any other role still
+  # goes through the API server's escalation check.
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["rolebindings"]
+    verbs: ["create", "update", "patch", "delete"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterroles"]
+    verbs: ["bind"]
+    resourceNames: ["okdp-project-view", "okdp-project-edit", "okdp-project-admin"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole

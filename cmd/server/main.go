@@ -96,6 +96,7 @@ func main() {
 	contextWriterRepo := repository.NewContextWriterRepository(callerClient, cfg.ContextName, cfg.ContextNamespace)
 	projectService := service.NewDefaultProjectService(projectRepo)
 	projectHandler := handlers.NewProjectHandler(projectService)
+	memberHandler := handlers.NewMemberHandler(service.NewDefaultMemberService(repository.NewMemberRepository(callerTypedClient)))
 
 	// Context repository (shared by capabilities, catalog and Spark)
 	contextRepo := repository.NewContextRepository(k8sClient, cfg.ContextName, cfg.ContextNamespace)
@@ -169,7 +170,7 @@ func main() {
 
 	verifier := buildTokenVerifier(context.Background(), cfg, contextRepo)
 
-	r := router.SetupRouter(cfg, verifier, capabilitiesHandler, projectHandler, identityHandler, secretStoreHandler, externalSecretHandler, serviceHandler, sparkHandler, connectionHandler)
+	r := router.SetupRouter(cfg, verifier, capabilitiesHandler, projectHandler, identityHandler, secretStoreHandler, externalSecretHandler, serviceHandler, sparkHandler, connectionHandler, memberHandler)
 
 	// Start Server
 	//
