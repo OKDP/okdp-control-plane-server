@@ -36,6 +36,10 @@ func newTestRouter(verifier stubVerifier) *gin.Engine {
 		identity := CallerIdentity(c)
 		c.JSON(http.StatusOK, gin.H{"username": identity.Username})
 	})
+	api.GET("/services", func(c *gin.Context) {
+		identity := auth.IdentityFrom(c.Request.Context())
+		c.JSON(http.StatusOK, gin.H{"username": identity.Username})
+	})
 
 	return r
 }
@@ -96,6 +100,16 @@ func TestCallerIdentityIsSetOnAnAuthenticatedRequest(t *testing.T) {
 	r := newTestRouter(stubVerifier{accepted: "good"})
 
 	response := call(r, http.MethodGet, "/api/projects", "Bearer good")
+
+	assert.JSONEq(t, `{"username":"alice"}`, response.Body.String())
+}
+
+// Services hand c.Request.Context() to the Kubernetes client, never the gin
+// context: the identity has to be there for the client to impersonate it.
+func TestCallerIdentityReachesTheRequestContext(t *testing.T) {
+	r := newTestRouter(stubVerifier{accepted: "good"})
+
+	response := call(r, http.MethodGet, "/api/services", "Bearer good")
 
 	assert.JSONEq(t, `{"username":"alice"}`, response.Body.String())
 }

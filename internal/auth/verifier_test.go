@@ -213,3 +213,61 @@ func TestVerifyReturnsTheSubjectAndUsername(t *testing.T) {
 	assert.Equal(t, "e5a0-1234", identity.Subject)
 	assert.Equal(t, "alice", identity.Username)
 }
+
+func TestVerifyReadsTheGroupsClaim(t *testing.T) {
+	idp := newFakeIDP(t)
+
+	for name, tc := range map[string]struct {
+		claim string
+		value any
+		want  []string
+	}{
+		"a list":                  {"", []string{"data-scientist", "okdp-platform-admin"}, []string{"data-scientist", "okdp-platform-admin"}},
+		"a single string":         {"", "data-scientist", []string{"data-scientist"}},
+		"under a configured name": {"roles", []string{"data-engineer"}, []string{"data-engineer"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			verifier, err := NewVerifier(context.Background(), Config{Issuer: idp.server.URL, ClientID: "okdp-ui", GroupsClaim: tc.claim})
+			require.NoError(t, err)
+
+			claimName := tc.claim
+			if claimName == "" {
+				claimName = DefaultGroupsClaim
+			}
+			c := idp.claims()
+			c["aud"] = "okdp-ui"
+			c[claimName] = tc.value
+
+			identity, err := verifier.Verify(context.Background(), idp.mint(t, c))
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, identity.Groups)
+		})
+	}
+}
+
+// A token without groups is a caller who belongs to none, still authenticated.
+func TestVerifyAcceptsATokenWithoutGroups(t *testing.T) {
+	idp := newFakeIDP(t)
+	verifier, err := NewVerifier(context.Background(), Config{Issuer: idp.server.URL, ClientID: "okdp-ui"})
+	require.NoError(t, err)
+
+	c := idp.claims()
+	c["aud"] = "okdp-ui"
+
+	identity, err := verifier.Verify(context.Background(), idp.mint(t, c))
+	require.NoError(t, err)
+	assert.Empty(t, identity.Groups)
+}
+
+func TestVerifyRejectsAGroupsClaimOfTheWrongShape(t *testing.T) {
+	idp := newFakeIDP(t)
+	verifier, err := NewVerifier(context.Background(), Config{Issuer: idp.server.URL, ClientID: "okdp-ui"})
+	require.NoError(t, err)
+
+	c := idp.claims()
+	c["aud"] = "okdp-ui"
+	c["groups"] = map[string]any{"name": "data-scientist"}
+
+	_, err = verifier.Verify(context.Background(), idp.mint(t, c))
+	assert.Error(t, err)
+}

@@ -53,7 +53,7 @@ func (h *SparkHandler) SubmitSparkApp(c *gin.Context) {
 			return
 		}
 		logrus.WithError(err).Error("Failed to submit Spark application")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(serverErrorStatus(err), gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusCreated, instance)
@@ -90,7 +90,7 @@ func (h *SparkHandler) SubmitSparkAppYAML(c *gin.Context) {
 			return
 		}
 		logrus.WithError(err).Error("Failed to submit Spark application from YAML")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(serverErrorStatus(err), gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusCreated, instance)
@@ -111,7 +111,7 @@ func (h *SparkHandler) ListSparkApps(c *gin.Context) {
 	apps, err := h.service.ListApps(c.Request.Context(), project)
 	if err != nil {
 		logrus.WithError(err).Error("Failed to list Spark applications")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(serverErrorStatus(err), gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, apps)
@@ -137,7 +137,7 @@ func (h *SparkHandler) StreamSparkApps(c *gin.Context) {
 
 	watcher, err := h.service.WatchApps(c.Request.Context(), project)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(serverErrorStatus(err), gin.H{"error": err.Error()})
 		return
 	}
 	defer watcher.Stop()
@@ -199,7 +199,7 @@ func (h *SparkHandler) GetSparkApp(c *gin.Context) {
 			return
 		}
 		logrus.WithError(err).Error("Failed to get Spark application")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(serverErrorStatus(err), gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, instance)
@@ -228,7 +228,7 @@ func (h *SparkHandler) DeleteSparkApp(c *gin.Context) {
 			return
 		}
 		logrus.WithError(err).Error("Failed to delete Spark application")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(serverErrorStatus(err), gin.H{"error": err.Error()})
 		return
 	}
 	c.Status(http.StatusNoContent)
@@ -267,7 +267,7 @@ func (h *SparkHandler) UpdateSparkApp(c *gin.Context) {
 			return
 		}
 		logrus.WithError(err).Error("Failed to update Spark application")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(serverErrorStatus(err), gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, instance)
@@ -297,7 +297,7 @@ func (h *SparkHandler) GetSparkUI(c *gin.Context) {
 			return
 		}
 		logrus.WithError(err).Error("Failed to get Spark UI info")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(serverErrorStatus(err), gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, info)
@@ -339,7 +339,7 @@ func (h *SparkHandler) GetSparkAppLogs(c *gin.Context) {
 			return
 		}
 		logrus.WithError(err).Error("Failed to get Spark application logs")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(serverErrorStatus(err), gin.H{"error": err.Error()})
 		return
 	}
 	defer stream.Close()
@@ -420,7 +420,7 @@ func (h *SparkHandler) GetSparkConfig(c *gin.Context) {
 	cfg, err := h.service.GetSparkConfig(c.Request.Context())
 	if err != nil {
 		logrus.WithError(err).Error("Failed to get Spark configuration")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(serverErrorStatus(err), gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, cfg)

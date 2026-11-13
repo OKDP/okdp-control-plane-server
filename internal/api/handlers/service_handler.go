@@ -40,7 +40,7 @@ func (h *ServiceHandler) GetPlatformServices(c *gin.Context) {
 	services, err := h.service.GetPlatformServices(c.Request.Context())
 	if err != nil {
 		logrus.WithError(err).Error("Failed to get platform services")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(serverErrorStatus(err), gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, services)
@@ -58,7 +58,7 @@ func (h *ServiceHandler) GetMenuCategories(c *gin.Context) {
 	categories, err := h.service.GetMenuCategories(c.Request.Context())
 	if err != nil {
 		logrus.WithError(err).Error("Failed to get menu categories")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(serverErrorStatus(err), gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, categories)
@@ -148,7 +148,7 @@ func (h *ServiceHandler) writeCatalogError(c *gin.Context, err error) {
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 	default:
 		logrus.WithError(err).Error("Catalog operation failed")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(serverErrorStatus(err), gin.H{"error": err.Error()})
 	}
 }
 
@@ -167,7 +167,7 @@ func (h *ServiceHandler) ListServices(c *gin.Context) {
 	services, err := h.service.ListServices(c.Request.Context(), project)
 	if err != nil {
 		logrus.WithError(err).Error("Failed to list services")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(serverErrorStatus(err), gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, services)
@@ -208,7 +208,7 @@ func (h *ServiceHandler) DeployService(c *gin.Context) {
 			return
 		}
 		logrus.WithError(err).Error("Failed to deploy service")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(serverErrorStatus(err), gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusCreated, instance)
@@ -238,7 +238,7 @@ func (h *ServiceHandler) GetService(c *gin.Context) {
 			return
 		}
 		logrus.WithError(err).Error("Failed to get service")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(serverErrorStatus(err), gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, instance)
@@ -267,7 +267,7 @@ func (h *ServiceHandler) DeleteService(c *gin.Context) {
 			return
 		}
 		logrus.WithError(err).Error("Failed to delete service")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(serverErrorStatus(err), gin.H{"error": err.Error()})
 		return
 	}
 	c.Status(http.StatusNoContent)
@@ -293,7 +293,7 @@ func (h *ServiceHandler) StreamServices(c *gin.Context) {
 
 	watcher, err := h.service.WatchServices(c.Request.Context(), project)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(serverErrorStatus(err), gin.H{"error": err.Error()})
 		return
 	}
 	defer watcher.Stop()
@@ -351,7 +351,7 @@ func (h *ServiceHandler) GetServiceVersions(c *gin.Context) {
 	resp, err := h.schemaService.GetServiceVersions(c.Request.Context(), serviceName)
 	if err != nil {
 		logrus.WithError(err).WithField("service", serviceName).Error("Failed to get service versions")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(serverErrorStatus(err), gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, resp)
@@ -372,7 +372,7 @@ func (h *ServiceHandler) GetServiceInputs(c *gin.Context) {
 	inputs, err := h.schemaService.GetPackageInputs(c.Request.Context(), serviceName, tag)
 	if err != nil {
 		logrus.WithError(err).WithField("service", serviceName).Error("Failed to get service inputs")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(serverErrorStatus(err), gin.H{"error": err.Error()})
 		return
 	}
 	// A package with no inputs is the normal case today. Answer an empty list
@@ -401,7 +401,7 @@ func (h *ServiceHandler) GetServiceSchema(c *gin.Context) {
 	schema, err := h.schemaService.GetParameterSchema(c.Request.Context(), serviceName, tag)
 	if err != nil {
 		logrus.WithError(err).WithField("service", serviceName).Error("Failed to get service schema")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(serverErrorStatus(err), gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, schema)
@@ -421,7 +421,7 @@ func (h *ServiceHandler) GetProfileImages(c *gin.Context) {
 	images, err := h.service.GetProfileImages(c.Request.Context())
 	if err != nil {
 		logrus.WithError(err).Error("Failed to get profile images")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(serverErrorStatus(err), gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, images)
@@ -460,7 +460,7 @@ func (h *ServiceHandler) UpdateServiceParameters(c *gin.Context) {
 			return
 		}
 		logrus.WithError(err).Error("Failed to update service")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(serverErrorStatus(err), gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, instance)
@@ -485,7 +485,7 @@ func (h *ServiceHandler) ListPods(c *gin.Context) {
 	pods, err := h.service.ListPods(c.Request.Context(), project, serviceName)
 	if err != nil {
 		logrus.WithError(err).Error("Failed to list pods")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(serverErrorStatus(err), gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, pods)
@@ -505,7 +505,7 @@ func (h *ServiceHandler) GetProjectMetrics(c *gin.Context) {
 	metrics, err := h.service.GetProjectMetrics(c.Request.Context(), project)
 	if err != nil {
 		logrus.WithError(err).Error("Failed to get project metrics")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(serverErrorStatus(err), gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, metrics)
@@ -528,7 +528,7 @@ func (h *ServiceHandler) GetServiceMetrics(c *gin.Context) {
 	metrics, err := h.service.GetServiceMetrics(c.Request.Context(), project, serviceName)
 	if err != nil {
 		logrus.WithError(err).Error("Failed to get service metrics")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(serverErrorStatus(err), gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, metrics)
@@ -564,7 +564,7 @@ func (h *ServiceHandler) GetPodLogs(c *gin.Context) {
 	stream, err := h.service.GetPodLogs(c.Request.Context(), project, podName, container, tailLines, follow)
 	if err != nil {
 		logrus.WithError(err).Error("Failed to get pod logs")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(serverErrorStatus(err), gin.H{"error": err.Error()})
 		return
 	}
 	defer stream.Close()

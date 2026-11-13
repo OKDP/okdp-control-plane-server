@@ -1,0 +1,25 @@
+# kubauth: local users and groups, and the OIDC clients of deployed services.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: okdp-kubauth-control-plane
+  labels:
+    {{- include "okdp-control-plane-server.labels" . | nindent 4 }}
+    okdp.io/aggregate-to-control-plane: "true"
+rules:
+  # A deleted service takes its OIDC client with it.
+  - apiGroups: ["kubauth.kubotal.io"]
+    resources: ["oidcclients"]
+    verbs: ["get", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: okdp-kubauth-platform-admin
+  labels:
+    {{- include "okdp-control-plane-server.labels" . | nindent 4 }}
+    okdp.io/aggregate-to-platform-admin: "true"
+rules:
+  - apiGroups: ["kubauth.kubotal.io"]
+    resources: ["users", "groups", "groupbindings"]
+    verbs: ["get", "list", "watch", "create", "update", "delete"]

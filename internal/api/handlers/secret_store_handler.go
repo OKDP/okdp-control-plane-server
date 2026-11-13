@@ -44,7 +44,7 @@ func (h *SecretStoreHandler) ListSecretStores(c *gin.Context) {
 	stores, err := h.service.ListSecretStores(c.Request.Context(), namespace)
 	if err != nil {
 		logrus.WithError(err).Error("Failed to list secret stores")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(serverErrorStatus(err), gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, stores)
@@ -87,7 +87,7 @@ func (h *SecretStoreHandler) CreateSecretStore(c *gin.Context) {
 			return
 		}
 		logrus.WithError(err).Error("Failed to create secret store")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(serverErrorStatus(err), gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusCreated, store)
@@ -130,7 +130,7 @@ func (h *SecretStoreHandler) UpdateSecretStore(c *gin.Context) {
 			return
 		}
 		logrus.WithError(err).Error("Failed to update secret store")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(serverErrorStatus(err), gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, store)
@@ -160,7 +160,7 @@ func (h *SecretStoreHandler) DeleteSecretStore(c *gin.Context) {
 			return
 		}
 		logrus.WithError(err).Error("Failed to delete secret store")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(serverErrorStatus(err), gin.H{"error": err.Error()})
 		return
 	}
 	c.Status(http.StatusNoContent)
@@ -216,7 +216,7 @@ func (h *SecretStoreHandler) GetStatus(c *gin.Context) {
 			return
 		}
 		logrus.WithError(err).Error("Failed to get secret store status")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(serverErrorStatus(err), gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, status)

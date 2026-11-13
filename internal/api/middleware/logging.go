@@ -31,6 +31,7 @@ func RequestLogger() gin.HandlerFunc {
 		if actor := CallerIdentity(c); actor != nil {
 			fields["actorSubject"] = actor.Subject
 			fields["actorUsername"] = actor.Username
+			fields["actorGroups"] = actor.Groups
 		}
 		entry := logrus.WithFields(fields)
 

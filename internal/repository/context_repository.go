@@ -64,6 +64,9 @@ type ContextRepository interface {
 	// GetOidcInsecureSkipVerify reports whether the issuer's certificate is taken on trust (from spec.context.oidc.insecureSkipVerify).
 	GetOidcInsecureSkipVerify(ctx context.Context) (bool, error)
 
+	// GetOidcGroupsClaim returns the token claim listing the caller's groups (from spec.context.oidc.groupsClaim), "" when the Context names none.
+	GetOidcGroupsClaim(ctx context.Context) (string, error)
+
 	// GetIdentityProvisioningProvider returns the OIDC client provisioning backend
 	// (from spec.context.identity.provisioning.provider, "" when unset, meaning none).
 	GetIdentityProvisioningProvider(ctx context.Context) (string, error)
@@ -358,6 +361,15 @@ func (r *k8sContextRepository) GetOidcInsecureSkipVerify(ctx context.Context) (b
 	}
 	insecure, _, _ := unstructured.NestedBool(u.Object, "spec", "context", "oidc", "insecureSkipVerify")
 	return insecure, nil
+}
+
+func (r *k8sContextRepository) GetOidcGroupsClaim(ctx context.Context) (string, error) {
+	u, err := r.getContext(ctx)
+	if err != nil {
+		return "", err
+	}
+	claim, _, _ := unstructured.NestedString(u.Object, "spec", "context", "oidc", "groupsClaim")
+	return claim, nil
 }
 
 // GetIdentityProvisioningProvider names the backend that makes and unmakes the

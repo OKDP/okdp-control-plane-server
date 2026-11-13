@@ -56,7 +56,7 @@ func (h *ConnectionHandler) list(c *gin.Context, namespace string) {
 	connections, err := h.service.List(c.Request.Context(), namespace)
 	if err != nil {
 		logrus.WithError(err).Error("Failed to list connections")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(serverErrorStatus(err), gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, connections)
@@ -77,7 +77,7 @@ func (h *ConnectionHandler) ListSelectable(c *gin.Context) {
 	connections, err := h.service.ListSelectable(c.Request.Context(), project, contract)
 	if err != nil {
 		logrus.WithError(err).WithField("project", project).Error("Failed to list selectable connections")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list selectable connections"})
+		c.JSON(serverErrorStatus(err), gin.H{"error": "Failed to list selectable connections"})
 		return
 	}
 	c.JSON(http.StatusOK, connections)
@@ -98,7 +98,7 @@ func (h *ConnectionHandler) ListConsumers(c *gin.Context) {
 	consumers, err := h.service.ListConsumers(c.Request.Context(), project, name)
 	if err != nil {
 		logrus.WithError(err).WithField("connection", name).Error("Failed to list the consumers of a connection")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list the consumers of this connection"})
+		c.JSON(serverErrorStatus(err), gin.H{"error": "Failed to list the consumers of this connection"})
 		return
 	}
 	c.JSON(http.StatusOK, consumers)
@@ -117,7 +117,7 @@ func (h *ConnectionHandler) ListInternalConnections(c *gin.Context) {
 	connections, err := h.service.ListInternal(c.Request.Context(), projectNamespace(c))
 	if err != nil {
 		logrus.WithError(err).Error("Failed to list internal connections")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(serverErrorStatus(err), gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, connections)
@@ -255,6 +255,6 @@ func (h *ConnectionHandler) writeError(c *gin.Context, err error, logMessage str
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 	default:
 		logrus.WithError(err).Error(logMessage)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(serverErrorStatus(err), gin.H{"error": err.Error()})
 	}
 }

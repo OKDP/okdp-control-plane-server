@@ -30,6 +30,11 @@ func RequireProject(get func(c *gin.Context, name string) (*models.Project, erro
 
 		project, err := get(c, name)
 		switch {
+		case apierrors.IsForbidden(err):
+			// Kubernetes refuses before it looks, so a project the caller
+			// cannot read gets the same answer as one that does not exist.
+			c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"error": "project '" + name + "' not found"})
+			return
 		case err != nil && !apierrors.IsNotFound(err):
 			// A cluster that cannot answer is not a project that does not exist:
 			// answering 404 on a timeout tells the console the project was

@@ -1,89 +1,21 @@
-# The server reaches the cluster through its ServiceAccount (in-cluster
-# config). A ClusterRole is required because project namespaces are created
-# dynamically and are not known ahead of time.
+# OKDP roles. Each one is aggregated from the ClusterRoles carrying its
+# okdp.io/aggregate-to-* label: this file only holds the core Kubernetes rules,
+# and the rbac-<tool>.yaml files add the rules of the tools the server drives.
+#
+# The server acts for itself only to read the platform, list projects and
+# clean up OIDC clients (okdp-control-plane). Everything a console user asks
+# for is sent to the API server as that user, through impersonation.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: {{ include "okdp-control-plane-server.fullname" . }}
   labels:
     {{- include "okdp-control-plane-server.labels" . | nindent 4 }}
-rules:
-  # Projects are namespaces labelled okdp.io/project. update/patch are needed
-  # to edit a project's description (stored as the okdp.io/description annotation).
-  - apiGroups: [""]
-    resources: ["namespaces"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  # Secrets (SecretStore credentials), pods + logs (service inspection)
-  - apiGroups: [""]
-    resources: ["secrets"]
-    verbs: ["get", "list", "create", "update", "delete"]
-  - apiGroups: [""]
-    resources: ["pods"]
-    verbs: ["get", "list", "delete"]
-  - apiGroups: [""]
-    resources: ["pods/log"]
-    verbs: ["get", "list"]
-  # Read by the code but granted nowhere until now. Their failures are logged at
-  # Debug, so in a cluster the feature simply vanished: no reason shown for a
-  # stuck Release, no service URL, no volume reclaimed on deletion.
-  - apiGroups: [""]
-    resources: ["events"]
-    verbs: ["get", "list"]
-  - apiGroups: [""]
-    resources: ["persistentvolumeclaims"]
-    verbs: ["get", "list", "delete"]
-  - apiGroups: ["networking.k8s.io"]
-    resources: ["ingresses"]
-    verbs: ["get", "list"]
-  - apiGroups: ["apiextensions.k8s.io"]
-    resources: ["customresourcedefinitions"]
-    verbs: ["get", "list"]
-  # Services carry the in-cluster endpoint of the internal connections a
-  # project's deployed services expose.
-  - apiGroups: [""]
-    resources: ["services"]
-    verbs: ["get", "list"]
-  # Resource usage panels — metrics-server
-  - apiGroups: ["metrics.k8s.io"]
-    resources: ["pods"]
-    verbs: ["get", "list"]
-  # Identity management (kubauth CRDs)
-  - apiGroups: ["kubauth.kubotal.io"]
-    resources: ["users", "groups", "groupbindings"]
-    verbs: ["get", "list", "watch", "create", "update", "delete"]
-  - apiGroups: ["kubauth.kubotal.io"]
-    resources: ["oidcclients"]
-    # delete: a service being removed takes its OIDC client with it
-    # (service_service.go, DeleteService)
-    verbs: ["get", "list", "delete"]
-  # Secret management (External Secrets Operator)
-  - apiGroups: ["external-secrets.io"]
-    resources: ["secretstores", "externalsecrets"]
-    verbs: ["get", "list", "watch", "create", "update", "delete"]
-  # Services (kubocd Releases) + catalog (kubocd Context)
-  - apiGroups: ["kubocd.kubotal.io"]
-    resources: ["releases"]
-    verbs: ["get", "list", "watch", "create", "update", "delete"]
-  - apiGroups: ["kubocd.kubotal.io"]
-    resources: ["contexts"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  # Connections (kubocd). These CRDs ship with a KuboCD version the platform
-  # does not run yet: the rules are inert until they are installed, and the
-  # server probes for them before use. Contracts are read-only, they describe
-  # the schema a connection must satisfy and are owned by the packages.
-  - apiGroups: ["kubocd.kubotal.io"]
-    resources: ["connections", "clusterconnections"]
-    verbs: ["get", "list", "watch", "create", "update", "delete"]
-  - apiGroups: ["kubocd.kubotal.io"]
-    resources: ["contracts", "clustercontracts"]
-    verbs: ["get", "list", "watch"]
-  # Spark workloads
-  - apiGroups: ["sparkoperator.k8s.io"]
-    resources: ["sparkapplications"]
-    verbs: ["get", "list", "watch", "create", "update", "delete"]
-  - apiGroups: ["helm.toolkit.fluxcd.io"]
-    resources: ["helmreleases"]
-    verbs: ["get", "list"]
+aggregationRule:
+  clusterRoleSelectors:
+    - matchLabels:
+        okdp.io/aggregate-to-control-plane: "true"
+rules: []
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -99,3 +31,206 @@ roleRef:
   kind: ClusterRole
   name: {{ include "okdp-control-plane-server.fullname" . }}
   apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: okdp-aggregate-to-control-plane
+  labels:
+    {{- include "okdp-control-plane-server.labels" . | nindent 4 }}
+    okdp.io/aggregate-to-control-plane: "true"
+rules:
+  # Users and groups are not restricted by name: the server prefixes every
+  # name taken from a token with "oidc:", so none can be a system: name.
+  - apiGroups: [""]
+    resources: ["users", "groups"]
+    verbs: ["impersonate"]
+  # Projects are listed, then filtered by what the caller can read.
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch"]
+  # Credentials of the OIDC client provisioner.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+---
+# Roles given to console users. A project role is granted by a RoleBinding in
+# the project namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: okdp-project-view
+  labels:
+    {{- include "okdp-control-plane-server.labels" . | nindent 4 }}
+aggregationRule:
+  clusterRoleSelectors:
+    - matchLabels:
+        okdp.io/aggregate-to-project-view: "true"
+rules: []
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: okdp-project-edit
+  labels:
+    {{- include "okdp-control-plane-server.labels" . | nindent 4 }}
+aggregationRule:
+  clusterRoleSelectors:
+    - matchLabels:
+        okdp.io/aggregate-to-project-edit: "true"
+rules: []
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: okdp-project-admin
+  labels:
+    {{- include "okdp-control-plane-server.labels" . | nindent 4 }}
+aggregationRule:
+  clusterRoleSelectors:
+    - matchLabels:
+        okdp.io/aggregate-to-project-admin: "true"
+rules: []
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: okdp-platform-admin
+  labels:
+    {{- include "okdp-control-plane-server.labels" . | nindent 4 }}
+aggregationRule:
+  clusterRoleSelectors:
+    - matchLabels:
+        okdp.io/aggregate-to-platform-admin: "true"
+rules: []
+---
+# What any console user reads outside a project. okdp:users is added by the
+# server to every caller.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: okdp-user
+  labels:
+    {{- include "okdp-control-plane-server.labels" . | nindent 4 }}
+aggregationRule:
+  clusterRoleSelectors:
+    - matchLabels:
+        okdp.io/aggregate-to-user: "true"
+rules: []
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: okdp-user
+  labels:
+    {{- include "okdp-control-plane-server.labels" . | nindent 4 }}
+subjects:
+  - kind: Group
+    name: okdp:users
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: ClusterRole
+  name: okdp-user
+  apiGroup: rbac.authorization.k8s.io
+{{- with .Values.rbac.platformAdminGroups }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: okdp-platform-admin
+  labels:
+    {{- include "okdp-control-plane-server.labels" $ | nindent 4 }}
+subjects:
+  {{- range . }}
+  - kind: Group
+    name: oidc:{{ . }}
+    apiGroup: rbac.authorization.k8s.io
+  {{- end }}
+roleRef:
+  kind: ClusterRole
+  name: okdp-platform-admin
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: okdp-aggregate-to-project-view
+  labels:
+    {{- include "okdp-control-plane-server.labels" . | nindent 4 }}
+    okdp.io/aggregate-to-project-view: "true"
+    okdp.io/aggregate-to-project-edit: "true"
+    okdp.io/aggregate-to-project-admin: "true"
+    okdp.io/aggregate-to-platform-admin: "true"
+rules:
+  # A RoleBinding in the namespace grants get on the namespace itself.
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "events", "persistentvolumeclaims", "services"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list"]
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  # Project members, which are RoleBindings to an okdp-project-* role.
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["rolebindings"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: okdp-aggregate-to-project-edit
+  labels:
+    {{- include "okdp-control-plane-server.labels" . | nindent 4 }}
+    okdp.io/aggregate-to-project-edit: "true"
+    okdp.io/aggregate-to-project-admin: "true"
+    okdp.io/aggregate-to-platform-admin: "true"
+rules:
+  # Connection and secret store credentials.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "create", "update", "delete"]
+  # Per-user pods and volumes a deleted service leaves behind.
+  - apiGroups: [""]
+    resources: ["pods", "persistentvolumeclaims"]
+    verbs: ["delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: okdp-aggregate-to-project-admin
+  labels:
+    {{- include "okdp-control-plane-server.labels" . | nindent 4 }}
+    okdp.io/aggregate-to-project-admin: "true"
+    okdp.io/aggregate-to-platform-admin: "true"
+rules:
+  # Edit the project description, delete the project.
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["update", "patch", "delete"]
+  # Grant and revoke the project roles. A binding to any other role still
+  # goes through the API server's escalation check.
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["rolebindings"]
+    verbs: ["create", "update", "patch", "delete"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterroles"]
+    verbs: ["bind"]
+    resourceNames: ["okdp-project-view", "okdp-project-edit", "okdp-project-admin"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: okdp-aggregate-to-platform-admin
+  labels:
+    {{- include "okdp-control-plane-server.labels" . | nindent 4 }}
+    okdp.io/aggregate-to-platform-admin: "true"
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["list", "watch", "create"]

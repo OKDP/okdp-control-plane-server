@@ -581,6 +581,24 @@ definitions:
       name:
         type: string
     type: object
+  models.ProjectMember:
+    properties:
+      kind:
+        type: string
+      name:
+        type: string
+      role:
+        type: string
+    type: object
+  models.ProjectMembers:
+    properties:
+      canManage:
+        type: boolean
+      members:
+        items:
+          $ref: '#/definitions/models.ProjectMember'
+        type: array
+    type: object
   models.ResourceDefaults:
     properties:
       cores:
@@ -1747,6 +1765,119 @@ paths:
       summary: Test a connection from the platform
       tags:
       - connections
+  /api/projects/{name}/members:
+    delete:
+      description: Take every role on the project away from a user or a group
+      parameters:
+      - description: Project Name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: user or group
+        in: query
+        name: kind
+        required: true
+        type: string
+      - description: User or group name
+        in: query
+        name: member
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Revoke a member
+      tags:
+      - members
+    get:
+      description: Users and groups holding a role on the project, and whether the
+        caller may change them
+      parameters:
+      - description: Project Name
+        in: path
+        name: name
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.ProjectMembers'
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: List the members of a project
+      tags:
+      - members
+    put:
+      consumes:
+      - application/json
+      description: Give a user or a group a role on the project, replacing the role
+        it had
+      parameters:
+      - description: Project Name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Member
+        in: body
+        name: member
+        required: true
+        schema:
+          $ref: '#/definitions/models.ProjectMember'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.ProjectMember'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Grant a role on a project
+      tags:
+      - members
   /api/projects/{name}/metrics:
     get:
       description: One call returns the aggregated CPU/memory usage and limits of

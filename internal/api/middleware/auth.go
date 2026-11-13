@@ -57,6 +57,9 @@ func RequireAuthentication(verifier auth.Verifier) gin.HandlerFunc {
 		}
 
 		c.Set(identityKey, identity)
+		// Also on the request context: that is what reaches the Kubernetes
+		// client, which impersonates the caller.
+		c.Request = c.Request.WithContext(auth.WithIdentity(c.Request.Context(), identity))
 		c.Next()
 	}
 }
