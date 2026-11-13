@@ -27,7 +27,7 @@ func (h *CapabilitiesHandler) GetCapabilities(c *gin.Context) {
 	caps, err := h.service.GetCapabilities(c.Request.Context())
 	if err != nil {
 		logrus.WithError(err).Error("Failed to resolve platform capabilities")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(serverErrorStatus(err), gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, caps)

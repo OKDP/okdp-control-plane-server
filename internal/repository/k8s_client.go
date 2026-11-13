@@ -2,6 +2,7 @@ package repository
 
 import (
 	"fmt"
+	"net/http"
 
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
@@ -28,9 +29,31 @@ func getK8sConfig() (*rest.Config, error) {
 	return config, nil
 }
 
-// InitK8sClient initializes the Kubernetes dynamic client
-func InitK8sClient() (dynamic.Interface, error) {
+// callerK8sConfig returns a config whose requests act as the caller found in
+// their context, not as the server's ServiceAccount.
+func callerK8sConfig() (*rest.Config, error) {
 	config, err := getK8sConfig()
+	if err != nil {
+		return nil, err
+	}
+	config.Wrap(func(next http.RoundTripper) http.RoundTripper {
+		return &impersonatingTransport{next: next}
+	})
+	return config, nil
+}
+
+// InitK8sClient initializes the Kubernetes dynamic client acting as the server.
+func InitK8sClient() (dynamic.Interface, error) {
+	return newDynamicClient(getK8sConfig)
+}
+
+// InitCallerK8sClient initializes the dynamic client acting as the caller.
+func InitCallerK8sClient() (dynamic.Interface, error) {
+	return newDynamicClient(callerK8sConfig)
+}
+
+func newDynamicClient(getConfig func() (*rest.Config, error)) (dynamic.Interface, error) {
+	config, err := getConfig()
 	if err != nil {
 		return nil, err
 	}
@@ -59,9 +82,18 @@ func InitK8sDiscoveryClient() (discovery.DiscoveryInterface, error) {
 	return client, nil
 }
 
-// InitK8sTypedClient initializes the typed Kubernetes clientset (needed for pod logs).
+// InitK8sTypedClient initializes the typed Kubernetes clientset acting as the server.
 func InitK8sTypedClient() (kubernetes.Interface, error) {
-	config, err := getK8sConfig()
+	return newTypedClient(getK8sConfig)
+}
+
+// InitCallerK8sTypedClient initializes the typed clientset acting as the caller.
+func InitCallerK8sTypedClient() (kubernetes.Interface, error) {
+	return newTypedClient(callerK8sConfig)
+}
+
+func newTypedClient(getConfig func() (*rest.Config, error)) (kubernetes.Interface, error) {
+	config, err := getConfig()
 	if err != nil {
 		return nil, err
 	}

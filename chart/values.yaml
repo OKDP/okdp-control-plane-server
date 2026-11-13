@@ -27,6 +27,12 @@ configuration:
   registryCredentialsSecret: ""
 
 
+# Identity provider groups whose members administer the whole platform.
+# Project roles (okdp-project-view, -edit, -admin) are granted per project.
+rbac:
+  platformAdminGroups:
+    - platform_admin
+
 service:
   type: ClusterIP
   port: 8093

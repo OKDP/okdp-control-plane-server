@@ -54,7 +54,7 @@ func (h *ExternalSecretHandler) ListExternalSecrets(c *gin.Context) {
 	items, err := h.service.ListExternalSecrets(c.Request.Context(), namespace)
 	if err != nil {
 		logrus.WithError(err).Error("Failed to list external secrets")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(serverErrorStatus(err), gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, items)
@@ -101,7 +101,7 @@ func (h *ExternalSecretHandler) CreateExternalSecret(c *gin.Context) {
 			return
 		}
 		logrus.WithError(err).Error("Failed to create external secret")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(serverErrorStatus(err), gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusCreated, es)
@@ -148,7 +148,7 @@ func (h *ExternalSecretHandler) UpdateExternalSecret(c *gin.Context) {
 			return
 		}
 		logrus.WithError(err).Error("Failed to update external secret")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(serverErrorStatus(err), gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, es)
@@ -178,7 +178,7 @@ func (h *ExternalSecretHandler) DeleteExternalSecret(c *gin.Context) {
 			return
 		}
 		logrus.WithError(err).Error("Failed to delete external secret")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(serverErrorStatus(err), gin.H{"error": err.Error()})
 		return
 	}
 	c.Status(http.StatusNoContent)
@@ -209,7 +209,7 @@ func (h *ExternalSecretHandler) GetExternalSecretStatus(c *gin.Context) {
 			return
 		}
 		logrus.WithError(err).Error("Failed to get external secret status")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(serverErrorStatus(err), gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, status)

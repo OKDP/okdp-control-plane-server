@@ -172,6 +172,18 @@ func TestGetOidcIssuerIsEmptyWhenTheContextNamesNone(t *testing.T) {
 	}
 }
 
+func TestGetOidcGroupsClaim(t *testing.T) {
+	repo := newContextWith(t, map[string]interface{}{"oidc": map[string]interface{}{"issuerUri": "https://idp"}})
+	if claim, err := repo.GetOidcGroupsClaim(context.Background()); err != nil || claim != "" {
+		t.Errorf("claim = %q (err %v), want empty when the Context is silent", claim, err)
+	}
+
+	repo = newContextWith(t, map[string]interface{}{"oidc": map[string]interface{}{"groupsClaim": "roles"}})
+	if claim, err := repo.GetOidcGroupsClaim(context.Background()); err != nil || claim != "roles" {
+		t.Errorf("claim = %q (err %v), want roles", claim, err)
+	}
+}
+
 func TestGetOidcInsecureSkipVerify(t *testing.T) {
 	// Absent means the certificate is checked: the safe reading of silence.
 	repo := newContextWith(t, map[string]interface{}{"oidc": map[string]interface{}{"issuerUri": "https://idp"}})
