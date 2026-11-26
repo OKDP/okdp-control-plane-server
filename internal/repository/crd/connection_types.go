@@ -18,6 +18,17 @@ const (
 	LabelManagedBy = "app.kubernetes.io/managed-by"
 	// ManagedByValue is the value of LabelManagedBy for resources we create.
 	ManagedByValue = "okdp-control-plane"
+
+	// AnnotationCredentialsSecret names the Secret holding the credentials of
+	// a Connection, as <namespace>/<name>.
+	AnnotationCredentialsSecret = "okdp.io/credentials-secret"
+	// AnnotationCredentialsOwned records whether the control plane wrote that
+	// Secret ("true") or only points at it.
+	AnnotationCredentialsOwned = "okdp.io/credentials-owned"
+	// LabelOrphanedCredentials marks a credentials Secret whose Connection was
+	// deleted or moved to another Secret while the deletion is not applied
+	// yet. It is removed once no Connection references it any more.
+	LabelOrphanedCredentials = "okdp.io/orphaned-credentials"
 )
 
 func GetConnectionGVR() schema.GroupVersionResource {

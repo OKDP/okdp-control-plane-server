@@ -47,12 +47,16 @@ func isRejectedInput(err error) bool {
 // @Param        name path string true "Project name (= Kubernetes namespace)"
 // @Success      200  {array}   models.ExternalSecretResponse
 // @Failure      500  {object}  map[string]string
+// @Failure      503  {object}  models.ErrorResponse
 // @Router       /api/projects/{projectId}/external-secrets [get]
 func (h *ExternalSecretHandler) ListExternalSecrets(c *gin.Context) {
 	namespace := c.Param("name")
 
 	items, err := h.service.ListExternalSecrets(c.Request.Context(), namespace)
 	if err != nil {
+		if respondStorageError(c, err) {
+			return
+		}
 		logrus.WithError(err).Error("Failed to list external secrets")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -71,8 +75,10 @@ func (h *ExternalSecretHandler) ListExternalSecrets(c *gin.Context) {
 // @Success      201  {object}  models.ExternalSecretResponse
 // @Failure      400  {object}  map[string]string
 // @Failure      404  {object}  map[string]string
-// @Failure      409  {object}  map[string]string
+// @Failure      409  {object}  models.ErrorResponse
 // @Failure      500  {object}  map[string]string
+// @Failure      503  {object}  models.ErrorResponse
+// @Failure      504  {object}  models.ErrorResponse
 // @Router       /api/projects/{projectId}/external-secrets [post]
 func (h *ExternalSecretHandler) CreateExternalSecret(c *gin.Context) {
 	namespace := c.Param("name")
@@ -100,6 +106,9 @@ func (h *ExternalSecretHandler) CreateExternalSecret(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
+		if respondStorageError(c, err) {
+			return
+		}
 		logrus.WithError(err).Error("Failed to create external secret")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -119,7 +128,10 @@ func (h *ExternalSecretHandler) CreateExternalSecret(c *gin.Context) {
 // @Success      200  {object}  models.ExternalSecretResponse
 // @Failure      400  {object}  map[string]string
 // @Failure      404  {object}  map[string]string
+// @Failure      409  {object}  models.ErrorResponse
 // @Failure      500  {object}  map[string]string
+// @Failure      503  {object}  models.ErrorResponse
+// @Failure      504  {object}  models.ErrorResponse
 // @Router       /api/projects/{projectId}/external-secrets/{esName} [put]
 func (h *ExternalSecretHandler) UpdateExternalSecret(c *gin.Context) {
 	namespace := c.Param("name")
@@ -147,6 +159,9 @@ func (h *ExternalSecretHandler) UpdateExternalSecret(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
+		if respondStorageError(c, err) {
+			return
+		}
 		logrus.WithError(err).Error("Failed to update external secret")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -164,7 +179,10 @@ func (h *ExternalSecretHandler) UpdateExternalSecret(c *gin.Context) {
 // @Param        esName path string true "External Secret name"
 // @Success      204
 // @Failure      404  {object}  map[string]string
+// @Failure      409  {object}  models.ErrorResponse
 // @Failure      500  {object}  map[string]string
+// @Failure      503  {object}  models.ErrorResponse
+// @Failure      504  {object}  models.ErrorResponse
 // @Router       /api/projects/{projectId}/external-secrets/{esName} [delete]
 func (h *ExternalSecretHandler) DeleteExternalSecret(c *gin.Context) {
 	namespace := c.Param("name")
@@ -175,6 +193,9 @@ func (h *ExternalSecretHandler) DeleteExternalSecret(c *gin.Context) {
 			c.JSON(http.StatusNotFound, gin.H{
 				"error": fmt.Sprintf("ExternalSecret '%s' not found in project '%s'", esName, namespace),
 			})
+			return
+		}
+		if respondStorageError(c, err) {
 			return
 		}
 		logrus.WithError(err).Error("Failed to delete external secret")
@@ -195,6 +216,7 @@ func (h *ExternalSecretHandler) DeleteExternalSecret(c *gin.Context) {
 // @Success      200  {object}  models.ExternalSecretStatusResponse
 // @Failure      404  {object}  map[string]string
 // @Failure      500  {object}  map[string]string
+// @Failure      503  {object}  models.ErrorResponse
 // @Router       /api/projects/{projectId}/external-secrets/{esName}/status [get]
 func (h *ExternalSecretHandler) GetExternalSecretStatus(c *gin.Context) {
 	namespace := c.Param("name")
@@ -206,6 +228,9 @@ func (h *ExternalSecretHandler) GetExternalSecretStatus(c *gin.Context) {
 			c.JSON(http.StatusNotFound, gin.H{
 				"error": fmt.Sprintf("ExternalSecret '%s' not found in project '%s'", esName, namespace),
 			})
+			return
+		}
+		if respondStorageError(c, err) {
 			return
 		}
 		logrus.WithError(err).Error("Failed to get external secret status")

@@ -11,6 +11,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/okdp/okdp-control-plane-server/internal/engine"
 	"github.com/okdp/okdp-control-plane-server/internal/models"
 	"github.com/okdp/okdp-control-plane-server/internal/repository"
 	"github.com/okdp/okdp-control-plane-server/internal/repository/crd"
@@ -130,6 +131,20 @@ func TestCreateRemovesTheSecretWhenTheConnectionIsRejected(t *testing.T) {
 
 	require.Error(t, err)
 	connectionRepo.AssertCalled(t, "DeleteSecret", mock.Anything, "demo", "warehouse-credentials")
+}
+
+func TestCreateKeepsTheSecretWhenTheConnectionWriteHasAnUnknownOutcome(t *testing.T) {
+	svc, connectionRepo, _ := newServiceUnderTest(t, true)
+
+	connectionRepo.On("CreateOrUpdateSecret", mock.Anything, "demo", "warehouse-credentials", mock.Anything).Return(nil)
+	connectionRepo.On("Get", mock.Anything, "demo", "warehouse").Return((*crd.Connection)(nil), apierrors.NewNotFound(crd.GetConnectionGVR().GroupResource(), "warehouse"))
+	connectionRepo.On("Create", mock.Anything, "demo", mock.Anything).
+		Return(&engine.UnknownError{Operation: engine.Operation{Outcome: engine.OutcomeUnknown}})
+
+	_, err := svc.Create(context.Background(), "demo", postgresRequest())
+
+	require.ErrorIs(t, err, engine.ErrOutcomeUnknown)
+	connectionRepo.AssertNotCalled(t, "DeleteSecret", mock.Anything, mock.Anything, mock.Anything)
 }
 
 // The name check and the create are two calls, so two creates of the same name
@@ -878,4 +893,194 @@ func TestUpdateKeepsTheOwnedSecretWhenTheUpdateFails(t *testing.T) {
 	require.Error(t, err)
 
 	connectionRepo.AssertNotCalled(t, "DeleteSecret", mock.Anything, "demo", "warehouse-credentials")
+}
+
+type deferredConnectionRepoMock struct {
+	*mocks.ConnectionRepository
+	checkUpdateErr error
+	secretData     map[string][]byte
+	released       []string
+}
+
+func (m *deferredConnectionRepoMock) CheckUpdate(context.Context, string, string) error {
+	return m.checkUpdateErr
+}
+
+func (m *deferredConnectionRepoMock) GetSecretData(context.Context, string, string) (map[string][]byte, error) {
+	return m.secretData, nil
+}
+
+func (m *deferredConnectionRepoMock) ReleaseCredentials(_ context.Context, _, name string) error {
+	m.released = append(m.released, name)
+	return nil
+}
+
+func TestDeferredUpdateChecksBeforeWritingAndRotatesSecret(t *testing.T) {
+	base := &mocks.ConnectionRepository{}
+	base.On("Available", mock.Anything).Return(true).Maybe()
+	deferred := &deferredConnectionRepoMock{
+		ConnectionRepository: base,
+		secretData:           map[string][]byte{"username": []byte("reader"), "password": []byte("old-pass")},
+	}
+	catalog, err := NewEmbeddedContractCatalog()
+	require.NoError(t, err)
+	svc := NewDefaultConnectionService(deferred, &mocks.ServiceRepository{}, catalog)
+
+	makeExisting := func() *crd.Connection {
+		return &crd.Connection{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "warehouse",
+				Namespace: "demo",
+				Annotations: map[string]string{
+					AnnotationCredentialsSecret: "demo/warehouse-credentials",
+					AnnotationCredentialsOwned:  "true",
+				},
+			},
+			Spec: crd.ConnectionSpec{
+				Contract: "database-server",
+				Values:   map[string]any{"secretRef": "warehouse-credentials"},
+			},
+		}
+	}
+
+	// 1. CheckUpdate failure aborts before touching Secrets.
+	deferred.checkUpdateErr = apierrors.NewConflict(crd.GetConnectionGVR().GroupResource(), "warehouse", errors.New("cluster-only"))
+	base.On("Get", mock.Anything, "demo", "warehouse").Return(makeExisting(), nil).Once()
+	_, err = svc.Update(context.Background(), "demo", "warehouse", postgresRequest())
+	require.Error(t, err)
+	assert.True(t, apierrors.IsConflict(err))
+	base.AssertNotCalled(t, "CreateOrUpdateSecret", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+
+	// 2. Uncertain commit keeps the newly rotated Secret and does NOT release the old one.
+	deferred.checkUpdateErr = nil
+	var writtenSecret string
+	base.On("Get", mock.Anything, "demo", "warehouse").Return(makeExisting(), nil).Once()
+	base.On("CreateOrUpdateSecret", mock.Anything, "demo", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+		writtenSecret = args.String(2)
+		data := args.Get(3).(map[string][]byte)
+		assert.Equal(t, []byte("old-pass"), data["password"], "preserved key must be merged")
+		assert.Equal(t, []byte("writer"), data["username"])
+	}).Return(nil).Once()
+	base.On("Update", mock.Anything, "demo", mock.Anything).
+		Return(&engine.UnknownError{Operation: engine.Operation{Outcome: engine.OutcomeUnknown}}).Once()
+
+	req := postgresRequest()
+	req.Values["username"] = "writer"
+	delete(req.Values, "password")
+	_, err = svc.Update(context.Background(), "demo", "warehouse", req)
+	require.ErrorIs(t, err, engine.ErrOutcomeUnknown)
+	assert.Contains(t, writtenSecret, "warehouse-credentials-rot-")
+	assert.Empty(t, deferred.released, "an unknown outcome must not release either the rotated or the old Secret")
+
+	// 3. Definite failure releases the newly rotated Secret only.
+	base.On("Get", mock.Anything, "demo", "warehouse").Return(makeExisting(), nil).Once()
+	base.On("CreateOrUpdateSecret", mock.Anything, "demo", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+		writtenSecret = args.String(2)
+	}).Return(nil).Once()
+	base.On("Update", mock.Anything, "demo", mock.Anything).Return(errors.New("rejected")).Once()
+	_, err = svc.Update(context.Background(), "demo", "warehouse", req)
+	require.Error(t, err)
+	assert.Equal(t, []string{writtenSecret}, deferred.released)
+}
+
+func TestKubernetesModeUpdatePreservesContractKeysWhenSwitchingFromRotatedSecret(t *testing.T) {
+	svc, connectionRepo, _ := newServiceUnderTest(t, true)
+
+	existing := &crd.Connection{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "warehouse",
+			Namespace: "demo",
+			Annotations: map[string]string{
+				AnnotationCredentialsSecret: "demo/warehouse-credentials-rot-0123456789",
+				AnnotationCredentialsOwned:  "true",
+			},
+		},
+		Spec: crd.ConnectionSpec{
+			Contract: "database-server",
+			Values:   map[string]any{"secretRef": "warehouse-credentials-rot-0123456789"},
+		},
+	}
+	connectionRepo.On("Get", mock.Anything, "demo", "warehouse").Return(existing, nil).Once()
+	connectionRepo.On("GetSecretData", mock.Anything, "demo", "warehouse-credentials-rot-0123456789").
+		Return(map[string][]byte{
+			"username": []byte("reader"),
+			"password": []byte("preserved-pass"),
+			"extra":    []byte("out-of-contract"),
+		}, nil).Once()
+	var written map[string][]byte
+	connectionRepo.On("CreateOrUpdateSecret", mock.Anything, "demo", "warehouse-credentials", mock.Anything).
+		Run(func(args mock.Arguments) {
+			written = args.Get(3).(map[string][]byte)
+		}).Return(nil).Once()
+	connectionRepo.On("Update", mock.Anything, "demo", mock.Anything).Return(nil).Once()
+	connectionRepo.On("DeleteSecret", mock.Anything, "demo", "warehouse-credentials-rot-0123456789").Return(nil).Once()
+
+	req := postgresRequest()
+	req.Values["username"] = "writer"
+	delete(req.Values, "password")
+
+	_, err := svc.Update(context.Background(), "demo", "warehouse", req)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("writer"), written["username"])
+	assert.Equal(t, []byte("preserved-pass"), written["password"], "missing contract key must be preserved from previous rotated Secret")
+	assert.NotContains(t, written, "extra", "non-contract keys must never be copied")
+	connectionRepo.AssertCalled(t, "DeleteSecret", mock.Anything, "demo", "warehouse-credentials-rot-0123456789")
+}
+
+func TestKubernetesModeUpdateRefusesForeignPreviousSecret(t *testing.T) {
+	svc, connectionRepo, _ := newServiceUnderTest(t, true)
+
+	existing := &crd.Connection{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "warehouse",
+			Namespace: "demo",
+			Annotations: map[string]string{
+				AnnotationCredentialsSecret: "demo/foreign-secret",
+				AnnotationCredentialsOwned:  "true",
+			},
+		},
+		Spec: crd.ConnectionSpec{
+			Contract: "database-server",
+			Values:   map[string]any{"secretRef": "foreign-secret"},
+		},
+	}
+	connectionRepo.On("Get", mock.Anything, "demo", "warehouse").Return(existing, nil).Once()
+	connectionRepo.On("GetSecretData", mock.Anything, "demo", "foreign-secret").
+		Return(nil, repository.ErrForeignSecret).Once()
+
+	req := postgresRequest()
+	req.Values["username"] = "writer"
+	delete(req.Values, "password")
+
+	_, err := svc.Update(context.Background(), "demo", "warehouse", req)
+	require.Error(t, err)
+	assert.True(t, IsValidationError(err))
+	connectionRepo.AssertNotCalled(t, "CreateOrUpdateSecret", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	connectionRepo.AssertNotCalled(t, "DeleteSecret", mock.Anything, mock.Anything, mock.Anything)
+}
+
+func TestCrossNamespaceCredentialsAnnotationIsIgnored(t *testing.T) {
+	svc, connectionRepo, _ := newServiceUnderTest(t, true)
+
+	conn := &crd.Connection{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "warehouse",
+			Namespace: "demo",
+			Annotations: map[string]string{
+				AnnotationCredentialsSecret: "other-ns/warehouse-credentials",
+				AnnotationCredentialsOwned:  "true",
+			},
+		},
+		Spec: crd.ConnectionSpec{Contract: "database-server"},
+	}
+
+	secretName, owned := credentialsSecretOf(conn, "demo", "warehouse")
+	assert.Empty(t, secretName)
+	assert.False(t, owned)
+	assert.Nil(t, svc.toResponse(conn, "demo").CredentialsSecret)
+
+	connectionRepo.On("Get", mock.Anything, "demo", "warehouse").Return(conn, nil).Once()
+	connectionRepo.On("Delete", mock.Anything, "demo", "warehouse").Return(nil).Once()
+	require.NoError(t, svc.Delete(context.Background(), "demo", "warehouse"))
+	connectionRepo.AssertNotCalled(t, "DeleteSecret", mock.Anything, mock.Anything, mock.Anything)
 }

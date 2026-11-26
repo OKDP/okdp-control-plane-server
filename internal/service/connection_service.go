@@ -23,14 +23,14 @@ import (
 // a connection. They are kept out of spec.values so that what the CRD stores
 // stays exactly the shape a KuboCD Contract schema will validate, and so that
 // reading a Connection never discloses a password.
-const AnnotationCredentialsSecret = "okdp.io/credentials-secret"
+const AnnotationCredentialsSecret = crd.AnnotationCredentialsSecret
 
 // AnnotationCredentialsOwned records whether the console wrote that Secret or
 // merely points at one. Written at creation rather than derived later: reading
 // the Secret back would cost one API call per connection in a list, and the
 // name alone cannot tell, an external Secret being free to follow the same
 // convention.
-const AnnotationCredentialsOwned = "okdp.io/credentials-owned"
+const AnnotationCredentialsOwned = crd.AnnotationCredentialsOwned
 
 // credentialsSecretSuffix mirrors the convention already used by secret stores.
 const credentialsSecretSuffix = "-credentials"
@@ -75,6 +75,26 @@ type ConnectionService interface {
 	// ListConsumers returns the services of a project bound to a connection,
 	// read from what the release controller published rather than guessed.
 	ListConsumers(ctx context.Context, project, name string) ([]models.ConnectionConsumer, error)
+}
+
+// CredentialsReleaser is implemented by a ConnectionRepository whose
+// Connection writes reach the cluster later (git persistence). The service
+// then never deletes a credentials Secret itself: it hands it over, and the
+// repository deletes it once no Connection references it any more, so the
+// consumers keep their credentials until the change is applied.
+type CredentialsReleaser interface {
+	ReleaseCredentials(ctx context.Context, namespace, secretName string) error
+}
+
+// DeferredConnections is implemented by a ConnectionRepository whose
+// Connection writes reach the cluster later (git persistence). CheckUpdate
+// verifies the Connection can be updated in git before any Secret is written,
+// GetSecretData reads preserved keys when rotating credentials into a fresh
+// Secret, and CredentialsReleaser hands unused Secrets to the reaper.
+type DeferredConnections interface {
+	CredentialsReleaser
+	CheckUpdate(ctx context.Context, namespace, name string) error
+	GetSecretData(ctx context.Context, namespace, name string) (map[string][]byte, error)
 }
 
 type DefaultConnectionService struct {
@@ -224,8 +244,9 @@ func (s *DefaultConnectionService) Create(ctx context.Context, namespace string,
 		// Secret we do not own is never touched, and neither is the one a
 		// concurrent create under the same name has just bound to its own
 		// Connection.
-		if ownSecret && len(secrets) > 0 && !apierrors.IsAlreadyExists(err) {
-			if cleanupErr := s.repo.DeleteSecret(ctx, secretNamespace, secretName); cleanupErr != nil {
+		// A Connection whose write has an unknown outcome may still land.
+		if ownSecret && len(secrets) > 0 && !apierrors.IsAlreadyExists(err) && !mayHaveLanded(err) {
+			if cleanupErr := s.dropCredentials(ctx, secretNamespace, secretName); cleanupErr != nil {
 				logrus.WithError(cleanupErr).Warn("Failed to clean up the credentials secret of a rejected connection")
 			}
 		}
@@ -251,19 +272,29 @@ func (s *DefaultConnectionService) Update(ctx context.Context, namespace, name s
 		return nil, invalid("connection %q %s and cannot be edited", name, managedBy(existing))
 	}
 
+	deferred, isDeferred := s.repo.(DeferredConnections)
+	if isDeferred && namespace != "" {
+		if err := deferred.CheckUpdate(ctx, namespace, name); err != nil {
+			return nil, err
+		}
+	}
+
 	public, secrets := splitValues(descriptor, values)
 	secretNamespace := namespace
 	secretName := name + credentialsSecretSuffix
+	previousSecret, previousOwned := credentialsSecretOf(existing, namespace, name)
+	hadPreviousSecret := existing.Annotations[AnnotationCredentialsSecret] != "" || existing.Spec.Values[valueSecretRef] != nil
 
 	// Set when the connection moves off a Secret we owned. The old Secret is
 	// dropped only once the new reference is persisted, otherwise a failed
 	// update leaves the stored connection pointing at a Secret that no longer
 	// exists.
 	orphanedSecret := ""
+	wroteRotatedSecret := ""
 
 	if req.ExistingSecret != "" {
-		if previous, owned := credentialsSecretOf(existing, name); owned && previous != req.ExistingSecret {
-			orphanedSecret = previous
+		if previousOwned && previousSecret != "" && previousSecret != req.ExistingSecret {
+			orphanedSecret = previousSecret
 		}
 		public[valueSecretRef] = req.ExistingSecret
 		existing.Annotations = withCredentialsSecret(existing.Annotations, secretNamespace+"/"+req.ExistingSecret, false)
@@ -271,8 +302,52 @@ func (s *DefaultConnectionService) Update(ctx context.Context, namespace, name s
 		// An unchanged credential is not resubmitted by the console, so only
 		// write the Secret when new values actually arrived, otherwise an edit
 		// of, say, the port would blank out the password.
-		if err := s.repo.CreateOrUpdateSecret(ctx, secretNamespace, secretName, secrets); err != nil {
-			return nil, storeCredentialsError(err)
+		if isDeferred && namespace != "" {
+			// In git mode, consumers still read the live Secret until the sync
+			// tool applies the update commit: write a fresh rotated Secret
+			// carrying both preserved and updated keys so a failed commit never
+			// mutates live credentials in place.
+			rotatedName, err := rotatedTokenSecret(name)
+			if err != nil {
+				return nil, err
+			}
+			secretName = rotatedName
+			dataToWrite := make(map[string][]byte, len(secrets))
+			if hadPreviousSecret && previousOwned && previousSecret != "" {
+				prevData, err := deferred.GetSecretData(ctx, secretNamespace, previousSecret)
+				if err != nil && !apierrors.IsNotFound(err) {
+					return nil, storeCredentialsError(err)
+				}
+				copyContractSecretFields(dataToWrite, prevData, descriptor)
+			}
+			for k, v := range secrets {
+				dataToWrite[k] = v
+			}
+			if err := s.repo.CreateOrUpdateSecret(ctx, secretNamespace, secretName, dataToWrite); err != nil {
+				return nil, storeCredentialsError(err)
+			}
+			wroteRotatedSecret = secretName
+			if hadPreviousSecret && previousOwned && previousSecret != "" && previousSecret != secretName {
+				orphanedSecret = previousSecret
+			}
+		} else {
+			dataToWrite := make(map[string][]byte, len(secrets))
+			if hadPreviousSecret && previousOwned && previousSecret != "" && previousSecret != secretName {
+				prevData, err := s.repo.GetSecretData(ctx, secretNamespace, previousSecret)
+				if err != nil && !apierrors.IsNotFound(err) {
+					return nil, storeCredentialsError(err)
+				}
+				copyContractSecretFields(dataToWrite, prevData, descriptor)
+			}
+			for k, v := range secrets {
+				dataToWrite[k] = v
+			}
+			if err := s.repo.CreateOrUpdateSecret(ctx, secretNamespace, secretName, dataToWrite); err != nil {
+				return nil, storeCredentialsError(err)
+			}
+			if hadPreviousSecret && previousOwned && previousSecret != "" && previousSecret != secretName {
+				orphanedSecret = previousSecret
+			}
 		}
 		public[valueSecretRef] = secretName
 		existing.Annotations = withCredentialsSecret(existing.Annotations, secretNamespace+"/"+secretName, true)
@@ -292,11 +367,16 @@ func (s *DefaultConnectionService) Update(ctx context.Context, namespace, name s
 	existing.Spec.Values = public
 
 	if err := s.repo.Update(ctx, namespace, existing); err != nil {
+		if wroteRotatedSecret != "" && !mayHaveLanded(err) {
+			if cleanupErr := s.dropCredentials(ctx, secretNamespace, wroteRotatedSecret); cleanupErr != nil {
+				logrus.WithError(cleanupErr).WithField("secret", wroteRotatedSecret).Warn("Failed to release the rotated credentials secret of a rejected connection update")
+			}
+		}
 		return nil, err
 	}
 
 	if orphanedSecret != "" {
-		if err := s.repo.DeleteSecret(ctx, secretNamespace, orphanedSecret); err != nil {
+		if err := s.dropCredentials(ctx, secretNamespace, orphanedSecret); err != nil {
 			logrus.WithError(err).WithField("secret", orphanedSecret).Warn("Failed to remove the credentials secret left behind by a connection now pointing elsewhere")
 		}
 	}
@@ -327,7 +407,7 @@ func (s *DefaultConnectionService) Delete(ctx context.Context, namespace, name s
 	// there: deleting it would take the credentials of everything else reading
 	// it. The name is no guide, an external Secret being free to follow the same
 	// convention, so this reads what was recorded at creation.
-	secretName, owned := credentialsSecretOf(existing, name)
+	secretName, owned := credentialsSecretOf(existing, namespace, name)
 	if !owned {
 		logrus.WithField("secret", secretName).
 			Info("Leaving the credentials secret in place, the connection did not own it")
@@ -336,22 +416,55 @@ func (s *DefaultConnectionService) Delete(ctx context.Context, namespace, name s
 
 	// The Secret outlives the Connection only if this fails. Report nothing to
 	// the user for it, the connection itself is gone.
-	if err := s.repo.DeleteSecret(ctx, namespace, secretName); err != nil {
+	if err := s.dropCredentials(ctx, namespace, secretName); err != nil {
 		logrus.WithError(err).Warn("Failed to delete the credentials secret of a removed connection")
 	}
 	return nil
 }
 
+// dropCredentials deletes a credentials Secret the control plane owns, or
+// hands it to a repository that deletes it later.
+func (s *DefaultConnectionService) dropCredentials(ctx context.Context, namespace, name string) error {
+	if releaser, ok := s.repo.(CredentialsReleaser); ok {
+		return releaser.ReleaseCredentials(ctx, namespace, name)
+	}
+	return s.repo.DeleteSecret(ctx, namespace, name)
+}
+
 // credentialsSecretOf returns the Secret holding a connection's credentials and
-// whether this server wrote it.
-func credentialsSecretOf(connection *crd.Connection, name string) (string, bool) {
-	secretName := name + credentialsSecretSuffix
+// whether this server wrote it. Any annotation referencing a Secret in another
+// namespace (or malformed) is rejected so a connection can never read or drop
+// a Secret outside its own namespace.
+func credentialsSecretOf(connection *crd.Connection, namespace, name string) (string, bool) {
+	expectedNS := connection.Namespace
+	if expectedNS == "" {
+		expectedNS = namespace
+	} else if namespace != "" && expectedNS != namespace {
+		return "", false
+	}
 	if ref := connection.Annotations[AnnotationCredentialsSecret]; ref != "" {
-		if _, referenced, found := strings.Cut(ref, "/"); found && referenced != "" {
-			secretName = referenced
+		ns, referenced, found := strings.Cut(ref, "/")
+		if !found || referenced == "" || strings.Contains(referenced, "/") || ns != expectedNS {
+			return "", false
+		}
+		return referenced, credentialsOwned(connection.Annotations, name, referenced)
+	}
+	secretName := name + credentialsSecretSuffix
+	return secretName, credentialsOwned(connection.Annotations, name, secretName)
+}
+
+// copyContractSecretFields copies only the keys declared as secret fields by
+// descriptor from src into dst, preventing arbitrary keys outside the contract
+// from being propagated across credential rotations.
+func copyContractSecretFields(dst, src map[string][]byte, descriptor *models.ContractDescriptor) {
+	if len(src) == 0 || descriptor == nil {
+		return
+	}
+	for _, field := range descriptor.SecretFields() {
+		if val, ok := src[field]; ok {
+			dst[field] = append([]byte(nil), val...)
 		}
 	}
-	return secretName, credentialsOwned(connection.Annotations, name, secretName)
 }
 
 func (s *DefaultConnectionService) Test(ctx context.Context, req models.ConnectionTestRequest) models.ConnectionTestResult {
@@ -518,6 +631,12 @@ func (s *DefaultConnectionService) validateRequest(ctx context.Context, namespac
 	if err := validateValues(req.Type, values); err != nil {
 		return nil, nil, invalid("%s", err.Error())
 	}
+	public, _ := splitValues(descriptor, values)
+	for name, val := range public {
+		if str, ok := val.(string); ok && hasEmbeddedURLCredentials(str) {
+			return nil, nil, invalid("value %q must not contain embedded credentials", name)
+		}
+	}
 	return descriptor, values, nil
 }
 
@@ -613,7 +732,7 @@ func (s *DefaultConnectionService) toResponse(connection *crd.Connection, namesp
 		// name: a connection created before the convention, or edited by hand,
 		// may point somewhere else, and a consumer needs the real reference.
 		if ref := connection.Annotations[AnnotationCredentialsSecret]; ref != "" && len(response.SecretFields) > 0 {
-			if ns, name, found := strings.Cut(ref, "/"); found {
+			if ns, name, found := strings.Cut(ref, "/"); found && ns == namespace && name != "" && !strings.Contains(name, "/") {
 				response.CredentialsSecret = &models.CredentialsSecretRef{
 					Name:      name,
 					Namespace: ns,

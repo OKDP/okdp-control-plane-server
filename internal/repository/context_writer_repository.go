@@ -2,18 +2,26 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/okdp/okdp-control-plane-server/internal/models"
 	"github.com/sirupsen/logrus"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/util/retry"
 )
 
-// ContextWriterRepository manages the platform service catalog on the platform
+// Catalog CAS errors returned when a catalog mutation races with another writer.
+var (
+	ErrCatalogEntryExists   = errors.New("service already exists in the catalog")
+	ErrCatalogEntryNotFound = errors.New("service not found in the catalog")
+)
+
+// ContextWriterRepository manages the service catalog on the Control Plane
 // Context (spec.context.serviceCatalog.categories[].services). A service is
 // stored in the section whose title equals its Category, created on the fly
 // when it does not exist yet.
@@ -22,7 +30,7 @@ import (
 // Context by name in the namespace of each Release, through
 // Config.defaultNamespaceContexts.
 type ContextWriterRepository interface {
-	// AddPlatformService appends a service to its section of the default Context's catalog.
+	// AddPlatformService appends a service to its section of the catalog.
 	AddPlatformService(ctx context.Context, svc models.PlatformService) error
 	// UpdatePlatformService replaces the service matching name, moving it when its Category changed.
 	UpdatePlatformService(ctx context.Context, name string, svc models.PlatformService) error
@@ -31,27 +39,57 @@ type ContextWriterRepository interface {
 }
 
 type k8sContextWriterRepository struct {
-	client           dynamic.Interface
-	defaultName      string
-	defaultNamespace string
+	client       dynamic.Interface
+	platform     ContextRef
+	controlPlane ContextRef
 }
 
+// NewContextWriterRepository writes the catalog of one Context.
 func NewContextWriterRepository(client dynamic.Interface, defaultName, defaultNamespace string) ContextWriterRepository {
-	return &k8sContextWriterRepository{
-		client:           client,
-		defaultName:      defaultName,
-		defaultNamespace: defaultNamespace,
-	}
+	ref := ContextRef{Name: defaultName, Namespace: defaultNamespace}
+	return NewSplitContextWriterRepository(client, ref, ref)
 }
 
-// mutateCategories performs a read-modify-write on the default Context's
-// serviceCatalog.categories list, retrying on resource-version conflicts so
-// concurrent edits don't clobber each other.
+// NewSplitContextWriterRepository writes the catalog of controlPlane and
+// never writes platform, unless both name the same Context. A Control Plane
+// Context without serviceCatalog starts from a copy of the platform one, the
+// catalog the reads fell back to, and a missing one is created that way.
+func NewSplitContextWriterRepository(client dynamic.Interface, platform, controlPlane ContextRef) ContextWriterRepository {
+	return &k8sContextWriterRepository{client: client, platform: platform, controlPlane: controlPlane}
+}
+
+// mutateCategories performs a read-modify-write on the Control Plane
+// Context's serviceCatalog.categories list, retrying on resource-version
+// conflicts so concurrent edits don't clobber each other.
 func (r *k8sContextWriterRepository) mutateCategories(ctx context.Context, fn func(categories []interface{}) ([]interface{}, error)) error {
+	contexts := r.client.Resource(contextGVR)
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		cur, err := r.client.Resource(contextGVR).Namespace(r.defaultNamespace).Get(ctx, r.defaultName, metav1.GetOptions{})
-		if err != nil {
-			return fmt.Errorf("failed to read default context %s/%s: %w", r.defaultNamespace, r.defaultName, err)
+		cur, err := contexts.Namespace(r.controlPlane.Namespace).Get(ctx, r.controlPlane.Name, metav1.GetOptions{})
+		missing := apierrors.IsNotFound(err) && r.controlPlane != r.platform
+		switch {
+		case missing:
+			cur = &unstructured.Unstructured{Object: map[string]interface{}{
+				"apiVersion": contextGVR.GroupVersion().String(),
+				"kind":       "Context",
+				"metadata":   map[string]interface{}{"name": r.controlPlane.Name, "namespace": r.controlPlane.Namespace},
+				"spec":       map[string]interface{}{"context": map[string]interface{}{}},
+			}}
+		case err != nil:
+			return fmt.Errorf("failed to read the control plane context %s: %w", r.controlPlane, err)
+		}
+
+		if r.controlPlane != r.platform && !HasServiceCatalog(cur) {
+			platform, err := contexts.Namespace(r.platform.Namespace).Get(ctx, r.platform.Name, metav1.GetOptions{})
+			if err != nil && !apierrors.IsNotFound(err) {
+				return fmt.Errorf("failed to read the platform context %s: %w", r.platform, err)
+			}
+			if err == nil {
+				if catalog, found, _ := unstructured.NestedMap(platform.Object, "spec", "context", "serviceCatalog"); found {
+					if err := unstructured.SetNestedMap(cur.Object, catalog, "spec", "context", "serviceCatalog"); err != nil {
+						return fmt.Errorf("failed to seed serviceCatalog: %w", err)
+					}
+				}
+			}
 		}
 
 		categories, _, err := unstructured.NestedSlice(cur.Object, "spec", "context", "serviceCatalog", "categories")
@@ -68,7 +106,15 @@ func (r *k8sContextWriterRepository) mutateCategories(ctx context.Context, fn fu
 			return fmt.Errorf("failed to set serviceCatalog.categories: %w", err)
 		}
 
-		_, err = r.client.Resource(contextGVR).Namespace(r.defaultNamespace).Update(ctx, cur, metav1.UpdateOptions{})
+		if missing {
+			_, err = contexts.Namespace(r.controlPlane.Namespace).Create(ctx, cur, metav1.CreateOptions{})
+			if apierrors.IsAlreadyExists(err) {
+				// Created meanwhile: read it again.
+				return apierrors.NewConflict(contextGVR.GroupResource(), r.controlPlane.Name, err)
+			}
+			return err
+		}
+		_, err = contexts.Namespace(r.controlPlane.Namespace).Update(ctx, cur, metav1.UpdateOptions{})
 		return err
 	})
 }
@@ -119,9 +165,73 @@ func appendServiceToCategory(categories []interface{}, title string, svc map[str
 	})
 }
 
+// CatalogAdd adds svc to the catalog sections categories, returning
+// ErrCatalogEntryExists when a service with the same name is already present.
+func CatalogAdd(categories []interface{}, svc models.PlatformService) ([]interface{}, error) {
+	if cat, _ := findService(categories, svc.Name); cat != nil {
+		return nil, fmt.Errorf("%w: %q", ErrCatalogEntryExists, svc.Name)
+	}
+	return appendServiceToCategory(categories, svc.Category, platformServiceToMap(svc)), nil
+}
+
+// CatalogUpdate replaces the service matching name with svc, in place, or
+// at the end of its new category when the category changed. Fields of the
+// stored service that PlatformService does not know are kept. Returns
+// ErrCatalogEntryNotFound when no service matches.
+func CatalogUpdate(categories []interface{}, name string, svc models.PlatformService) ([]interface{}, error) {
+	cat, index := findService(categories, name)
+	if cat == nil {
+		return nil, fmt.Errorf("%w: %q", ErrCatalogEntryNotFound, name)
+	}
+	services := categoryServices(cat)
+	updated := platformServiceToMap(svc)
+	for key, value := range services[index].(map[string]interface{}) {
+		if _, known := knownServiceFields[key]; !known {
+			updated[key] = value
+		}
+	}
+	if getString(cat, "title") == svc.Category {
+		services[index] = updated
+		return categories, nil
+	}
+	removeServiceFromCategories(categories, name)
+	return appendServiceToCategory(categories, svc.Category, updated), nil
+}
+
+// knownServiceFields are the fields platformServiceToMap writes or omits.
+var knownServiceFields = map[string]struct{}{
+	"name": {}, "versions": {}, "default": {}, "tag": {}, "description": {}, "repository": {}, "label": {}, "exposesUI": {},
+}
+
+// findService returns the category holding the service name and its index
+// in the category's services, nil when no category holds it.
+func findService(categories []interface{}, name string) (map[string]interface{}, int) {
+	for _, raw := range categories {
+		cat, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		for i, s := range categoryServices(cat) {
+			if m, ok := s.(map[string]interface{}); ok && getString(m, "name") == name {
+				return cat, i
+			}
+		}
+	}
+	return nil, -1
+}
+
+// CatalogRemove drops the services matching name, returning
+// ErrCatalogEntryNotFound when no service matches.
+func CatalogRemove(categories []interface{}, name string) ([]interface{}, error) {
+	if !removeServiceFromCategories(categories, name) {
+		return nil, fmt.Errorf("%w: %q", ErrCatalogEntryNotFound, name)
+	}
+	return categories, nil
+}
+
 func (r *k8sContextWriterRepository) AddPlatformService(ctx context.Context, svc models.PlatformService) error {
 	err := r.mutateCategories(ctx, func(categories []interface{}) ([]interface{}, error) {
-		return appendServiceToCategory(categories, svc.Category, platformServiceToMap(svc)), nil
+		return CatalogAdd(categories, svc)
 	})
 	if err == nil {
 		logrus.WithField("service", svc.Name).WithField("category", svc.Category).Info("Added platform service to catalog")
@@ -131,10 +241,7 @@ func (r *k8sContextWriterRepository) AddPlatformService(ctx context.Context, svc
 
 func (r *k8sContextWriterRepository) UpdatePlatformService(ctx context.Context, name string, svc models.PlatformService) error {
 	err := r.mutateCategories(ctx, func(categories []interface{}) ([]interface{}, error) {
-		if !removeServiceFromCategories(categories, name) {
-			return categories, nil
-		}
-		return appendServiceToCategory(categories, svc.Category, platformServiceToMap(svc)), nil
+		return CatalogUpdate(categories, name, svc)
 	})
 	if err == nil {
 		logrus.WithField("service", name).Info("Updated platform service in catalog")
@@ -144,8 +251,7 @@ func (r *k8sContextWriterRepository) UpdatePlatformService(ctx context.Context, 
 
 func (r *k8sContextWriterRepository) RemovePlatformService(ctx context.Context, name string) error {
 	err := r.mutateCategories(ctx, func(categories []interface{}) ([]interface{}, error) {
-		removeServiceFromCategories(categories, name)
-		return categories, nil
+		return CatalogRemove(categories, name)
 	})
 	if err == nil {
 		logrus.WithField("service", name).Info("Removed platform service from catalog")

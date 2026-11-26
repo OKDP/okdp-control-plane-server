@@ -271,7 +271,9 @@ func (s *DefaultExternalSecretService) toResponse(es *crd.ESOExternalSecret, nam
 		RefreshInterval: es.Spec.RefreshInterval,
 		Data:            data,
 		Status:          deriveExternalSecretStatus(es.Status.Conditions),
-		CreatedAt:       es.CreationTimestamp.Format(time.RFC3339),
+	}
+	if !es.CreationTimestamp.IsZero() {
+		resp.CreatedAt = es.CreationTimestamp.Format(time.RFC3339)
 	}
 
 	if es.Status.RefreshTime != "" {

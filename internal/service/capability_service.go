@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 
+	"github.com/okdp/okdp-control-plane-server/internal/engine"
 	"github.com/okdp/okdp-control-plane-server/internal/models"
 	"github.com/okdp/okdp-control-plane-server/internal/repository"
 	"github.com/okdp/okdp-control-plane-server/internal/repository/provisioning"
@@ -15,7 +16,8 @@ const (
 )
 
 // CapabilityService derives the platform capabilities from the Context, at
-// request time so configuration changes apply without restarting the server.
+// request time so configuration changes apply without restarting the server,
+// and from what the deployment engine says about itself.
 type CapabilityService interface {
 	// GetCapabilities returns the capabilities advertised to the UI.
 	GetCapabilities(ctx context.Context) (*models.Capabilities, error)
@@ -31,10 +33,11 @@ type DefaultCapabilityService struct {
 	// the same answer, so advertising the capability without it would offer a
 	// section whose every call comes back 501.
 	identityCRDsInstalled func(ctx context.Context) bool
+	engine                engine.Info
 }
 
-func NewDefaultCapabilityService(contextRepo repository.ContextRepository, identityCRDsInstalled func(ctx context.Context) bool) *DefaultCapabilityService {
-	return &DefaultCapabilityService{contextRepo: contextRepo, identityCRDsInstalled: identityCRDsInstalled}
+func NewDefaultCapabilityService(contextRepo repository.ContextRepository, identityCRDsInstalled func(ctx context.Context) bool, engineInfo engine.Info) *DefaultCapabilityService {
+	return &DefaultCapabilityService{contextRepo: contextRepo, identityCRDsInstalled: identityCRDsInstalled, engine: engineInfo}
 }
 
 func (s *DefaultCapabilityService) identityCRDs(ctx context.Context) bool {
@@ -71,6 +74,11 @@ func (s *DefaultCapabilityService) GetCapabilities(ctx context.Context) (*models
 		},
 		OidcProvisioning: models.OidcProvisioningCapability{
 			Provider: provisioningProvider,
+		},
+		Engine: models.EngineCapability{
+			Name:           s.engine.Name,
+			RenderedValues: s.engine.RenderedValues,
+			Suspend:        s.engine.Suspend,
 		},
 	}, nil
 }

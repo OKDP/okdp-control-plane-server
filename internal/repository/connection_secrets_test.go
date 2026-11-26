@@ -69,3 +69,32 @@ func TestCreateOrUpdateSecretMergesOneWeOwn(t *testing.T) {
 		t.Fatalf("expected the password updated and the username kept, got %v", stored.Data)
 	}
 }
+
+func TestGetSecretDataEnforcesManagedByLabel(t *testing.T) {
+	repo := secretRepo(
+		&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "foreign", Namespace: "demo"},
+			Data:       map[string][]byte{"password": []byte("other")},
+		},
+		&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "owned",
+				Namespace: "demo",
+				Labels:    map[string]string{crd.LabelManagedBy: crd.ManagedByValue},
+			},
+			Data: map[string][]byte{"password": []byte("ours")},
+		},
+	)
+
+	if _, err := repo.GetSecretData(context.Background(), "demo", "foreign"); !errors.Is(err, ErrForeignSecret) {
+		t.Fatalf("expected ErrForeignSecret for unmanaged secret, got %v", err)
+	}
+
+	got, err := repo.GetSecretData(context.Background(), "demo", "owned")
+	if err != nil {
+		t.Fatalf("expected managed secret read to succeed, got %v", err)
+	}
+	if string(got["password"]) != "ours" {
+		t.Fatalf("got %q, want %q", got["password"], "ours")
+	}
+}

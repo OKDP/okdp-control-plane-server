@@ -36,13 +36,22 @@ func (h *SecretStoreHandler) Available(ctx context.Context) bool {
 // @Produce      json
 // @Param        name path string true "Project name (= Kubernetes namespace)"
 // @Success      200  {array}   models.SecretStoreResponse
+// @Failure      400  {object}  map[string]string
 // @Failure      500  {object}  map[string]string
+// @Failure      503  {object}  models.ErrorResponse
 // @Router       /api/projects/{projectId}/secret-stores [get]
 func (h *SecretStoreHandler) ListSecretStores(c *gin.Context) {
 	namespace := c.Param("name")
 
 	stores, err := h.service.ListSecretStores(c.Request.Context(), namespace)
 	if err != nil {
+		if apierrors.IsBadRequest(err) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		if respondStorageError(c, err) {
+			return
+		}
 		logrus.WithError(err).Error("Failed to list secret stores")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -60,8 +69,10 @@ func (h *SecretStoreHandler) ListSecretStores(c *gin.Context) {
 // @Param        request body models.SecretStoreRequest true "Secret Store Request"
 // @Success      201  {object}  models.SecretStoreResponse
 // @Failure      400  {object}  map[string]string
-// @Failure      409  {object}  map[string]string
+// @Failure      409  {object}  models.ErrorResponse
 // @Failure      500  {object}  map[string]string
+// @Failure      503  {object}  models.ErrorResponse
+// @Failure      504  {object}  models.ErrorResponse
 // @Router       /api/projects/{projectId}/secret-stores [post]
 func (h *SecretStoreHandler) CreateSecretStore(c *gin.Context) {
 	namespace := c.Param("name")
@@ -82,8 +93,11 @@ func (h *SecretStoreHandler) CreateSecretStore(c *gin.Context) {
 		}
 		// A missing field is the caller's to fix. Reported as 500, as it was,
 		// the console can only say the server broke.
-		if service.IsValidationError(err) {
+		if service.IsValidationError(err) || apierrors.IsBadRequest(err) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		if respondStorageError(c, err) {
 			return
 		}
 		logrus.WithError(err).Error("Failed to create secret store")
@@ -105,7 +119,10 @@ func (h *SecretStoreHandler) CreateSecretStore(c *gin.Context) {
 // @Success      200  {object}  models.SecretStoreResponse
 // @Failure      400  {object}  map[string]string
 // @Failure      404  {object}  map[string]string
+// @Failure      409  {object}  models.ErrorResponse
 // @Failure      500  {object}  map[string]string
+// @Failure      503  {object}  models.ErrorResponse
+// @Failure      504  {object}  models.ErrorResponse
 // @Router       /api/projects/{projectId}/secret-stores/{storeName} [put]
 func (h *SecretStoreHandler) UpdateSecretStore(c *gin.Context) {
 	namespace := c.Param("name")
@@ -125,8 +142,11 @@ func (h *SecretStoreHandler) UpdateSecretStore(c *gin.Context) {
 			})
 			return
 		}
-		if service.IsValidationError(err) {
+		if service.IsValidationError(err) || apierrors.IsBadRequest(err) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		if respondStorageError(c, err) {
 			return
 		}
 		logrus.WithError(err).Error("Failed to update secret store")
@@ -145,8 +165,12 @@ func (h *SecretStoreHandler) UpdateSecretStore(c *gin.Context) {
 // @Param        name path string true "Project name (= Kubernetes namespace)"
 // @Param        storeName path string true "Secret Store name"
 // @Success      204
+// @Failure      400  {object}  map[string]string
 // @Failure      404  {object}  map[string]string
+// @Failure      409  {object}  models.ErrorResponse
 // @Failure      500  {object}  map[string]string
+// @Failure      503  {object}  models.ErrorResponse
+// @Failure      504  {object}  models.ErrorResponse
 // @Router       /api/projects/{projectId}/secret-stores/{storeName} [delete]
 func (h *SecretStoreHandler) DeleteSecretStore(c *gin.Context) {
 	namespace := c.Param("name")
@@ -157,6 +181,13 @@ func (h *SecretStoreHandler) DeleteSecretStore(c *gin.Context) {
 			c.JSON(http.StatusNotFound, gin.H{
 				"error": fmt.Sprintf("Secret store '%s' not found in project '%s'", storeName, namespace),
 			})
+			return
+		}
+		if apierrors.IsBadRequest(err) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		if respondStorageError(c, err) {
 			return
 		}
 		logrus.WithError(err).Error("Failed to delete secret store")
@@ -202,6 +233,7 @@ func (h *SecretStoreHandler) TestConnection(c *gin.Context) {
 // @Success      200  {object}  models.SecretStoreStatusResponse
 // @Failure      404  {object}  map[string]string
 // @Failure      500  {object}  map[string]string
+// @Failure      503  {object}  models.ErrorResponse
 // @Router       /api/projects/{projectId}/secret-stores/{storeName}/status [get]
 func (h *SecretStoreHandler) GetStatus(c *gin.Context) {
 	namespace := c.Param("name")
@@ -213,6 +245,9 @@ func (h *SecretStoreHandler) GetStatus(c *gin.Context) {
 			c.JSON(http.StatusNotFound, gin.H{
 				"error": fmt.Sprintf("Secret store '%s' not found in project '%s'", storeName, namespace),
 			})
+			return
+		}
+		if respondStorageError(c, err) {
 			return
 		}
 		logrus.WithError(err).Error("Failed to get secret store status")
