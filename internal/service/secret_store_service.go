@@ -2,12 +2,19 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
+	"encoding/pem"
+	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
+	"github.com/okdp/okdp-control-plane-server/internal/engine"
+	"github.com/okdp/okdp-control-plane-server/internal/gitstore"
 	"github.com/okdp/okdp-control-plane-server/internal/models"
 	"github.com/okdp/okdp-control-plane-server/internal/repository"
 	"github.com/okdp/okdp-control-plane-server/internal/repository/crd"
@@ -31,6 +38,96 @@ type SecretStoreService interface {
 
 type DefaultSecretStoreService struct {
 	repo repository.SecretStoreRepository
+}
+
+// DeferredSecretStores is implemented by a SecretStoreRepository whose
+// writes reach the cluster later (git persistence). Its Create and Update
+// move the default label in the same write, CheckUpdate tells whether a
+// store can be updated before its credentials are touched, and a
+// credentials Secret is handed over (CredentialsReleaser) instead of being
+// deleted, once the write that drops it is committed.
+type DeferredSecretStores interface {
+	CredentialsReleaser
+	CheckUpdate(ctx context.Context, namespace, name string) error
+}
+
+func (s *DefaultSecretStoreService) deferred() (DeferredSecretStores, bool) {
+	d, ok := s.repo.(DeferredSecretStores)
+	return d, ok
+}
+
+// clearDefault drops the default label from the other stores, unless the
+// repository moves it in the write itself.
+func (s *DefaultSecretStoreService) clearDefault(ctx context.Context, namespace string) {
+	if _, ok := s.deferred(); ok {
+		return
+	}
+	if err := s.repo.RemoveDefaultLabel(ctx, namespace); err != nil {
+		logrus.WithError(err).Warn("Failed to clear previous default store label")
+	}
+}
+
+// releaseCredentials hands a credentials Secret over to a deferred
+// repository. Called only once the write that drops it succeeded.
+func (s *DefaultSecretStoreService) releaseCredentials(ctx context.Context, namespace, name string) {
+	d, _ := s.deferred()
+	if err := d.ReleaseCredentials(ctx, namespace, name); err != nil {
+		logrus.WithError(err).Warnf("Failed to release credentials secret %s", name)
+	}
+}
+
+// mayHaveLanded reports whether a failed write may still be committed.
+func mayHaveLanded(err error) bool {
+	return errors.Is(err, engine.ErrOutcomeUnknown) || errors.Is(err, gitstore.ErrUncertain)
+}
+
+const (
+	rotatedTokenInfix  = "-credentials-rot-"
+	rotatedTokenRandom = 5
+)
+
+// rotatedTokenSecret names a fresh Secret for a new token of store,
+// <store>-credentials-rot-<random>: no store reads it yet, whatever git or
+// the cluster hold, so writing it never changes a live token.
+func rotatedTokenSecret(store string) (string, error) {
+	random := make([]byte, rotatedTokenRandom)
+	if _, err := rand.Read(random); err != nil {
+		return "", err
+	}
+	return rotatedTokenPrefix(store) + hex.EncodeToString(random), nil
+}
+
+// rotatedTokenPrefix is the name of the rotated Secrets of store without
+// their random part, with store shortened so that the whole name stays a
+// valid Secret name (a DNS-1123 subdomain of 253 characters at most).
+func rotatedTokenPrefix(store string) string {
+	if max := validation.DNS1123SubdomainMaxLength - len(rotatedTokenInfix) - 2*rotatedTokenRandom; len(store) > max {
+		store = strings.TrimRight(store[:max], "-.")
+	}
+	return store + rotatedTokenInfix
+}
+
+// isRotatedTokenSecret reports whether ref names a Secret rotatedTokenSecret
+// made for store.
+func isRotatedTokenSecret(store string, ref *crd.ESOTokenSecretRef) bool {
+	if ref == nil {
+		return false
+	}
+	random, found := strings.CutPrefix(ref.Name, rotatedTokenPrefix(store))
+	if !found || len(random) != 2*rotatedTokenRandom {
+		return false
+	}
+	_, err := hex.DecodeString(random)
+	return err == nil
+}
+
+// tokenSecretOf returns the Secret a store reads its Vault token from, empty
+// when it does not use token auth.
+func tokenSecretOf(store *crd.ESOSecretStore) *crd.ESOTokenSecretRef {
+	if v := store.Spec.Provider.Vault; v != nil && v.Auth.TokenSecretRef != nil {
+		return v.Auth.TokenSecretRef
+	}
+	return nil
 }
 
 func (s *DefaultSecretStoreService) Available(ctx context.Context) bool {
@@ -69,6 +166,17 @@ func (s *DefaultSecretStoreService) CreateSecretStore(ctx context.Context, names
 		if req.Auth.Config.Token == "" {
 			return nil, invalid("auth.config.token is required for token auth")
 		}
+	}
+
+	// Checked before the credentials are written: a duplicate must not
+	// overwrite the token of the store already there.
+	if _, err := s.repo.Get(ctx, namespace, req.Name); err == nil {
+		return nil, apierrors.NewAlreadyExists(crd.GetSecretStoreGVR().GroupResource(), req.Name)
+	} else if !apierrors.IsNotFound(err) {
+		return nil, err
+	}
+
+	if req.Auth.Type == "token" {
 		secretData := map[string][]byte{"token": []byte(req.Auth.Config.Token)}
 		if err := s.repo.CreateOrUpdateSecret(ctx, namespace, credSecretName, secretData); err != nil {
 			return nil, fmt.Errorf("failed to create credentials secret: %w", err)
@@ -76,14 +184,17 @@ func (s *DefaultSecretStoreService) CreateSecretStore(ctx context.Context, names
 	}
 
 	if req.IsDefault {
-		if err := s.repo.RemoveDefaultLabel(ctx, namespace); err != nil {
-			logrus.WithError(err).Warn("Failed to clear previous default store label")
-		}
+		s.clearDefault(ctx, namespace)
 	}
 
 	store := buildSecretStoreCRD(namespace, req, credSecretName)
 
 	if err := s.repo.Create(ctx, namespace, store); err != nil {
+		// No store references the token if the commit surely failed (and did
+		// not collide with a store created concurrently under the same name).
+		if _, ok := s.deferred(); ok && req.Auth.Type == "token" && !apierrors.IsAlreadyExists(err) && !mayHaveLanded(err) {
+			s.releaseCredentials(ctx, namespace, credSecretName)
+		}
 		return nil, err
 	}
 
@@ -107,12 +218,29 @@ func (s *DefaultSecretStoreService) UpdateSecretStore(ctx context.Context, names
 		return nil, err
 	}
 
+	deferred, isDeferred := s.deferred()
+	if isDeferred {
+		if err := deferred.CheckUpdate(ctx, namespace, name); err != nil {
+			return nil, err
+		}
+	}
+
 	credSecretName := name + "-credentials"
 
 	// What the store authenticates with today. An omitted token can only mean
 	// "keep the stored one" when there is a stored one.
 	existingVault := existing.Spec.Provider.Vault
 	usedTokenAuth := existingVault != nil && existingVault.Auth.TokenSecretRef != nil
+	previousRef := tokenSecretOf(existing)
+	// A deferred store reads its token from the cluster before the commit
+	// lands: a new token goes to another Secret, so that a commit that fails
+	// leaves the live one untouched.
+	if isDeferred && req.Auth.Type == "token" && req.Auth.Config.Token != "" {
+		if credSecretName, err = rotatedTokenSecret(name); err != nil {
+			return nil, err
+		}
+	}
+	wroteToken := false
 
 	switch req.Auth.Type {
 	case "token":
@@ -121,6 +249,7 @@ func (s *DefaultSecretStoreService) UpdateSecretStore(ctx context.Context, names
 			if err := s.repo.CreateOrUpdateSecret(ctx, namespace, credSecretName, secretData); err != nil {
 				return nil, fmt.Errorf("failed to update credentials secret: %w", err)
 			}
+			wroteToken = true
 		} else if !usedTokenAuth {
 			// The CR would reference a Secret that was never written, so the
 			// store could never sync while the API reported success.
@@ -140,15 +269,22 @@ func (s *DefaultSecretStoreService) UpdateSecretStore(ctx context.Context, names
 	}
 
 	if req.IsDefault {
-		if err := s.repo.RemoveDefaultLabel(ctx, namespace); err != nil {
-			logrus.WithError(err).Warn("Failed to clear previous default store label")
-		}
+		s.clearDefault(ctx, namespace)
 	}
 
 	store := buildSecretStoreCRD(namespace, req, credSecretName)
 	store.ResourceVersion = existing.ResourceVersion
+	// A token kept as it is stays where the store reads it today, which a
+	// manifest written by hand may name differently.
+	if req.Auth.Type == "token" && req.Auth.Config.Token == "" && previousRef != nil {
+		kept := *previousRef
+		store.Spec.Provider.Vault.Auth.TokenSecretRef = &kept
+	}
 
 	if err := s.repo.Update(ctx, namespace, store); err != nil {
+		if isDeferred && wroteToken && !mayHaveLanded(err) && (previousRef == nil || previousRef.Name != credSecretName) {
+			s.releaseCredentials(ctx, namespace, credSecretName)
+		}
 		return nil, err
 	}
 
@@ -156,9 +292,20 @@ func (s *DefaultSecretStoreService) UpdateSecretStore(ctx context.Context, names
 	// update never destroys a credential the store still uses. Left behind, the
 	// Vault token would outlive the store's use of it: still valid in Vault,
 	// no longer shown anywhere in the console.
-	if usedTokenAuth && req.Auth.Type != "token" {
-		if err := s.repo.DeleteSecret(ctx, namespace, credSecretName); err != nil && !apierrors.IsNotFound(err) {
-			logrus.WithError(err).Warnf("Failed to delete unused credentials secret %s", credSecretName)
+	if isDeferred {
+		if newRef := tokenSecretOf(store); previousRef != nil && (newRef == nil || newRef.Name != previousRef.Name) {
+			s.releaseCredentials(ctx, namespace, previousRef.Name)
+		}
+	} else {
+		if usedTokenAuth && req.Auth.Type != "token" {
+			if err := s.repo.DeleteSecret(ctx, namespace, credSecretName); err != nil && !apierrors.IsNotFound(err) {
+				logrus.WithError(err).Warnf("Failed to delete unused credentials secret %s", credSecretName)
+			}
+		}
+		// A token rotated while the store was in git: the store no longer
+		// reads it.
+		if newRef := tokenSecretOf(store); isRotatedTokenSecret(name, previousRef) && (newRef == nil || newRef.Name != previousRef.Name) {
+			s.deleteToken(ctx, namespace, previousRef.Name)
 		}
 	}
 
@@ -172,19 +319,40 @@ func (s *DefaultSecretStoreService) UpdateSecretStore(ctx context.Context, names
 }
 
 func (s *DefaultSecretStoreService) DeleteSecretStore(ctx context.Context, namespace, name string) error {
-	_, err := s.repo.Get(ctx, namespace, name)
+	existing, err := s.repo.Get(ctx, namespace, name)
 	if err != nil {
 		return err
 	}
 
-	credSecretName := name + "-credentials"
-	if err := s.repo.DeleteSecret(ctx, namespace, credSecretName); err != nil {
-		if !apierrors.IsNotFound(err) {
-			logrus.WithError(err).Warnf("Failed to delete credentials secret %s", credSecretName)
+	// The deletion reaches the cluster later: the Secret is handed over once
+	// the deletion is committed, never on a failed or uncertain one.
+	if _, ok := s.deferred(); ok {
+		if err := s.repo.Delete(ctx, namespace, name); err != nil {
+			return err
 		}
+		if ref := tokenSecretOf(existing); ref != nil {
+			s.releaseCredentials(ctx, namespace, ref.Name)
+		}
+		return nil
 	}
 
-	return s.repo.Delete(ctx, namespace, name)
+	credSecretName := name + "-credentials"
+	s.deleteToken(ctx, namespace, credSecretName)
+	if err := s.repo.Delete(ctx, namespace, name); err != nil {
+		return err
+	}
+	// A token rotated while the store was in git, dropped once the store is
+	// gone.
+	if ref := tokenSecretOf(existing); isRotatedTokenSecret(name, ref) {
+		s.deleteToken(ctx, namespace, ref.Name)
+	}
+	return nil
+}
+
+func (s *DefaultSecretStoreService) deleteToken(ctx context.Context, namespace, name string) {
+	if err := s.repo.DeleteSecret(ctx, namespace, name); err != nil && !apierrors.IsNotFound(err) {
+		logrus.WithError(err).Warnf("Failed to delete credentials secret %s", name)
+	}
 }
 
 func (s *DefaultSecretStoreService) TestConnection(ctx context.Context, req models.SecretStoreRequest) error {
@@ -193,6 +361,9 @@ func (s *DefaultSecretStoreService) TestConnection(ctx context.Context, req mode
 	}
 	if req.Vault.Server == "" {
 		return fmt.Errorf("vault.server is required")
+	}
+	if err := validateVaultCABundle(req.Vault.CABundle); err != nil {
+		return err
 	}
 	if req.Auth == nil {
 		return fmt.Errorf("auth configuration is required")
@@ -300,6 +471,12 @@ func validateRequest(req models.SecretStoreRequest) error {
 	if req.Vault.Server == "" {
 		return invalid("vault.server is required")
 	}
+	if hasEmbeddedURLCredentials(req.Vault.Server) {
+		return invalid("vault.server must not contain embedded credentials")
+	}
+	if err := validateVaultCABundle(req.Vault.CABundle); err != nil {
+		return err
+	}
 	if req.Vault.Path == "" {
 		return invalid("vault.path is required")
 	}
@@ -326,6 +503,29 @@ func validateRequest(req models.SecretStoreRequest) error {
 		}
 	default:
 		return invalid("unsupported auth type %q, must be 'token' or 'kubernetes'", req.Auth.Type)
+	}
+	return nil
+}
+
+// validateVaultCABundle refuses private key material inside a public CA bundle
+// that will be persisted in Kubernetes CRs or Git.
+func validateVaultCABundle(caBundle string) error {
+	if strings.TrimSpace(caBundle) == "" {
+		return nil
+	}
+	rest := []byte(caBundle)
+	for {
+		var block *pem.Block
+		block, rest = pem.Decode(rest)
+		if block == nil {
+			break
+		}
+		if strings.Contains(strings.ToUpper(block.Type), "PRIVATE KEY") {
+			return invalid("vault.caBundle must not contain private keys")
+		}
+	}
+	if strings.Contains(strings.ToUpper(caBundle), "PRIVATE KEY") {
+		return invalid("vault.caBundle must not contain private keys")
 	}
 	return nil
 }
@@ -393,7 +593,9 @@ func (s *DefaultSecretStoreService) toResponse(store *crd.ESOSecretStore, namesp
 		Namespace: namespace,
 		Status:    deriveOverallStatus(store.Status.Conditions),
 		IsDefault: store.Labels[crd.LabelDefaultStore] == "true",
-		CreatedAt: store.CreationTimestamp.Format(time.RFC3339),
+	}
+	if !store.CreationTimestamp.IsZero() {
+		resp.CreatedAt = store.CreationTimestamp.Format(time.RFC3339)
 	}
 
 	if len(store.Status.Conditions) > 0 {

@@ -7,15 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"regexp"
 	"slices"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/okdp/okdp-control-plane-server/internal/engine"
 	"github.com/okdp/okdp-control-plane-server/internal/models"
-	"github.com/okdp/okdp-control-plane-server/internal/repository"
-	"github.com/okdp/okdp-control-plane-server/internal/repository/crd"
 	"github.com/okdp/okdp-control-plane-server/internal/repository/provisioning"
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 	"github.com/sirupsen/logrus"
@@ -24,7 +22,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/watch"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 )
@@ -35,9 +33,6 @@ var (
 	ErrCatalogServiceExists   = errors.New("service already exists in the catalog")
 	ErrCatalogServiceNotFound = errors.New("service not found in the catalog")
 )
-
-// serviceNameRe matches a DNS-style identifier (lowercase alphanumerics and dashes).
-var serviceNameRe = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
 
 // ServiceService manages platform services (deploy, monitor, delete) and exposes the catalog.
 type ServiceService interface {
@@ -51,9 +46,16 @@ type ServiceService interface {
 	DeployService(ctx context.Context, project string, req models.ServiceRequest) (*models.ServiceInstance, error)
 	ListServices(ctx context.Context, project string) ([]models.ServiceInstance, error)
 	GetService(ctx context.Context, project, name string) (*models.ServiceInstance, error)
-	UpdateServiceParameters(ctx context.Context, project, name string, req models.ServiceUpdateRequest) (*models.ServiceInstance, error)
-	DeleteService(ctx context.Context, project, name string) error
-	WatchServices(ctx context.Context, project string) (watch.Interface, error)
+	// UpdateServiceParameters and DeleteService refuse the write as a conflict
+	// when expectedRevision is set and the instance is no longer at it.
+	UpdateServiceParameters(ctx context.Context, project, name string, req models.ServiceUpdateRequest, expectedRevision string) (*models.ServiceInstance, error)
+	// With git persistence the deletion is only committed and the answer
+	// carries the operation (accepted, with its desired revision). It is nil
+	// when the deletion is done in the cluster.
+	DeleteService(ctx context.Context, project, name, expectedRevision string) (*models.Operation, error)
+	// WatchServices streams the changes of a project's services. The channel
+	// closes when ctx ends or the engine stops the stream.
+	WatchServices(ctx context.Context, project string) (<-chan ServiceEvent, error)
 
 	GetMenuCategories(ctx context.Context) ([]models.MenuCategory, error)
 
@@ -61,80 +63,52 @@ type ServiceService interface {
 
 	GetProfileImages(ctx context.Context) (map[string][]models.ProfileImage, error)
 
-	EnrichURL(ctx context.Context, instance *models.ServiceInstance)
-	EnrichPodHealth(ctx context.Context, instance *models.ServiceInstance)
 	ListPods(ctx context.Context, project, serviceName string) ([]models.Pod, error)
 	GetPodLogs(ctx context.Context, project, podName, container string, tailLines int64, follow bool) (io.ReadCloser, error)
 	GetServiceMetrics(ctx context.Context, project, serviceName string) (*models.ServiceMetrics, error)
 	GetProjectMetrics(ctx context.Context, project string) (map[string]*models.ServiceMetrics, error)
 }
 
+// ServiceEvent is one change of a service, as the services stream sends it.
+type ServiceEvent struct {
+	Type     string
+	Instance models.ServiceInstance
+}
+
+// DefaultServiceService is the engine-independent part of service management.
+// The engine stores and observes the instances. This service validates what is
+// written, and reads pods, Ingresses, events and metrics from the cluster.
 type DefaultServiceService struct {
-	releaseRepo      repository.ServiceRepository
-	contextRepo      repository.ContextRepository
-	contextWriteRepo repository.ContextWriterRepository
-	schemaService    PackageSchemaService
-	oidcProvisioner  provisioning.OidcClientProvisioner
-	k8sClient        dynamic.Interface
-	typedClient      kubernetes.Interface
-	contextNamespace string
-	releaseInterval  string
-	releaseTimeout   string
-	sidecarPrefixes  []string
-	// insecureRegistries mirrors INSECURE_OCI_REGISTRIES so the Releases this
-	// service creates carry the insecure flag for those hosts.
-	insecureRegistries []string
+	engine          engine.Engine
+	oidcProvisioner provisioning.OidcClientProvisioner
+	k8sClient       dynamic.Interface
+	typedClient     kubernetes.Interface
+	sidecarPrefixes []string
 }
 
-// SetInsecureRegistries declares the plain-HTTP registry hosts.
-func (s *DefaultServiceService) SetInsecureRegistries(hosts []string) {
-	s.insecureRegistries = hosts
-}
-
-func NewDefaultServiceService(releaseRepo repository.ServiceRepository, contextRepo repository.ContextRepository, contextWriteRepo repository.ContextWriterRepository, schemaService PackageSchemaService, oidcProvisioner provisioning.OidcClientProvisioner, k8sClient dynamic.Interface, typedClient kubernetes.Interface, contextNamespace, releaseInterval, releaseTimeout string, sidecarPrefixes []string) *DefaultServiceService {
+func NewDefaultServiceService(eng engine.Engine, oidcProvisioner provisioning.OidcClientProvisioner, k8sClient dynamic.Interface, typedClient kubernetes.Interface, sidecarPrefixes []string) *DefaultServiceService {
 	return &DefaultServiceService{
-		releaseRepo:      releaseRepo,
-		contextRepo:      contextRepo,
-		contextWriteRepo: contextWriteRepo,
-		schemaService:    schemaService,
-		oidcProvisioner:  oidcProvisioner,
-		k8sClient:        k8sClient,
-		typedClient:      typedClient,
-		contextNamespace: contextNamespace,
-		releaseInterval:  releaseInterval,
-		releaseTimeout:   releaseTimeout,
-		sidecarPrefixes:  sidecarPrefixes,
+		engine:          eng,
+		oidcProvisioner: oidcProvisioner,
+		k8sClient:       k8sClient,
+		typedClient:     typedClient,
+		sidecarPrefixes: sidecarPrefixes,
 	}
 }
 
 // --- Platform services ---
 
 func (s *DefaultServiceService) GetPlatformServices(ctx context.Context) ([]models.PlatformService, error) {
-	services, err := s.contextRepo.GetPlatformServices(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	versions := s.schemaService.ListVersionsForServices(ctx, services)
-	for i, svc := range services {
-		if tags, ok := versions[svc.Name]; ok {
-			services[i].Versions = tags
-		}
-	}
-
-	return services, nil
+	return s.engine.Catalog.Services(ctx)
 }
 
 // AddPlatformService validates and appends a new service to the catalog (default Context).
 func (s *DefaultServiceService) AddPlatformService(ctx context.Context, svc models.PlatformService) (*models.PlatformService, error) {
-	if s.contextWriteRepo == nil {
-		return nil, fmt.Errorf("catalog management is not available")
-	}
 	if err := normalizeAndValidateCatalogService(&svc); err != nil {
 		return nil, err
 	}
 
-	existing, err := s.contextRepo.GetPlatformServices(ctx)
+	existing, err := s.engine.Catalog.Entries(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read catalog: %w", err)
 	}
@@ -144,22 +118,35 @@ func (s *DefaultServiceService) AddPlatformService(ctx context.Context, svc mode
 		}
 	}
 
-	if err := s.validateVersionsInRegistry(ctx, svc); err != nil {
+	op, err := s.engine.DesiredState.CreateCatalogEntry(ctx, svc, engine.WriteOptions{})
+	if err := catalogWriteError(op, err); err != nil {
 		return nil, err
 	}
-
-	if err := s.contextWriteRepo.AddPlatformService(ctx, svc); err != nil {
-		return nil, err
-	}
-	s.contextRepo.Invalidate()
 	return &svc, nil
+}
+
+// catalogWriteError turns the answer to a catalog write into the error the
+// handlers map to a status code, nil when the write was accepted.
+func catalogWriteError(op engine.Operation, err error) error {
+	if err != nil {
+		return err
+	}
+	switch op.Outcome {
+	case engine.OutcomeAccepted:
+		return nil
+	case engine.OutcomeRejected:
+		rejected := &engine.RejectedError{Operation: op}
+		if rejected.HasCode(engine.CodeInvalidCatalogEntry) {
+			return fmt.Errorf("%w: %s", ErrCatalogValidation, rejected.Error())
+		}
+		return rejected
+	default:
+		return &engine.UnknownError{Operation: op}
+	}
 }
 
 // UpdatePlatformService validates and replaces an existing catalog service.
 func (s *DefaultServiceService) UpdatePlatformService(ctx context.Context, name string, svc models.PlatformService) (*models.PlatformService, error) {
-	if s.contextWriteRepo == nil {
-		return nil, fmt.Errorf("catalog management is not available")
-	}
 	svc.Name = name // the path is the source of truth for identity
 	if err := normalizeAndValidateCatalogService(&svc); err != nil {
 		return nil, err
@@ -169,35 +156,25 @@ func (s *DefaultServiceService) UpdatePlatformService(ctx context.Context, name 
 		return nil, err
 	}
 
-	if err := s.validateVersionsInRegistry(ctx, svc); err != nil {
+	op, err := s.engine.DesiredState.UpdateCatalogEntry(ctx, svc, engine.WriteOptions{})
+	if err := catalogWriteError(op, err); err != nil {
 		return nil, err
 	}
-
-	if err := s.contextWriteRepo.UpdatePlatformService(ctx, name, svc); err != nil {
-		return nil, err
-	}
-	s.contextRepo.Invalidate()
 	return &svc, nil
 }
 
 // RemovePlatformService removes a service from the catalog.
 func (s *DefaultServiceService) RemovePlatformService(ctx context.Context, name string) error {
-	if s.contextWriteRepo == nil {
-		return fmt.Errorf("catalog management is not available")
-	}
 	if _, err := s.findCatalogService(ctx, name); err != nil {
 		return err
 	}
-	if err := s.contextWriteRepo.RemovePlatformService(ctx, name); err != nil {
-		return err
-	}
-	s.contextRepo.Invalidate()
-	return nil
+	op, err := s.engine.DesiredState.DeleteCatalogEntry(ctx, name, engine.WriteOptions{})
+	return catalogWriteError(op, err)
 }
 
 // findCatalogService returns the catalog service by name or ErrCatalogServiceNotFound.
 func (s *DefaultServiceService) findCatalogService(ctx context.Context, name string) (*models.PlatformService, error) {
-	existing, err := s.contextRepo.GetPlatformServices(ctx)
+	existing, err := s.engine.Catalog.Entries(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read catalog: %w", err)
 	}
@@ -209,34 +186,6 @@ func (s *DefaultServiceService) findCatalogService(ctx context.Context, name str
 	return nil, fmt.Errorf("%w: %q", ErrCatalogServiceNotFound, name)
 }
 
-// validateVersionsInRegistry rejects versions that don't exist in the OCI registry
-// for the service's package. Strict: if the registry can't be queried (package not
-// published / unreachable), the service is rejected. Reuses the existing OCI tag
-// listing used by the read path.
-func (s *DefaultServiceService) validateVersionsInRegistry(ctx context.Context, svc models.PlatformService) error {
-	if s.schemaService == nil {
-		return nil
-	}
-	tags, err := s.schemaService.ListPackageTags(ctx, svc.Name, svc.Repository)
-	if err != nil {
-		return fmt.Errorf("%w: could not verify package %q in the registry (%v)", ErrCatalogValidation, svc.Name, err)
-	}
-	available := make(map[string]bool, len(tags))
-	for _, t := range tags {
-		available[t] = true
-	}
-	var missing []string
-	for _, v := range svc.Versions {
-		if !available[v] {
-			missing = append(missing, v)
-		}
-	}
-	if len(missing) > 0 {
-		return fmt.Errorf("%w: version(s) %v not found in the registry for %q (available: %v)", ErrCatalogValidation, missing, svc.Name, tags)
-	}
-	return nil
-}
-
 // normalizeAndValidateCatalogService enforces the catalog rules and fills the
 // default version when omitted. Returns an error wrapping ErrCatalogValidation.
 func normalizeAndValidateCatalogService(svc *models.PlatformService) error {
@@ -244,8 +193,14 @@ func normalizeAndValidateCatalogService(svc *models.PlatformService) error {
 	if svc.Name == "" {
 		return fmt.Errorf("%w: name is required", ErrCatalogValidation)
 	}
-	if !serviceNameRe.MatchString(svc.Name) {
-		return fmt.Errorf("%w: name %q must be a lowercase DNS-style identifier", ErrCatalogValidation, svc.Name)
+	if errs := validation.IsDNS1123Label(svc.Name); len(errs) > 0 {
+		return fmt.Errorf("%w: name %q must be a valid DNS-1123 label: %s", ErrCatalogValidation, svc.Name, errs[0])
+	}
+	svc.Repository = strings.TrimSpace(svc.Repository)
+	if svc.Repository != "" {
+		if strings.Contains(svc.Repository, "://") || strings.ContainsAny(svc.Repository, "@?# \t\r\n") {
+			return fmt.Errorf("%w: repository must be a bare OCI repository reference without scheme, credentials, query, fragment, or whitespace", ErrCatalogValidation)
+		}
 	}
 	svc.Category = strings.TrimSpace(svc.Category)
 	if svc.Category == "" {
@@ -288,18 +243,10 @@ func (s *DefaultServiceService) DeployService(ctx context.Context, project strin
 	}
 
 	if err := s.validateParameters(ctx, req.Service, deployTag, req.Parameters); err != nil {
-		return nil, fmt.Errorf("parameter validation failed: %w", err)
+		return nil, &ParameterError{err: err}
 	}
 
-	packageRepo, err := s.contextRepo.GetPackageRepository(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to resolve package repository: %w", err)
-	}
-	if svc.Repository != "" {
-		packageRepo = svc.Repository
-	}
-
-	ingressSuffix, err := s.contextRepo.GetIngressSuffix(ctx)
+	ingressSuffix, err := s.engine.PlatformConfig.IngressSuffix(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve ingress suffix: %w", err)
 	}
@@ -308,58 +255,100 @@ func (s *DefaultServiceService) DeployService(ctx context.Context, project strin
 	if instanceName == "" {
 		instanceName = req.Service
 	}
-	releaseName := fmt.Sprintf("%s-%s", project, instanceName)
-
-	release := &crd.Release{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: crd.ReleaseAPIVersion,
-			Kind:       crd.ReleaseKind,
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      releaseName,
-			Namespace: project,
-			Labels: map[string]string{
-				crd.LabelProject:      project,
-				crd.LabelService:      req.Service,
-				crd.LabelInstanceName: instanceName,
-			},
-		},
-		Spec: crd.ReleaseSpec{
-			Description: fmt.Sprintf("%s for project %s", req.Service, project),
-			Package: crd.ReleasePackage{
-				Repository: fmt.Sprintf("%s/%s", packageRepo, req.Service),
-				Tag:        deployTag,
-				Interval:   s.releaseInterval,
-				Timeout:    s.releaseTimeout,
-				Insecure:   insecureOCIHost(packageRepo, s.insecureRegistries),
-			},
-			Parameters: req.Parameters,
-			// No explicit Contexts. KuboCD merges Config.defaultContexts, then the
-			// optional Context named by Config.defaultNamespaceContexts looked up in
-			// this Release's namespace. A project overriding nothing needs no object.
-			TargetNamespace: project,
-			CreateNamespace: false,
-		},
+	desired := engine.Instance{
+		Ref:        engine.InstanceRef{Project: project, Name: instanceName},
+		Service:    req.Service,
+		Version:    deployTag,
+		Parameters: req.Parameters,
 	}
 
-	if err := s.releaseRepo.Create(ctx, project, release); err != nil {
+	op, err := s.engine.DesiredState.CreateInstance(ctx, desired, engine.WriteOptions{})
+	if err := writeError(op, err); err != nil {
 		return nil, err
 	}
+	if op.Instance == nil {
+		return submittedInstance(desired, op), nil
+	}
 
-	instance := releaseToInstance(release)
-	instance.URL = fmt.Sprintf("https://%s.%s", releaseName, ingressSuffix)
+	instance := baseInstance(*op.Instance)
+	instance.URL = fmt.Sprintf("https://%s.%s", op.Instance.EngineName, ingressSuffix)
+	instance.Operation = OperationOf(op)
 	return instance, nil
 }
 
+// ParameterError reports a failed parameter validation: parameters the
+// schema refuses, or a schema that could not be fetched.
+type ParameterError struct{ err error }
+
+func (e *ParameterError) Error() string { return "parameter validation failed: " + e.err.Error() }
+func (e *ParameterError) Unwrap() error { return e.err }
+
+// Rejection is the operation of a write refused because the schema refuses
+// its parameters. False when the validation could not run.
+func (e *ParameterError) Rejection() (engine.Operation, bool) {
+	var violation *schemaViolation
+	if !errors.As(e.err, &violation) {
+		return engine.Operation{}, false
+	}
+	return engine.Rejected(engine.CodeInvalidParameters, violation.Error()), true
+}
+
+// schemaViolation is a parameter set the service's schema refuses.
+type schemaViolation struct{ err error }
+
+func (e *schemaViolation) Error() string { return "invalid parameters: " + e.err.Error() }
+func (e *schemaViolation) Unwrap() error { return e.err }
+
+// OperationOf describes an engine operation in the API model.
+func OperationOf(op engine.Operation) *models.Operation {
+	out := &models.Operation{Outcome: string(op.Outcome), DesiredRevision: op.DesiredRevision}
+	for _, p := range op.Problems {
+		out.Problems = append(out.Problems, models.Problem{Code: p.Code, Field: p.Field, Message: p.Message})
+	}
+	return out
+}
+
+// writeError turns the answer to an instance write into an error, nil when
+// the write was accepted.
+func writeError(op engine.Operation, err error) error {
+	if err != nil {
+		return err
+	}
+	switch op.Outcome {
+	case engine.OutcomeAccepted:
+		return nil
+	case engine.OutcomeRejected:
+		return &engine.RejectedError{Operation: op}
+	default:
+		return &engine.UnknownError{Operation: op}
+	}
+}
+
+// submittedInstance describes an accepted write the engine has not described
+// back: what was asked, not yet observed.
+func submittedInstance(in engine.Instance, op engine.Operation) *models.ServiceInstance {
+	return &models.ServiceInstance{
+		Name:            in.Ref.Name,
+		Service:         in.Service,
+		ServiceTag:      in.Version,
+		Status:          LegacyStatus(engine.PhasePending),
+		TargetNamespace: in.Ref.Project,
+		Parameters:      in.Parameters,
+		Phase:           string(engine.PhasePending),
+		DesiredRevision: op.DesiredRevision,
+		Operation:       OperationOf(op),
+	}
+}
+
 func (s *DefaultServiceService) ListServices(ctx context.Context, project string) ([]models.ServiceInstance, error) {
-	releases, err := s.releaseRepo.List(ctx, project, project)
+	views, err := s.engine.Observer.ObserveInstances(ctx, project)
 	if err != nil {
 		return nil, err
 	}
 
 	var result []models.ServiceInstance
-	for i := range releases {
-		result = append(result, *releaseToInstance(&releases[i]))
+	for i := range views {
+		result = append(result, *baseInstance(views[i]))
 	}
 	s.enrichWithURL(ctx, result)
 	s.enrichWithPodHealth(ctx, result)
@@ -367,21 +356,23 @@ func (s *DefaultServiceService) ListServices(ctx context.Context, project string
 }
 
 func (s *DefaultServiceService) GetService(ctx context.Context, project, name string) (*models.ServiceInstance, error) {
-	releaseName := fmt.Sprintf("%s-%s", project, name)
-	release, err := s.releaseRepo.Get(ctx, project, releaseName)
+	view, err := s.engine.Observer.ObserveInstance(ctx, engine.InstanceRef{Project: project, Name: name})
 	if err != nil {
 		return nil, err
 	}
-	instance := releaseToInstance(release)
+	instance := baseInstance(view)
 	s.setURLIfExposed(ctx, instance)
 	instances := []models.ServiceInstance{*instance}
 	s.enrichWithPodHealth(ctx, instances)
 	instance.Status = instances[0].Status
+	instance.Phase = instances[0].Phase
 	// Only surface an explanatory message when the instance is not Ready: there
 	// is nothing useful to show on a healthy service, and scanning events has a
 	// non-trivial API cost per request.
 	if instance.Status != "Ready" {
-		instance.StatusMessage = s.latestWarningMessage(ctx, project, instance.ReleaseName)
+		if warn := s.latestWarningMessage(ctx, project, instance.ReleaseName); warn != "" {
+			instance.StatusMessage = warn
+		}
 	}
 	return instance, nil
 }
@@ -392,7 +383,7 @@ func (s *DefaultServiceService) latestWarningMessage(ctx context.Context, projec
 	if project == "" || releaseName == "" {
 		return ""
 	}
-	names, err := s.releaseInstanceNames(ctx, project, releaseName)
+	names, err := s.workloadNames(ctx, project, releaseName)
 	if err != nil {
 		logrus.WithError(err).Debugf("latestWarningMessage: instance names failed for %s", releaseName)
 		return ""
@@ -454,16 +445,27 @@ func truncateMessage(msg string) string {
 	return msg[:max] + "…"
 }
 
-func (s *DefaultServiceService) DeleteService(ctx context.Context, project, name string) error {
-	releaseName := fmt.Sprintf("%s-%s", project, name)
+func (s *DefaultServiceService) DeleteService(ctx context.Context, project, name, expectedRevision string) (*models.Operation, error) {
+	ref := engine.InstanceRef{Project: project, Name: name}
+	op, err := s.engine.DesiredState.DeleteInstance(ctx, ref, engine.WriteOptions{ExpectedRevision: expectedRevision})
+	if err := writeError(op, err); err != nil {
+		return nil, err
+	}
 
-	if err := s.releaseRepo.Delete(ctx, project, releaseName); err != nil {
-		return err
+	releaseName := s.engine.Observer.EngineName(ref)
+	if op.Instance != nil && op.Instance.EngineName != "" {
+		releaseName = op.Instance.EngineName
+	}
+	// With git persistence the deletion is only committed: the workloads still
+	// run until the engine applies it, and their volumes must outlive them.
+	if s.engine.Info.Persistence.Mode != engine.PersistenceKubernetes {
+		logrus.WithField("instance", releaseName).Info("Deletion committed, OIDC client and user resources are left in place")
+		return OperationOf(op), nil
 	}
 
 	s.cleanupOidcClient(ctx, releaseName)
 	s.cleanupUserResources(ctx, project, releaseName)
-	return nil
+	return nil, nil
 }
 
 // cleanupOidcClient best-effort unregisters the OIDC client of a deleted
@@ -518,7 +520,7 @@ func ownsByName(objectName, releaseName string, otherReleases []string) bool {
 // a prefix.
 func (s *DefaultServiceService) cleanupUserResources(ctx context.Context, namespace, releaseName string) {
 	// Called after the Release has been deleted, so this lists the neighbours.
-	survivors, err := s.releaseRepo.List(ctx, namespace, namespace)
+	survivors, err := s.engine.Observer.ObserveInstances(ctx, namespace)
 	if err != nil {
 		logrus.WithError(err).WithField("release", releaseName).
 			Error("Skipping user resource cleanup: cannot tell this release's objects from its neighbours'")
@@ -526,8 +528,8 @@ func (s *DefaultServiceService) cleanupUserResources(ctx context.Context, namesp
 	}
 	others := make([]string, 0, len(survivors))
 	for i := range survivors {
-		if survivors[i].Name != releaseName {
-			others = append(others, survivors[i].Name)
+		if survivors[i].EngineName != releaseName {
+			others = append(others, survivors[i].EngineName)
 		}
 	}
 
@@ -556,63 +558,108 @@ func (s *DefaultServiceService) cleanupUserResources(ctx context.Context, namesp
 	}
 }
 
-func (s *DefaultServiceService) WatchServices(ctx context.Context, project string) (watch.Interface, error) {
-	return s.releaseRepo.Watch(ctx, project, project)
+func (s *DefaultServiceService) WatchServices(ctx context.Context, project string) (<-chan ServiceEvent, error) {
+	events, err := s.engine.Observer.WatchInstances(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	out := make(chan ServiceEvent)
+	go func() {
+		defer close(out)
+		for event := range events {
+			instance := baseInstance(event.Instance)
+			// The stream sends no connections.
+			instance.Connections = nil
+			s.setURLIfExposed(ctx, instance)
+			s.enrichPodHealth(ctx, instance)
+			select {
+			case out <- ServiceEvent{Type: string(event.Type), Instance: *instance}:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return out, nil
 }
 
 // --- Catalog (self-service) ---
 
 func (s *DefaultServiceService) GetMenuCategories(ctx context.Context) ([]models.MenuCategory, error) {
-	return s.contextRepo.GetMenuCategories(ctx)
+	return s.engine.Catalog.Categories(ctx)
 }
 
 func (s *DefaultServiceService) GetIngressSuffix(ctx context.Context) (string, error) {
-	return s.contextRepo.GetIngressSuffix(ctx)
+	return s.engine.PlatformConfig.IngressSuffix(ctx)
 }
 
 func (s *DefaultServiceService) GetProfileImages(ctx context.Context) (map[string][]models.ProfileImage, error) {
-	return s.contextRepo.GetProfileImages(ctx)
+	return s.engine.PlatformConfig.ProfileImages(ctx)
 }
 
-func (s *DefaultServiceService) UpdateServiceParameters(ctx context.Context, project, name string, req models.ServiceUpdateRequest) (*models.ServiceInstance, error) {
-	releaseName := fmt.Sprintf("%s-%s", project, name)
-
-	release, err := s.releaseRepo.Get(ctx, project, releaseName)
-	if err != nil {
-		return nil, err
-	}
-
-	if req.Tag != "" {
-		release.Spec.Package.Tag = req.Tag
-	}
-
-	if req.Parameters != nil {
-		if release.Spec.Parameters == nil {
-			release.Spec.Parameters = make(map[string]any)
+// UpdateServiceParameters merges the submitted parameters into the current ones,
+// each top-level key replacing the stored one, validates the result against
+// the schema of the resulting version, and stores it. When expectedRevision is
+// empty, the write still checks the revision read and retries the read, merge
+// and validation on conflict so concurrent updates are never silently lost.
+func (s *DefaultServiceService) UpdateServiceParameters(ctx context.Context, project, name string, req models.ServiceUpdateRequest, expectedRevision string) (*models.ServiceInstance, error) {
+	const maxPatchCASAttempts = 5
+	ref := engine.InstanceRef{Project: project, Name: name}
+	for attempt := 0; ; attempt++ {
+		desired, revision, err := s.engine.DesiredState.GetInstance(ctx, ref)
+		if err != nil {
+			return nil, err
 		}
-		for k, v := range req.Parameters {
-			release.Spec.Parameters[k] = v
+		if expectedRevision != "" && expectedRevision != revision {
+			return nil, &engine.RejectedError{Operation: engine.Rejected(engine.CodeConflict,
+				fmt.Sprintf("instance %q changed since revision %s", name, expectedRevision))}
 		}
-	}
 
-	serviceName := release.Labels[crd.LabelService]
-	if err := s.validateParameters(ctx, serviceName, release.Spec.Package.Tag, release.Spec.Parameters); err != nil {
-		return nil, fmt.Errorf("parameter validation failed: %w", err)
-	}
+		if req.Tag != "" {
+			desired.Version = req.Tag
+		}
 
-	if err := s.releaseRepo.Update(ctx, project, release); err != nil {
-		return nil, fmt.Errorf("failed to update release: %w", err)
-	}
+		if req.Parameters != nil {
+			merged := make(map[string]any, len(desired.Parameters)+len(req.Parameters))
+			for k, v := range desired.Parameters {
+				merged[k] = v
+			}
+			for k, v := range req.Parameters {
+				merged[k] = v
+			}
+			desired.Parameters = merged
+		}
 
-	instance := releaseToInstance(release)
-	s.setURLIfExposed(ctx, instance)
-	return instance, nil
+		if err := s.validateParameters(ctx, desired.Service, desired.Version, desired.Parameters); err != nil {
+			return nil, &ParameterError{err: err}
+		}
+
+		writeRevision := expectedRevision
+		if writeRevision == "" {
+			writeRevision = revision
+		}
+		op, err := s.engine.DesiredState.UpdateInstance(ctx, desired, engine.WriteOptions{ExpectedRevision: writeRevision})
+		if err == nil && expectedRevision == "" && attempt < maxPatchCASAttempts-1 &&
+			op.Outcome == engine.OutcomeRejected && len(op.Problems) > 0 && op.Problems[0].Code == engine.CodeConflict {
+			continue
+		}
+		if err := writeError(op, err); err != nil {
+			return nil, err
+		}
+		if op.Instance == nil {
+			return submittedInstance(desired, op), nil
+		}
+
+		instance := baseInstance(*op.Instance)
+		s.setURLIfExposed(ctx, instance)
+		instance.Operation = OperationOf(op)
+		return instance, nil
+	}
 }
 
 // --- helpers ---
 
 func (s *DefaultServiceService) enrichWithURL(ctx context.Context, instances []models.ServiceInstance) {
-	suffix, err := s.contextRepo.GetIngressSuffix(ctx)
+	suffix, err := s.engine.PlatformConfig.IngressSuffix(ctx)
 	if err != nil {
 		return
 	}
@@ -631,7 +678,7 @@ func (s *DefaultServiceService) enrichWithURL(ctx context.Context, instances []m
 			hosts = s.namespaceIngressHosts(ctx, ns)
 			hostsByNS[ns] = hosts
 		}
-		names, err := s.releaseInstanceNames(ctx, ns, instances[i].ReleaseName)
+		names, err := s.workloadNames(ctx, ns, instances[i].ReleaseName)
 		if err != nil {
 			continue
 		}
@@ -649,11 +696,11 @@ func (s *DefaultServiceService) enrichWithURL(ctx context.Context, instances []m
 // routes to, the single-instance counterpart of enrichWithURL (see it for
 // the rationale).
 func (s *DefaultServiceService) setURLIfExposed(ctx context.Context, instance *models.ServiceInstance) {
-	suffix, err := s.contextRepo.GetIngressSuffix(ctx)
+	suffix, err := s.engine.PlatformConfig.IngressSuffix(ctx)
 	if err != nil || instance == nil || instance.TargetNamespace == "" {
 		return
 	}
-	names, err := s.releaseInstanceNames(ctx, instance.TargetNamespace, instance.ReleaseName)
+	names, err := s.workloadNames(ctx, instance.TargetNamespace, instance.ReleaseName)
 	if err != nil {
 		return
 	}
@@ -773,19 +820,16 @@ func (s *DefaultServiceService) enrichWithPodHealth(ctx context.Context, instanc
 			continue
 		}
 
-		names, err := s.releaseInstanceNames(ctx, ns, instances[i].ReleaseName)
+		names, err := s.workloadNames(ctx, ns, instances[i].ReleaseName)
 		if err != nil {
 			continue
 		}
-		instances[i].Status = s.checkPodHealth(pods, names, instances[i].Status)
+		markPodHealth(&instances[i], s.checkPodHealth(pods, names, instances[i].Status))
 	}
 }
 
-func (s *DefaultServiceService) EnrichURL(ctx context.Context, instance *models.ServiceInstance) {
-	s.setURLIfExposed(ctx, instance)
-}
-
-func (s *DefaultServiceService) EnrichPodHealth(ctx context.Context, instance *models.ServiceInstance) {
+// enrichPodHealth is the single-instance counterpart of enrichWithPodHealth.
+func (s *DefaultServiceService) enrichPodHealth(ctx context.Context, instance *models.ServiceInstance) {
 	if instance == nil || instance.Status != "Ready" || instance.TargetNamespace == "" {
 		return
 	}
@@ -794,11 +838,20 @@ func (s *DefaultServiceService) EnrichPodHealth(ctx context.Context, instance *m
 	if err != nil {
 		return
 	}
-	names, err := s.releaseInstanceNames(ctx, instance.TargetNamespace, instance.ReleaseName)
+	names, err := s.workloadNames(ctx, instance.TargetNamespace, instance.ReleaseName)
 	if err != nil {
 		return
 	}
-	instance.Status = s.checkPodHealth(podList.Items, names, instance.Status)
+	markPodHealth(instance, s.checkPodHealth(podList.Items, names, instance.Status))
+}
+
+// markPodHealth records the status the pods gave a Ready instance. A Ready
+// phase whose pods fail becomes Degraded.
+func markPodHealth(instance *models.ServiceInstance, status string) {
+	if status == "Error" && instance.Status == "Ready" && instance.Phase == string(engine.PhaseReady) {
+		instance.Phase = string(engine.PhaseDegraded)
+	}
+	instance.Status = status
 }
 
 func (s *DefaultServiceService) checkPodHealth(pods []unstructured.Unstructured, names []string, currentStatus string) string {
@@ -835,7 +888,7 @@ func (s *DefaultServiceService) checkPodHealth(pods []unstructured.Unstructured,
 }
 
 func (s *DefaultServiceService) resolvePlatformService(ctx context.Context, name string) (*models.PlatformService, error) {
-	services, err := s.contextRepo.GetPlatformServices(ctx)
+	services, err := s.engine.Catalog.Entries(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read platform services: %w", err)
 	}
@@ -848,36 +901,114 @@ func (s *DefaultServiceService) resolvePlatformService(ctx context.Context, name
 	return nil, fmt.Errorf("service %q is not available in the platform", name)
 }
 
+// parameterSchemaURL names the parameter schema of a package while it is compiled.
+const parameterSchemaURL = "mem://okdp/parameters.schema.json"
+
+// maxParameterRecursionDepth bounds nested parameter traversal when scanning
+// for embedded credentials.
+const maxParameterRecursionDepth = 64
+
+func checkParameterCredentials(params map[string]any) error {
+	if badPath, found := findEmbeddedCredentials("", params, 0); found {
+		return &schemaViolation{err: invalid("parameter %q must not contain embedded credentials", badPath)}
+	}
+	return nil
+}
+
+func findEmbeddedCredentials(path string, v any, depth int) (string, bool) {
+	if depth > maxParameterRecursionDepth {
+		return path, true
+	}
+	switch val := v.(type) {
+	case string:
+		if hasEmbeddedURLCredentials(val) {
+			return path, true
+		}
+	case map[string]any:
+		keys := make([]string, 0, len(val))
+		for k := range val {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			childPath := k
+			if path != "" {
+				childPath = path + "." + k
+			}
+			if bad, found := findEmbeddedCredentials(childPath, val[k], depth+1); found {
+				return bad, true
+			}
+		}
+	case map[string]string:
+		keys := make([]string, 0, len(val))
+		for k := range val {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			childPath := k
+			if path != "" {
+				childPath = path + "." + k
+			}
+			if hasEmbeddedURLCredentials(val[k]) {
+				return childPath, true
+			}
+		}
+	case []any:
+		for i, elem := range val {
+			childPath := fmt.Sprintf("%s[%d]", path, i)
+			if bad, found := findEmbeddedCredentials(childPath, elem, depth+1); found {
+				return bad, true
+			}
+		}
+	case []string:
+		for i, elem := range val {
+			if hasEmbeddedURLCredentials(elem) {
+				return fmt.Sprintf("%s[%d]", path, i), true
+			}
+		}
+	}
+	return "", false
+}
+
 func (s *DefaultServiceService) validateParameters(ctx context.Context, serviceName, tag string, params map[string]any) error {
-	if s.schemaService == nil {
-		return nil
+	if err := checkParameterCredentials(params); err != nil {
+		return err
 	}
 
-	schemaMap, err := s.schemaService.GetParameterSchema(ctx, serviceName, tag)
+	schemaMap, err := s.engine.Catalog.ParameterSchema(ctx, serviceName, tag)
 	if err != nil {
 		return fmt.Errorf("could not fetch schema for %s@%s: %w", serviceName, tag, err)
+	}
+	if len(schemaMap) == 0 {
+		return nil
 	}
 
 	schemaJSON, err := json.Marshal(schemaMap)
 	if err != nil {
-		return nil
+		logrus.WithError(err).Warn("Failed to marshal parameter schema JSON")
+		return fmt.Errorf("invalid parameter schema for %s@%s: failed to marshal schema: %w", serviceName, tag, err)
 	}
 
 	compiler := jsonschema.NewCompiler()
+	// No loader: a $ref outside the schema is never read, from disk or elsewhere.
+	compiler.UseLoader(jsonschema.SchemeURLLoader{})
 	schemaDoc, err := jsonschema.UnmarshalJSON(bytes.NewReader(schemaJSON))
 	if err != nil {
-		logrus.WithError(err).Warn("Failed to unmarshal schema JSON, skipping validation")
-		return nil
+		logrus.WithError(err).Warn("Failed to unmarshal parameter schema JSON")
+		return fmt.Errorf("invalid parameter schema for %s@%s: failed to unmarshal schema: %w", serviceName, tag, err)
 	}
-	if err := compiler.AddResource("schema.json", schemaDoc); err != nil {
-		logrus.WithError(err).Warn("Failed to add schema resource, skipping validation")
-		return nil
+	// An absolute URL: a relative one is resolved against the server's working
+	// directory, which then shows in every validation message.
+	if err := compiler.AddResource(parameterSchemaURL, schemaDoc); err != nil {
+		logrus.WithError(err).Warn("Failed to add parameter schema resource")
+		return fmt.Errorf("invalid parameter schema for %s@%s: failed to load schema resource: %w", serviceName, tag, err)
 	}
 
-	sch, err := compiler.Compile("schema.json")
+	sch, err := compiler.Compile(parameterSchemaURL)
 	if err != nil {
-		logrus.WithError(err).Warn("Failed to compile schema, skipping validation")
-		return nil
+		logrus.WithError(err).Warn("Failed to compile parameter schema")
+		return fmt.Errorf("invalid parameter schema for %s@%s: failed to compile schema: %w", serviceName, tag, err)
 	}
 
 	paramsJSON, err := json.Marshal(params)
@@ -891,7 +1022,7 @@ func (s *DefaultServiceService) validateParameters(ctx context.Context, serviceN
 	}
 
 	if err := sch.Validate(paramsAny); err != nil {
-		return fmt.Errorf("invalid parameters: %w", err)
+		return &schemaViolation{err: err}
 	}
 	return nil
 }
@@ -907,34 +1038,18 @@ func (s *DefaultServiceService) isInfraSidecar(containerName string) bool {
 	return false
 }
 
-func (s *DefaultServiceService) releaseInstanceNames(ctx context.Context, project, releaseName string) ([]string, error) {
-	release, err := s.releaseRepo.Get(ctx, project, releaseName)
+// workloadNames lists the app.kubernetes.io/instance values of what the
+// instance stored as releaseName runs.
+func (s *DefaultServiceService) workloadNames(ctx context.Context, namespace, releaseName string) ([]string, error) {
+	workloads, err := s.engine.Observer.Workloads(ctx, namespace, releaseName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get release: %w", err)
+		return nil, err
 	}
-
-	helmReleases, err := s.k8sClient.Resource(crd.GetHelmReleaseGVR()).Namespace(project).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to list helm releases: %w", err)
-	}
-
-	var names []string
-	for _, hr := range helmReleases.Items {
-		for _, ref := range hr.GetOwnerReferences() {
-			if ref.UID == release.UID {
-				names = append(names, hr.GetName())
-				break
-			}
-		}
-	}
-	if len(names) == 0 {
-		return nil, fmt.Errorf("no helm release owned by %s", releaseName)
-	}
-	return names, nil
+	return workloads.Names, nil
 }
 
 func (s *DefaultServiceService) releaseInstanceSelector(ctx context.Context, project, releaseName string) (string, error) {
-	names, err := s.releaseInstanceNames(ctx, project, releaseName)
+	names, err := s.workloadNames(ctx, project, releaseName)
 	if err != nil {
 		return "", err
 	}
@@ -951,7 +1066,7 @@ func matchesInstance(name string, instanceNames []string) bool {
 }
 
 func (s *DefaultServiceService) ListPods(ctx context.Context, project, serviceName string) ([]models.Pod, error) {
-	releaseName := fmt.Sprintf("%s-%s", project, serviceName)
+	releaseName := s.engine.Observer.EngineName(engine.InstanceRef{Project: project, Name: serviceName})
 
 	selector, err := s.releaseInstanceSelector(ctx, project, releaseName)
 	if err != nil {
@@ -1051,36 +1166,68 @@ func (s *DefaultServiceService) unstructuredToPod(u *unstructured.Unstructured) 
 	return pod
 }
 
-func releaseToInstance(r *crd.Release) *models.ServiceInstance {
-	status := models.MapPhaseToStatus(r.Status.Phase)
-
-	serviceName := r.Labels[crd.LabelService]
-	instanceName := r.Labels[crd.LabelInstanceName]
-	if instanceName == "" {
-		instanceName = serviceName
+// baseInstance describes an observed instance in the API model.
+func baseInstance(v engine.InstanceView) *models.ServiceInstance {
+	createdAt := ""
+	if !v.CreatedAt.IsZero() {
+		createdAt = v.CreatedAt.Format(time.RFC3339)
 	}
 
-	createdAt := ""
-	if !r.CreationTimestamp.IsZero() {
-		createdAt = r.CreationTimestamp.Format(time.RFC3339)
+	phase := observedPhase(v.Status)
+	statusMessage := ""
+	if phase != engine.PhaseReady {
+		statusMessage = truncateMessage(v.Status.Message)
 	}
 
 	return &models.ServiceInstance{
-		Name:            instanceName,
-		ReleaseName:     r.Name,
-		Service:         serviceName,
-		ServiceTag:      r.Spec.Package.Tag,
-		Status:          status,
-		TargetNamespace: r.Spec.TargetNamespace,
-		Roles:           r.Status.Roles,
-		Parameters:      r.Spec.Parameters,
-		Connections:     boundConnections(r),
-		CreatedAt:       createdAt,
+		Name:              v.Ref.Name,
+		ReleaseName:       v.EngineName,
+		Service:           v.Service,
+		ServiceTag:        v.Version,
+		Status:            LegacyStatus(v.Status.Phase),
+		StatusMessage:     statusMessage,
+		TargetNamespace:   v.TargetNamespace,
+		Roles:             v.Roles,
+		Parameters:        v.Parameters,
+		Connections:       boundConnections(v.Bindings),
+		CreatedAt:         createdAt,
+		Phase:             string(phase),
+		DesiredRevision:   v.Status.DesiredRevision,
+		PublishedRevision: v.Status.PublishedRevision,
+		AppliedRevision:   v.Status.AppliedRevision,
 	}
 }
 
-// boundConnections describes what a release is wired to, from what the
-// controller published.
+// observedPhase is the phase an instance shows: Deleting once its deletion is
+// requested, Unknown when the engine reported none.
+func observedPhase(status engine.InstanceStatus) engine.Phase {
+	switch {
+	case status.Deleting:
+		return engine.PhaseDeleting
+	case status.Phase == "":
+		return engine.PhaseUnknown
+	default:
+		return status.Phase
+	}
+}
+
+// LegacyStatus is the value of ServiceInstance.Status for a phase: Ready,
+// Error and Updating keep their name, every other phase reads Installing.
+func LegacyStatus(phase engine.Phase) string {
+	switch phase {
+	case engine.PhaseReady:
+		return "Ready"
+	case engine.PhaseError, engine.PhaseDegraded:
+		return "Error"
+	case engine.PhaseUpdating:
+		return "Updating"
+	default:
+		return "Installing"
+	}
+}
+
+// boundConnections describes what an instance is wired to, from the bindings
+// the engine reported: the resolved ones first, then every watched candidate.
 //
 // The two lists do not mean what their names suggest. A connectionRef with no
 // kind resolves by looking on both sides, so watchedInputConnections holds
@@ -1090,29 +1237,33 @@ func releaseToInstance(r *crd.Release) *models.ServiceInstance {
 // ClusterConnection that never existed. Candidates are therefore grouped by
 // name: a name that resolved shows once, resolved. A name that resolved nowhere
 // shows once, waiting, which is the case a reader opens this page for.
-func boundConnections(r *crd.Release) []models.ServiceConnection {
+func boundConnections(bindings []engine.ConnectionBinding) []models.ServiceConnection {
 	byName := map[string]models.ServiceConnection{}
-	order := make([]string, 0, len(r.Status.WatchedInputConnections))
+	order := make([]string, 0, len(bindings))
 
-	remember := func(ref crd.InputConnectionReference, resolved bool) {
+	remember := func(ref engine.ConnectionBinding, resolved bool) {
 		current, seen := byName[ref.Name]
 		if !seen {
 			order = append(order, ref.Name)
 		}
+		// The state is the furthest any candidate of the name reached.
+		state := ref.State
+		if seen && engine.ConnectionState(current.State).Rank() > state.Rank() {
+			state = engine.ConnectionState(current.State)
+		}
 		// A resolved candidate always wins over a pending one.
 		if seen && current.Resolved {
+			current.State = string(state)
+			byName[ref.Name] = current
 			return
 		}
 		byName[ref.Name] = models.ServiceConnection{
-			Name: ref.Name, Namespace: ref.Namespace, Kind: ref.Kind, Resolved: resolved,
+			Name: ref.Name, Namespace: ref.Namespace, Kind: ref.Kind, Resolved: resolved, State: string(state),
 		}
 	}
 
-	for _, ref := range r.Status.EffectiveInputConnections {
-		remember(ref, true)
-	}
-	for _, ref := range r.Status.WatchedInputConnections {
-		remember(ref, false)
+	for _, binding := range bindings {
+		remember(binding, binding.Bound)
 	}
 
 	if len(order) == 0 {
@@ -1144,7 +1295,7 @@ func (s *DefaultServiceService) GetProjectMetrics(ctx context.Context, project s
 
 	metrics := make(map[string]*models.ServiceMetrics, len(instances))
 	for _, inst := range instances {
-		names, err := s.releaseInstanceNames(ctx, project, inst.ReleaseName)
+		names, err := s.workloadNames(ctx, project, inst.ReleaseName)
 		if err != nil {
 			continue
 		}
@@ -1274,7 +1425,7 @@ func buildServiceMetrics(pods []unstructured.Unstructured, metricsByPod map[stri
 }
 
 func (s *DefaultServiceService) GetServiceMetrics(ctx context.Context, project, serviceName string) (*models.ServiceMetrics, error) {
-	releaseName := fmt.Sprintf("%s-%s", project, serviceName)
+	releaseName := s.engine.Observer.EngineName(engine.InstanceRef{Project: project, Name: serviceName})
 
 	selector, err := s.releaseInstanceSelector(ctx, project, releaseName)
 	if err != nil {

@@ -2,7 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
+	"net"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -55,6 +60,12 @@ func main() {
 		FullTimestamp: true,
 	})
 
+	engineCfg, err := loadEngineConfig(cfg.EngineType, os.LookupEnv)
+	if err != nil {
+		logrus.Fatalf("Invalid deployment engine configuration: %v", err)
+	}
+	logrus.WithField("engine", cfg.EngineType).Info("Deployment engine configuration accepted")
+
 	// Initialize Kubernetes Clients
 	k8sClient, err := repository.InitK8sClient()
 	if err != nil {
@@ -71,15 +82,34 @@ func main() {
 		logrus.Fatalf("Failed to initialize Kubernetes discovery client: %v", err)
 	}
 
-	// Initialize Project stack (projects are Kubernetes Namespaces
-	// carrying the label okdp.io/project)
-	projectRepo := repository.NewProjectRepository(k8sTypedClient)
-	contextWriterRepo := repository.NewContextWriterRepository(k8sClient, cfg.ContextName, cfg.ContextNamespace)
-	projectService := service.NewDefaultProjectService(projectRepo)
+	appCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	platformRef := repository.ContextRef{Name: cfg.PlatformContextName, Namespace: cfg.PlatformContextNamespace}
+	controlPlaneRef := repository.ContextRef{Name: cfg.ControlPlaneContextName, Namespace: cfg.ControlPlaneContextNamespace}
+
+	// The stores of the desired state: the cluster, or git with a sync tool
+	// applying the branch.
+	state, err := buildDesiredState(appCtx, clients{dynamic: k8sClient, typed: k8sTypedClient, discovery: k8sDiscoveryClient}, stateOptions{
+		engine:             engineCfg.kubocd,
+		platform:           platformRef,
+		controlPlane:       controlPlaneRef,
+		insecureRegistries: cfg.InsecureOCIRegistries,
+		registryAuthFile:   cfg.RegistryAuthFile,
+	})
+	if err != nil {
+		logrus.Fatalf("Failed to initialize the desired state: %v", err)
+	}
+	logrus.WithField("persistence", engineCfg.kubocd.Persistence.Mode).Info("Desired state stores ready")
+	state.start(appCtx)
+
+	// Initialize Project stack (projects are Kubernetes Namespaces carrying
+	// the label okdp.io/project, committed to git in git mode)
+	projectService := service.NewDefaultProjectService(state.projects)
 	projectHandler := handlers.NewProjectHandler(projectService)
 
 	// Context repository (shared by capabilities, catalog and Spark)
-	contextRepo := repository.NewContextRepository(k8sClient, cfg.ContextName, cfg.ContextNamespace)
+	contextRepo := state.context
 
 	// Initialize Identity stack. The namespace is read per call from the Context,
 	// and the discovery client tells whether the kubauth CRDs are there at all.
@@ -97,33 +127,30 @@ func main() {
 	identityService := service.NewDefaultIdentityService(identityRepo)
 	identityHandler := handlers.NewIdentityHandler(identityService)
 
-	// Initialize Capabilities stack (platform features derived from the Context).
-	// Built after the identity repository: the identity capability answers on
-	// the same two conditions as the routes, the configured provider and the
-	// CRDs actually being served.
-	capabilityService := service.NewDefaultCapabilityService(contextRepo, identityRepo.Available)
-	capabilitiesHandler := handlers.NewCapabilitiesHandler(capabilityService)
-
 	// Initialize SecretStore stack (namespace is dynamic per project)
-	secretStoreRepo := repository.NewSecretStoreRepository(k8sClient, k8sDiscoveryClient)
-	secretStoreService := service.NewDefaultSecretStoreService(secretStoreRepo)
+	secretStoreService := service.NewDefaultSecretStoreService(state.secretStores)
 	secretStoreHandler := handlers.NewSecretStoreHandler(secretStoreService)
 
 	// Initialize ExternalSecret stack (namespace is dynamic per project)
-	externalSecretRepo := repository.NewExternalSecretRepository(k8sClient, k8sDiscoveryClient)
-	externalSecretService := service.NewDefaultExternalSecretService(externalSecretRepo, secretStoreRepo)
+	externalSecretService := service.NewDefaultExternalSecretService(state.externalSecrets, state.secretStores)
 	externalSecretHandler := handlers.NewExternalSecretHandler(externalSecretService)
 
-	// Initialize Service stack (KuboCD Releases + Context-driven catalog)
+	// Deployment engine: KuboCD Releases, catalog and platform settings
 	serviceRepo := repository.NewServiceRepository(k8sClient)
-	schemaService := service.NewDefaultPackageSchemaService(contextRepo)
-	schemaService.SetInsecureRegistries(cfg.InsecureOCIRegistries)
-	schemaService.SetRegistryAuthFile(cfg.RegistryAuthFile)
+	deploymentEngine := state.engine
+
+	// Initialize Capabilities stack (platform features derived from the Context,
+	// and the deployment engine). Built after the identity repository: the
+	// identity capability answers on the same two conditions as the routes, the
+	// configured provider and the CRDs actually being served.
+	capabilityService := service.NewDefaultCapabilityService(contextRepo, identityRepo.Available, deploymentEngine.Info)
+	capabilitiesHandler := handlers.NewCapabilitiesHandler(capabilityService)
+
+	// Initialize Service stack (instances through the engine, pods and metrics from the cluster)
 	// OIDC client provisioning (backend selected per call from the Context)
 	oidcProvisioner := provisioning.NewContextSelector(contextRepo, k8sClient)
-	serviceService := service.NewDefaultServiceService(serviceRepo, contextRepo, contextWriterRepo, schemaService, oidcProvisioner, k8sClient, k8sTypedClient, cfg.ContextNamespace, cfg.ReleaseInterval, cfg.ReleaseTimeout, cfg.ExcludedSidecarPrefixes)
-	serviceService.SetInsecureRegistries(cfg.InsecureOCIRegistries)
-	serviceHandler := handlers.NewServiceHandler(serviceService, schemaService)
+	serviceService := service.NewDefaultServiceService(deploymentEngine, oidcProvisioner, k8sClient, k8sTypedClient, cfg.ExcludedSidecarPrefixes)
+	serviceHandler := handlers.NewServiceHandler(serviceService, deploymentEngine.Catalog)
 
 	// Initialize Spark stack (SparkApplication CRUD)
 	sparkRepo := repository.NewSparkAppRepository(k8sClient)
@@ -137,8 +164,7 @@ func main() {
 	if err != nil {
 		logrus.Fatalf("Failed to load the contract catalog: %v", err)
 	}
-	connectionRepo := repository.NewConnectionRepository(k8sClient, k8sTypedClient, k8sDiscoveryClient)
-	connectionService := service.NewDefaultConnectionService(connectionRepo, serviceRepo, contractCatalog)
+	connectionService := service.NewDefaultConnectionService(state.connections, serviceRepo, contractCatalog)
 	connectionHandler := handlers.NewConnectionHandler(connectionService)
 
 	// The identity block is checked once, at startup, against what the cluster
@@ -146,11 +172,11 @@ func main() {
 	// cluster without kubauth would deploy services whose OIDC client is never
 	// created, and fail much later at the point of authenticating a user, with
 	// nothing pointing back here.
-	checkIdentityConfiguration(context.Background(), contextRepo, identityRepo)
+	checkIdentityConfiguration(appCtx, contextRepo, identityRepo)
 
-	verifier := buildTokenVerifier(context.Background(), cfg, contextRepo)
+	verifier := buildTokenVerifier(appCtx, cfg, contextRepo)
 
-	r := router.SetupRouter(cfg, verifier, capabilitiesHandler, projectHandler, identityHandler, secretStoreHandler, externalSecretHandler, serviceHandler, sparkHandler, connectionHandler)
+	r := router.SetupRouter(cfg, verifier, appCtx, capabilitiesHandler, projectHandler, identityHandler, secretStoreHandler, externalSecretHandler, serviceHandler, sparkHandler, connectionHandler)
 
 	// Start Server
 	//
@@ -160,7 +186,10 @@ func main() {
 	//
 	// WriteTimeout stays unset on purpose. Three routes stream Server-Sent
 	// Events (projects, services, spark apps), and a write deadline would cut
-	// them mid-flight, which is exactly what they are for.
+	// them mid-flight, which is exactly what they are for. Only those streaming
+	// routes derive from appCtx (via router middleware), so a stop signal ends
+	// SSE streams immediately while in-flight REST writes (such as git pushes)
+	// keep their request context and drain cleanly during server.Shutdown.
 	server := &http.Server{
 		Addr:              ":" + cfg.ServerPort,
 		Handler:           r,
@@ -168,10 +197,44 @@ func main() {
 		IdleTimeout:       120 * time.Second,
 	}
 
-	logrus.WithField("port", cfg.ServerPort).Info("Starting server")
-	if err := server.ListenAndServe(); err != nil {
-		logrus.Fatalf("Failed to start server: %v", err)
+	listener, err := net.Listen("tcp", server.Addr)
+	if err != nil {
+		logrus.Fatalf("Failed to listen on %s: %v", server.Addr, err)
 	}
+	logrus.WithField("port", cfg.ServerPort).Info("Starting server")
+	serveErr := serve(appCtx, server, listener, shutdownTimeout)
+	stop()
+	state.wait()
+	if serveErr != nil {
+		logrus.Fatalf("Server stopped: %v", serveErr)
+	}
+	logrus.Info("Server stopped")
+}
+
+const shutdownTimeout = 35 * time.Second
+
+// serve runs server on listener until ctx ends, then shuts it down, waiting
+// timeout at most for the requests in flight before closing them.
+func serve(ctx context.Context, server *http.Server, listener net.Listener, timeout time.Duration) error {
+	failed := make(chan error, 1)
+	go func() {
+		if err := server.Serve(listener); !errors.Is(err, http.ErrServerClosed) {
+			failed <- err
+		}
+		close(failed)
+	}()
+	select {
+	case err := <-failed:
+		return err
+	case <-ctx.Done():
+	}
+	shutdown, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if err := server.Shutdown(shutdown); err != nil {
+		logrus.WithError(err).Warn("Requests still running at shutdown, closing them")
+		_ = server.Close()
+	}
+	return <-failed
 }
 
 // checkIdentityConfiguration fails fast on an identity block that cannot hold,

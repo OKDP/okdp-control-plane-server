@@ -1,6 +1,8 @@
 package router
 
 import (
+	"context"
+
 	"github.com/gin-gonic/gin"
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
@@ -13,8 +15,19 @@ import (
 
 // SetupRouter initializes the Gin router and defines routes. A nil verifier
 // serves the API without token verification, which only AUTH_DISABLED produces.
-func SetupRouter(cfg *config.Config, verifier auth.Verifier, capabilitiesHandler *handlers.CapabilitiesHandler, projectHandler *handlers.ProjectHandler, identityHandler *handlers.IdentityHandler, secretStoreHandler *handlers.SecretStoreHandler, externalSecretHandler *handlers.ExternalSecretHandler, serviceHandler *handlers.ServiceHandler, sparkHandler *handlers.SparkHandler, connectionHandler *handlers.ConnectionHandler) *gin.Engine {
+// sseCtx cancels long-lived SSE streams immediately on server shutdown while
+// leaving regular REST requests free to finish within http.Server.Shutdown.
+func SetupRouter(cfg *config.Config, verifier auth.Verifier, sseCtx context.Context, capabilitiesHandler *handlers.CapabilitiesHandler, projectHandler *handlers.ProjectHandler, identityHandler *handlers.IdentityHandler, secretStoreHandler *handlers.SecretStoreHandler, externalSecretHandler *handlers.ExternalSecretHandler, serviceHandler *handlers.ServiceHandler, sparkHandler *handlers.SparkHandler, connectionHandler *handlers.ConnectionHandler) *gin.Engine {
 	r := gin.New() // Use New() to skip default logger/recovery (we add them manually)
+
+	sse := streamShutdownMiddleware(sseCtx)
+	followStream := func(c *gin.Context) {
+		if c.Query("follow") == "true" {
+			sse(c)
+			return
+		}
+		c.Next()
+	}
 
 	// Middleware
 	r.Use(middleware.RequestLogger())
@@ -42,7 +55,7 @@ func SetupRouter(cfg *config.Config, verifier auth.Verifier, capabilitiesHandler
 
 		// Projects (backed by Kubernetes Namespaces)
 		api.GET("/projects", projectHandler.ListProjects)
-		api.GET("/projects/stream", projectHandler.StreamProjects)
+		api.GET("/projects/stream", sse, projectHandler.StreamProjects)
 		api.POST("/projects", projectHandler.CreateProject)
 		api.GET("/projects/:name", projectHandler.GetProject)
 		api.PUT("/projects/:name", projectHandler.UpdateProject)
@@ -145,13 +158,13 @@ func SetupRouter(cfg *config.Config, verifier auth.Verifier, capabilitiesHandler
 		services := api.Group("/projects/:name/services", requireProject)
 		{
 			services.GET("", serviceHandler.ListServices)
-			services.GET("/stream", serviceHandler.StreamServices)
+			services.GET("/stream", sse, serviceHandler.StreamServices)
 			services.POST("", serviceHandler.DeployService)
 			services.GET("/:serviceName", serviceHandler.GetService)
 			services.PATCH("/:serviceName/parameters", serviceHandler.UpdateServiceParameters)
 			services.DELETE("/:serviceName", serviceHandler.DeleteService)
 			services.GET("/:serviceName/pods", serviceHandler.ListPods)
-			services.GET("/:serviceName/pods/:podName/logs", serviceHandler.GetPodLogs)
+			services.GET("/:serviceName/pods/:podName/logs", followStream, serviceHandler.GetPodLogs)
 			services.GET("/:serviceName/metrics", serviceHandler.GetServiceMetrics)
 		}
 		api.GET("/projects/:name/metrics", requireProject, serviceHandler.GetProjectMetrics)
@@ -164,13 +177,13 @@ func SetupRouter(cfg *config.Config, verifier auth.Verifier, capabilitiesHandler
 		sparkApps := api.Group("/projects/:name/spark-apps", requireProject)
 		{
 			sparkApps.GET("", sparkHandler.ListSparkApps)
-			sparkApps.GET("/stream", sparkHandler.StreamSparkApps)
+			sparkApps.GET("/stream", sse, sparkHandler.StreamSparkApps)
 			sparkApps.POST("", sparkHandler.SubmitSparkApp)
 			sparkApps.POST("/yaml", sparkHandler.SubmitSparkAppYAML)
 			sparkApps.GET("/:appName", sparkHandler.GetSparkApp)
 			sparkApps.PUT("/:appName", sparkHandler.UpdateSparkApp)
 			sparkApps.DELETE("/:appName", sparkHandler.DeleteSparkApp)
-			sparkApps.GET("/:appName/logs", sparkHandler.GetSparkAppLogs)
+			sparkApps.GET("/:appName/logs", followStream, sparkHandler.GetSparkAppLogs)
 			sparkApps.GET("/:appName/ui", sparkHandler.GetSparkUI)
 		}
 	}
@@ -182,7 +195,7 @@ func corsMiddleware(cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Writer.Header().Set("Access-Control-Allow-Origin", cfg.AllowedOrigins)
 		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
-		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With")
+		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With, If-Match")
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE, PATCH")
 
 		if c.Request.Method == "OPTIONS" {
@@ -190,6 +203,24 @@ func corsMiddleware(cfg *config.Config) gin.HandlerFunc {
 			return
 		}
 
+		c.Next()
+	}
+}
+
+// streamShutdownMiddleware ties a streaming request's context to shutdownCtx
+// so SSE connections end immediately on SIGTERM without cancelling regular
+// REST requests in flight.
+func streamShutdownMiddleware(shutdownCtx context.Context) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if shutdownCtx == nil {
+			c.Next()
+			return
+		}
+		ctx, cancel := context.WithCancel(c.Request.Context())
+		defer cancel()
+		stop := context.AfterFunc(shutdownCtx, cancel)
+		defer stop()
+		c.Request = c.Request.WithContext(ctx)
 		c.Next()
 	}
 }

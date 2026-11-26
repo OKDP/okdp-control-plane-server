@@ -74,6 +74,20 @@ type ServiceInstance struct {
 	// for, never what it runs against.
 	Connections []ServiceConnection `json:"connections,omitempty"`
 	CreatedAt   string              `json:"createdAt,omitempty"`
+	// Phase is the state in the vocabulary every deployment engine shares:
+	// Pending (accepted, not acted on yet), Installing, Updating, Ready,
+	// Degraded (ready but its pods fail), Error, Suspended, Deleting, or
+	// Unknown (could not be observed). Status keeps its own four values.
+	Phase string `json:"phase"`
+	// The three revisions are opaque and empty when the engine cannot tell.
+	// DesiredRevision is the stored desired state (KuboCD: the Release
+	// generation, git: the commit), PublishedRevision what a build step made of
+	// it, AppliedRevision what the engine proved it applied.
+	DesiredRevision   string `json:"desiredRevision"`
+	PublishedRevision string `json:"publishedRevision,omitempty"`
+	AppliedRevision   string `json:"appliedRevision"`
+	// Operation is set on the answer to a write only.
+	Operation *Operation `json:"operation,omitempty"`
 }
 
 // ServiceConnection is one connection a deployed service is bound to.
@@ -85,4 +99,17 @@ type ServiceConnection struct {
 	Kind string `json:"kind"`
 	// Resolved is false while the release is still waiting for it.
 	Resolved bool `json:"resolved"`
+	// State is how far the connection got: declared (exists, declared by a
+	// user), published (exists, published by the service providing it), bound
+	// (the service is bound to it) or ready (bound, and its provider is
+	// ready). Absent when the connection does not exist or the engine cannot
+	// tell. Of several candidates of one name, the furthest one counts.
+	State string `json:"state,omitempty"`
+}
+
+// ServiceVersions lists the versions of a catalog service and the one
+// deployed by default.
+type ServiceVersions struct {
+	Versions []string `json:"versions"`
+	Default  string   `json:"default"`
 }

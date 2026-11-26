@@ -2,11 +2,27 @@ package service
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/okdp/okdp-control-plane-server/internal/models"
 	"github.com/okdp/okdp-control-plane-server/internal/repository"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/watch"
 )
+
+// maxProjectDescriptionBytes bounds the okdp.io/description annotation written
+// to Kubernetes Namespaces and Git manifests.
+const maxProjectDescriptionBytes = 4096
+
+func validateProject(project *models.Project) error {
+	if project == nil {
+		return apierrors.NewBadRequest("project is required")
+	}
+	if len(project.Description) > maxProjectDescriptionBytes {
+		return apierrors.NewBadRequest(fmt.Sprintf("project description must be at most %d bytes", maxProjectDescriptionBytes))
+	}
+	return nil
+}
 
 // ProjectService defines the business logic for projects
 type ProjectService interface {
@@ -45,12 +61,18 @@ func (s *DefaultProjectService) GetProject(ctx context.Context, name string) (*m
 // so a project that overrides nothing needs no object at all. A project that
 // does override something declares its own Context, and it survives.
 func (s *DefaultProjectService) CreateProject(ctx context.Context, project *models.Project) error {
+	if err := validateProject(project); err != nil {
+		return err
+	}
 	return s.repo.Create(ctx, project)
 }
 
 // UpdateProject updates a project's mutable metadata (its description) on the
 // backing Namespace.
 func (s *DefaultProjectService) UpdateProject(ctx context.Context, project *models.Project) (*models.Project, error) {
+	if err := validateProject(project); err != nil {
+		return nil, err
+	}
 	return s.repo.Update(ctx, project)
 }
 

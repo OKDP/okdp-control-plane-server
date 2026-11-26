@@ -2,10 +2,15 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/okdp/okdp-control-plane-server/internal/models"
 	"github.com/okdp/okdp-control-plane-server/internal/service"
@@ -58,5 +63,27 @@ func TestListSelectableToleratesAMissingContract(t *testing.T) {
 	}
 	if spy.contract != "" {
 		t.Errorf("contract = %q, want empty", spy.contract)
+	}
+}
+
+type conflictingUpdate struct {
+	service.ConnectionService
+}
+
+func (conflictingUpdate) Update(context.Context, string, string, models.ConnectionRequest) (*models.ConnectionResponse, error) {
+	return nil, apierrors.NewConflict(schema.GroupResource{Group: "kubocd.kubotal.io", Resource: "connections"}, "warehouse", errors.New("changed since revision abc"))
+}
+
+func TestAConnectionChangedSinceItWasReadIsAConflict(t *testing.T) {
+	engine := gin.New()
+	engine.PUT("/api/projects/:name/connections/:connName", NewConnectionHandler(conflictingUpdate{}).UpdateConnection)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/projects/demo/connections/warehouse", strings.NewReader(`{"name":"warehouse","type":"database-server","values":{}}`))
+	req.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	engine.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409: %s", recorder.Code, recorder.Body.String())
 	}
 }

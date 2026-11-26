@@ -12,13 +12,21 @@ type Config struct {
 	AllowedOrigins    string
 	LogLevel          string
 	KuboCDNamespace   string
-	ContextName       string
-	ContextNamespace  string // empty: the namespace the server runs in
-	// The platform Context, the one package templates also read. Empty means it
-	// is the same object as the Control Plane one, which is what a deployment
-	// that has not split them yet looks like.
-	ReleaseInterval         string
-	ReleaseTimeout          string
+	// ControlPlaneContextName and ControlPlaneContextNamespace name the Control
+	// Plane Context, which holds the service catalog.
+	ControlPlaneContextName      string
+	ControlPlaneContextNamespace string // defaults to ownNamespace()
+	// PlatformContextName and PlatformContextNamespace name the platform
+	// Context, holding shared infrastructure settings supplied to KuboCD
+	// packages (ingress, OIDC, identity). The server only reads it. When both
+	// name the same object as the Control Plane Context in kubernetes mode,
+	// that single object holds both infrastructure settings and the service
+	// catalog.
+	PlatformContextName      string
+	PlatformContextNamespace string // defaults to ControlPlaneContextNamespace
+	// EngineType selects the deployment engine (ENGINE_TYPE). The engine reads
+	// and validates its own section.
+	EngineType              string
 	ExcludedSidecarPrefixes []string
 	// InsecureOCIRegistries lists registry hosts reached over plain HTTP
 	// a development-sandbox affordance for local registries without TLS.
@@ -39,21 +47,28 @@ type OIDCConfig struct {
 	Disabled bool
 }
 
+// DefaultEngineType is the engine of a server configured with no ENGINE_TYPE.
+const DefaultEngineType = "kubocd"
+
 const defaultSidecarPrefixes = "istio-proxy,istio-init,dynatrace-,linkerd-proxy,envoy,vault-agent"
 
 // Load returns the configuration loaded from environment variables or defaults
 func Load() (*Config, error) {
+	legacyContextName := strings.TrimSpace(getEnv("CONTEXT_NAME", ""))
+	legacyContextNamespace := strings.TrimSpace(getEnv("CONTEXT_NAMESPACE", ""))
+
 	cfg := &Config{
-		ServerPort:        getEnv("PORT", "8093"),
-		PlatformNamespace: getEnv("PLATFORM_NAMESPACE", "okdp-system"),
-		AllowedOrigins:    getEnv("ALLOWED_ORIGINS", "http://localhost:4200"),
-		LogLevel:          getEnv("LOG_LEVEL", "info"),
-		KuboCDNamespace:   getEnv("KUBOCD_NAMESPACE", "kubocd-system"),
-		ContextName:       getEnv("CONTEXT_NAME", "platform"),
-		ContextNamespace:  getEnv("CONTEXT_NAMESPACE", ""),
-		ReleaseInterval:   getEnv("RELEASE_INTERVAL", "30m"),
-		ReleaseTimeout:    getEnv("RELEASE_TIMEOUT", "10m"),
-		RegistryAuthFile:  getEnv("REGISTRY_AUTH_FILE", ""),
+		ServerPort:                   getEnv("PORT", "8093"),
+		PlatformNamespace:            getEnv("PLATFORM_NAMESPACE", "okdp-system"),
+		AllowedOrigins:               getEnv("ALLOWED_ORIGINS", "http://localhost:4200"),
+		LogLevel:                     getEnv("LOG_LEVEL", "info"),
+		KuboCDNamespace:              getEnv("KUBOCD_NAMESPACE", "kubocd-system"),
+		ControlPlaneContextName:      strings.TrimSpace(getEnv("CONTROL_PLANE_CONTEXT_NAME", "")),
+		ControlPlaneContextNamespace: strings.TrimSpace(getEnv("CONTROL_PLANE_CONTEXT_NAMESPACE", "")),
+		PlatformContextName:          strings.TrimSpace(getEnv("PLATFORM_CONTEXT_NAME", "")),
+		PlatformContextNamespace:     strings.TrimSpace(getEnv("PLATFORM_CONTEXT_NAMESPACE", "")),
+		EngineType:                   strings.TrimSpace(getEnv("ENGINE_TYPE", "")),
+		RegistryAuthFile:             getEnv("REGISTRY_AUTH_FILE", ""),
 		OIDC: OIDCConfig{
 			Issuer:   strings.TrimSpace(getEnv("OIDC_ISSUER", "")),
 			ClientID: strings.TrimSpace(getEnv("OIDC_CLIENT_ID", "")),
@@ -61,8 +76,31 @@ func Load() (*Config, error) {
 		},
 	}
 
-	if cfg.ContextNamespace == "" {
-		cfg.ContextNamespace = ownNamespace()
+	if cfg.EngineType == "" {
+		cfg.EngineType = DefaultEngineType
+	}
+
+	if cfg.ControlPlaneContextName == "" {
+		cfg.ControlPlaneContextName = "control-plane"
+	}
+	if cfg.ControlPlaneContextNamespace == "" {
+		cfg.ControlPlaneContextNamespace = legacyContextNamespace
+	}
+	if cfg.ControlPlaneContextNamespace == "" {
+		cfg.ControlPlaneContextNamespace = ownNamespace()
+	}
+
+	if cfg.PlatformContextName == "" {
+		cfg.PlatformContextName = legacyContextName
+	}
+	if cfg.PlatformContextName == "" {
+		cfg.PlatformContextName = "platform"
+	}
+	if cfg.PlatformContextNamespace == "" {
+		cfg.PlatformContextNamespace = legacyContextNamespace
+	}
+	if cfg.PlatformContextNamespace == "" {
+		cfg.PlatformContextNamespace = cfg.ControlPlaneContextNamespace
 	}
 
 	for _, h := range strings.Split(getEnv("INSECURE_OCI_REGISTRIES", ""), ",") {
@@ -97,7 +135,7 @@ func ownNamespace() string {
 			return ns
 		}
 	}
-	if ns := os.Getenv("POD_NAMESPACE"); ns != "" {
+	if ns := strings.TrimSpace(os.Getenv("POD_NAMESPACE")); ns != "" {
 		return ns
 	}
 	return "okdp-system"

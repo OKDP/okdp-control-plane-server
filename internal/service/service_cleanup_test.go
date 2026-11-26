@@ -3,7 +3,7 @@ package service
 import (
 	"testing"
 
-	"github.com/okdp/okdp-control-plane-server/internal/repository/crd"
+	"github.com/okdp/okdp-control-plane-server/internal/engine"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -52,21 +52,14 @@ func TestOwnsByNameIgnoresShorterNeighbours(t *testing.T) {
 // Listing them raw showed "demo-db (ClusterConnection) waiting" beside the
 // Connection that had resolved, for a ClusterConnection that never existed.
 func TestBoundConnectionsGroupsTheCandidatesOfOneName(t *testing.T) {
-	release := &crd.Release{
-		Status: crd.ReleaseStatus{
-			WatchedInputConnections: []crd.InputConnectionReference{
-				{Kind: "ClusterConnection", Name: "demo-db"},
-				{Kind: "Connection", Name: "demo-db", Namespace: "demo"},
-				{Kind: "ClusterConnection", Name: "shared-cache"},
-				{Kind: "Connection", Name: "shared-cache", Namespace: "demo"},
-			},
-			EffectiveInputConnections: []crd.InputConnectionReference{
-				{Kind: "Connection", Name: "demo-db", Namespace: "demo"},
-			},
-		},
-	}
-
-	connections := boundConnections(release)
+	// As the engine reports them: the resolved candidates, then every watched one.
+	connections := boundConnections([]engine.ConnectionBinding{
+		{Kind: "Connection", Name: "demo-db", Namespace: "demo", Bound: true},
+		{Kind: "ClusterConnection", Name: "demo-db"},
+		{Kind: "Connection", Name: "demo-db", Namespace: "demo"},
+		{Kind: "ClusterConnection", Name: "shared-cache"},
+		{Kind: "Connection", Name: "shared-cache", Namespace: "demo"},
+	})
 
 	require.Len(t, connections, 2, "one entry per name, not one per candidate")
 	assert.Equal(t, "demo-db", connections[0].Name)
@@ -75,4 +68,32 @@ func TestBoundConnectionsGroupsTheCandidatesOfOneName(t *testing.T) {
 	// Nothing of that name resolved anywhere: the service is waiting for it.
 	assert.Equal(t, "shared-cache", connections[1].Name)
 	assert.False(t, connections[1].Resolved)
+}
+
+func TestTheStateOfANameIsTheFurthestOfItsCandidates(t *testing.T) {
+	for name, bindings := range map[string][]engine.ConnectionBinding{
+		"bound first": {
+			{Kind: "Connection", Name: "pg", Namespace: "demo", Bound: true, State: engine.ConnectionBound},
+			{Kind: "ClusterConnection", Name: "pg", Bound: true, State: engine.ConnectionReady},
+		},
+		"ready first": {
+			{Kind: "ClusterConnection", Name: "pg", Bound: true, State: engine.ConnectionReady},
+			{Kind: "Connection", Name: "pg", Namespace: "demo", Bound: true, State: engine.ConnectionBound},
+		},
+		"waiting, one candidate exists": {
+			{Kind: "Connection", Name: "pg", Namespace: "demo", State: engine.ConnectionDeclared},
+			{Kind: "ClusterConnection", Name: "pg"},
+		},
+	} {
+		connections := boundConnections(bindings)
+		require.Len(t, connections, 1, name)
+		want := engine.ConnectionReady
+		if name == "waiting, one candidate exists" {
+			want = engine.ConnectionDeclared
+			assert.Equal(t, "ClusterConnection", connections[0].Kind, name+": the last waiting candidate is shown, as before")
+		} else {
+			assert.Equal(t, bindings[0].Kind, connections[0].Kind, name+": the first resolved candidate is shown, as before")
+		}
+		assert.Equal(t, string(want), connections[0].State, name)
+	}
 }
