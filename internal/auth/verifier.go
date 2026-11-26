@@ -26,6 +26,7 @@ type Verifier interface {
 type Identity struct {
 	Subject  string
 	Username string
+	Email    string
 }
 
 // Config describes the identity provider to trust.
@@ -101,7 +102,7 @@ func (v *oidcVerifier) Verify(ctx context.Context, rawToken string) (*Identity, 
 	if username == "" {
 		username = claims.Email
 	}
-	return &Identity{Subject: token.Subject, Username: username}, nil
+	return &Identity{Subject: token.Subject, Username: username, Email: claims.Email}, nil
 }
 
 // ResolveIssuer prefers the environment override, then what the platform

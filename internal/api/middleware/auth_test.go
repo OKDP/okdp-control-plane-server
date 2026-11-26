@@ -99,3 +99,17 @@ func TestCallerIdentityIsSetOnAnAuthenticatedRequest(t *testing.T) {
 
 	assert.JSONEq(t, `{"username":"alice"}`, response.Body.String())
 }
+
+func TestTheRequestContextCarriesTheCallerIdentity(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(RequireAuthentication(stubVerifier{accepted: "good"}))
+	r.GET("/api/whoami", func(c *gin.Context) {
+		identity := auth.FromContext(c.Request.Context())
+		c.JSON(http.StatusOK, gin.H{"username": identity.Username, "subject": identity.Subject})
+	})
+
+	response := call(r, http.MethodGet, "/api/whoami", "Bearer good")
+
+	assert.JSONEq(t, `{"username":"alice","subject":"e5a0-1234"}`, response.Body.String())
+}
