@@ -2,6 +2,8 @@ basePath: /
 definitions:
   models.Capabilities:
     properties:
+      engine:
+        $ref: '#/definitions/models.EngineCapability'
       identity:
         $ref: '#/definitions/models.IdentityCapability'
       oidcProvisioning:
@@ -252,6 +254,28 @@ definitions:
           behave differently on edit and on delete, so the panel says which it is.
         type: boolean
     type: object
+  models.EngineCapability:
+    properties:
+      name:
+        description: Name is for display only ("kubocd").
+        type: string
+      renderedValues:
+        description: RenderedValues reports that the values rendered for an instance
+          can be shown.
+        type: boolean
+      suspend:
+        description: Suspend reports that an instance can be suspended from the console.
+        type: boolean
+    type: object
+  models.ErrorResponse:
+    properties:
+      code:
+        type: string
+      error:
+        type: string
+      operation:
+        $ref: '#/definitions/models.Operation'
+    type: object
   models.ExecutorDefaults:
     properties:
       cores:
@@ -485,6 +509,25 @@ definitions:
           "kubauth" or "keycloak".
         type: string
     type: object
+  models.Operation:
+    properties:
+      desiredRevision:
+        description: |-
+          DesiredRevision is the revision the write produced, empty when the
+          engine has none.
+        type: string
+      outcome:
+        type: string
+      problems:
+        items:
+          $ref: '#/definitions/models.Problem'
+        type: array
+    type: object
+  models.OperationResponse:
+    properties:
+      operation:
+        $ref: '#/definitions/models.Operation'
+    type: object
   models.PackageInput:
     properties:
       alias:
@@ -565,6 +608,15 @@ definitions:
       restarts:
         type: integer
       status:
+        type: string
+    type: object
+  models.Problem:
+    properties:
+      code:
+        type: string
+      field:
+        type: string
+      message:
         type: string
     type: object
   models.ProfileImage:
@@ -733,9 +785,19 @@ definitions:
       resolved:
         description: Resolved is false while the release is still waiting for it.
         type: boolean
+      state:
+        description: |-
+          State is how far the connection got: declared (exists, declared by a
+          user), published (exists, published by the service providing it), bound
+          (the service is bound to it) or ready (bound, and its provider is
+          ready). Absent when the connection does not exist or the engine cannot
+          tell. Of several candidates of one name, the furthest one counts.
+        type: string
     type: object
   models.ServiceInstance:
     properties:
+      appliedRevision:
+        type: string
       connections:
         description: |-
           Connections is what the release actually resolved, published by the
@@ -746,11 +808,31 @@ definitions:
         type: array
       createdAt:
         type: string
+      desiredRevision:
+        description: |-
+          The three revisions are opaque and empty when the engine cannot tell.
+          DesiredRevision is the stored desired state (KuboCD: the Release
+          generation, git: the commit), PublishedRevision what a build step made of
+          it, AppliedRevision what the engine proved it applied.
+        type: string
       name:
         type: string
+      operation:
+        allOf:
+        - $ref: '#/definitions/models.Operation'
+        description: Operation is set on the answer to a write only.
       parameters:
         additionalProperties: {}
         type: object
+      phase:
+        description: |-
+          Phase is the state in the vocabulary every deployment engine shares:
+          Pending (accepted, not acted on yet), Installing, Updating, Ready,
+          Degraded (ready but its pods fail), Error, Suspended, Deleting, or
+          Unknown (could not be observed). Status keeps its own four values.
+        type: string
+      publishedRevision:
+        type: string
       releaseName:
         type: string
       roles:
@@ -798,6 +880,15 @@ definitions:
         type: object
       tag:
         type: string
+    type: object
+  models.ServiceVersions:
+    properties:
+      default:
+        type: string
+      versions:
+        items:
+          type: string
+        type: array
     type: object
   models.SparkAppInstance:
     properties:
@@ -997,15 +1088,6 @@ definitions:
     - server
     - version
     type: object
-  service.ServiceVersionsResponse:
-    properties:
-      default:
-        type: string
-      versions:
-        items:
-          type: string
-        type: array
-    type: object
 host: localhost:8093
 info:
   contact:
@@ -1023,7 +1105,8 @@ paths:
   /api/capabilities:
     get:
       description: Capabilities the platform is configured with (identity provider,
-        user management, OIDC client provisioning), so the UI can adapt
+        user management, OIDC client provisioning, deployment engine), so the UI can
+        adapt
       produces:
       - application/json
       responses:
@@ -1031,6 +1114,12 @@ paths:
           description: OK
           schema:
             $ref: '#/definitions/models.Capabilities'
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
       summary: Get platform capabilities
       tags:
       - capabilities
@@ -1067,6 +1156,10 @@ paths:
             additionalProperties:
               type: string
             type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
       summary: List console navigation categories
       tags:
       - platform-services
@@ -1089,14 +1182,18 @@ paths:
             additionalProperties:
               type: string
             type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
       summary: List available platform services
       tags:
       - platform-services
     post:
       consumes:
       - application/json
-      description: Expose a new managed service in the catalog (writes the default
-        KuboCD Context)
+      description: Expose a new managed service in the catalog (writes the Control
+        Plane Context)
       parameters:
       - description: Catalog service
         in: body
@@ -1120,22 +1217,28 @@ paths:
         "409":
           description: Conflict
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/models.ErrorResponse'
         "500":
           description: Internal Server Error
           schema:
             additionalProperties:
               type: string
             type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "504":
+          description: Gateway Timeout
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
       summary: Add a service to the catalog
       tags:
       - platform-services
   /api/platform-services/{serviceName}:
     delete:
-      description: Remove an exposed service from the catalog (writes the default
-        KuboCD Context)
+      description: Remove an exposed service from the catalog (writes the Control
+        Plane Context)
       parameters:
       - description: Service name
         in: path
@@ -1153,20 +1256,32 @@ paths:
             additionalProperties:
               type: string
             type: object
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
         "500":
           description: Internal Server Error
           schema:
             additionalProperties:
               type: string
             type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "504":
+          description: Gateway Timeout
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
       summary: Remove a catalog service
       tags:
       - platform-services
     put:
       consumes:
       - application/json
-      description: Update an exposed service (versions, default, description, icon,
-        category)
+      description: Update an exposed service in the Control Plane Context (versions,
+        default, description, icon, category)
       parameters:
       - description: Service name
         in: path
@@ -1198,12 +1313,24 @@ paths:
             additionalProperties:
               type: string
             type: object
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
         "500":
           description: Internal Server Error
           schema:
             additionalProperties:
               type: string
             type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "504":
+          description: Gateway Timeout
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
       summary: Update a catalog service
       tags:
       - platform-services
@@ -1228,6 +1355,16 @@ paths:
             items:
               $ref: '#/definitions/models.PackageInput'
             type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
       summary: Connections a service's package declares it needs
       tags:
       - platform-services
@@ -1265,12 +1402,17 @@ paths:
             additionalProperties:
               type: string
             type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
       summary: Get JSON Schema for a platform service
       tags:
       - platform-services
   /api/platform-services/{serviceName}/versions:
     get:
-      description: Returns the list of versions declared in the KuboCD Context CR
+      description: Returns the list of versions declared in the Control Plane Context
+        CR
       parameters:
       - description: Service name
         in: path
@@ -1283,13 +1425,17 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/service.ServiceVersionsResponse'
+            $ref: '#/definitions/models.ServiceVersions'
         "500":
           description: Internal Server Error
           schema:
             additionalProperties:
               type: string
             type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
       summary: List available versions for a platform service
       tags:
       - platform-services
@@ -1337,6 +1483,10 @@ paths:
             additionalProperties:
               type: string
             type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
       summary: List all projects
       tags:
       - projects
@@ -1364,12 +1514,24 @@ paths:
             additionalProperties:
               type: string
             type: object
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
         "500":
           description: Internal Server Error
           schema:
             additionalProperties:
               type: string
             type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "504":
+          description: Gateway Timeout
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
       summary: Create a project
       tags:
       - projects
@@ -1389,18 +1551,36 @@ paths:
       responses:
         "204":
           description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
         "404":
           description: Not Found
           schema:
             additionalProperties:
               type: string
             type: object
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
         "500":
           description: Internal Server Error
           schema:
             additionalProperties:
               type: string
             type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "504":
+          description: Gateway Timeout
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
       summary: Delete a project
       tags:
       - projects
@@ -1421,6 +1601,12 @@ paths:
           description: OK
           schema:
             $ref: '#/definitions/models.Project'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
         "404":
           description: Project not found
           schema:
@@ -1433,6 +1619,10 @@ paths:
             additionalProperties:
               type: string
             type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
       summary: Get a project
       tags:
       - projects
@@ -1471,12 +1661,24 @@ paths:
             additionalProperties:
               type: string
             type: object
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
         "500":
           description: Internal Server Error
           schema:
             additionalProperties:
               type: string
             type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "504":
+          description: Gateway Timeout
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
       summary: Update a project
       tags:
       - projects
@@ -1505,6 +1707,10 @@ paths:
             additionalProperties:
               type: string
             type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
       summary: List the external connections of a project
       tags:
       - connections
@@ -1541,6 +1747,10 @@ paths:
         "409":
           description: Conflict
           schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
             additionalProperties:
               type: string
             type: object
@@ -1550,6 +1760,14 @@ paths:
             additionalProperties:
               type: string
             type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "504":
+          description: Gateway Timeout
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
       summary: Create an external connection in a project
       tags:
       - connections
@@ -1578,12 +1796,30 @@ paths:
             additionalProperties:
               type: string
             type: object
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
         "501":
           description: Not Implemented
           schema:
             additionalProperties:
               type: string
             type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "504":
+          description: Gateway Timeout
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
       summary: Delete an external connection of a project
       tags:
       - connections
@@ -1626,12 +1862,30 @@ paths:
             additionalProperties:
               type: string
             type: object
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
         "501":
           description: Not Implemented
           schema:
             additionalProperties:
               type: string
             type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "504":
+          description: Gateway Timeout
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
       summary: Update an external connection of a project
       tags:
       - connections
@@ -1657,6 +1911,12 @@ paths:
             items:
               $ref: '#/definitions/models.ConnectionConsumer'
             type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
       summary: Services of the project bound to a connection
       tags:
       - connections
@@ -1685,6 +1945,10 @@ paths:
             additionalProperties:
               type: string
             type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
       summary: List the internal connections of a project
       tags:
       - connections
@@ -1709,6 +1973,16 @@ paths:
             items:
               $ref: '#/definitions/models.SelectableConnection'
             type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
       summary: Connections offered for a package input of a given contract
       tags:
       - connections
@@ -1799,13 +2073,18 @@ paths:
             additionalProperties:
               type: string
             type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
       summary: List deployed services for a project
       tags:
       - services
     post:
       consumes:
       - application/json
-      description: Deploy a managed platform service into a project
+      description: Deploy a managed platform service into a project. The answer carries
+        the engine's operation.
       parameters:
       - description: Project name
         in: path
@@ -1828,27 +2107,32 @@ paths:
         "400":
           description: Bad Request
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/models.ErrorResponse'
         "409":
           description: Conflict
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/models.ErrorResponse'
         "500":
           description: Internal Server Error
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/models.ErrorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "504":
+          description: Gateway Timeout
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
       summary: Deploy a platform service
       tags:
       - services
   /api/projects/{name}/services/{serviceName}:
     delete:
-      description: Remove a deployed service from a project
+      description: Remove a deployed service from a project. With If-Match, the deletion
+        is refused with 409 unless the instance is still at that desired revision.
+        204 when the deletion is done, 202 with the operation when it is accepted
+        and applied later.
       parameters:
       - description: Project name
         in: path
@@ -1860,23 +2144,43 @@ paths:
         name: serviceName
         required: true
         type: string
+      - description: Desired revision the deletion expects
+        in: header
+        name: If-Match
+        type: string
       produces:
       - application/json
       responses:
+        "202":
+          description: Accepted
+          schema:
+            $ref: '#/definitions/models.OperationResponse'
         "204":
           description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
         "404":
           description: Not Found
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/models.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
         "500":
           description: Internal Server Error
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/models.ErrorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "504":
+          description: Gateway Timeout
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
       summary: Delete a deployed service
       tags:
       - services
@@ -1903,15 +2207,15 @@ paths:
         "404":
           description: Not Found
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/models.ErrorResponse'
         "500":
           description: Internal Server Error
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/models.ErrorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
       summary: Get a deployed service
       tags:
       - services
@@ -1951,7 +2255,9 @@ paths:
       consumes:
       - application/json
       description: Merge new parameters and optionally update the package version
-        of a deployed service
+        of a deployed service. With If-Match, the update is refused with 409 unless
+        the instance is still at that desired revision. The answer carries the engine's
+        operation.
       parameters:
       - description: Project name
         in: path
@@ -1962,6 +2268,10 @@ paths:
         in: path
         name: serviceName
         required: true
+        type: string
+      - description: Desired revision the update expects
+        in: header
+        name: If-Match
         type: string
       - description: Update request (tag and/or parameters)
         in: body
@@ -1979,21 +2289,27 @@ paths:
         "400":
           description: Bad Request
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/models.ErrorResponse'
         "404":
           description: Not Found
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/models.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
         "500":
           description: Internal Server Error
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/models.ErrorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "504":
+          description: Gateway Timeout
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
       summary: Update service parameters and/or version
       tags:
       - services
@@ -2473,6 +2789,10 @@ paths:
             additionalProperties:
               type: string
             type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
       summary: List external secrets for a project
       tags:
       - external-secrets
@@ -2515,15 +2835,21 @@ paths:
         "409":
           description: Conflict
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/models.ErrorResponse'
         "500":
           description: Internal Server Error
           schema:
             additionalProperties:
               type: string
             type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "504":
+          description: Gateway Timeout
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
       summary: Create an external secret
       tags:
       - external-secrets
@@ -2555,12 +2881,24 @@ paths:
             additionalProperties:
               type: string
             type: object
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
         "500":
           description: Internal Server Error
           schema:
             additionalProperties:
               type: string
             type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "504":
+          description: Gateway Timeout
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
       summary: Delete an external secret
       tags:
       - external-secrets
@@ -2605,12 +2943,24 @@ paths:
             additionalProperties:
               type: string
             type: object
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
         "500":
           description: Internal Server Error
           schema:
             additionalProperties:
               type: string
             type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "504":
+          description: Gateway Timeout
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
       summary: Update an external secret
       tags:
       - external-secrets
@@ -2650,6 +3000,10 @@ paths:
             additionalProperties:
               type: string
             type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
       summary: Get external secret status
       tags:
       - external-secrets
@@ -2673,12 +3027,22 @@ paths:
             items:
               $ref: '#/definitions/models.SecretStoreResponse'
             type: array
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
         "500":
           description: Internal Server Error
           schema:
             additionalProperties:
               type: string
             type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
       summary: List secret stores for a project
       tags:
       - secret-stores
@@ -2715,15 +3079,21 @@ paths:
         "409":
           description: Conflict
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/models.ErrorResponse'
         "500":
           description: Internal Server Error
           schema:
             additionalProperties:
               type: string
             type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "504":
+          description: Gateway Timeout
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
       summary: Create a secret store
       tags:
       - secret-stores
@@ -2748,18 +3118,36 @@ paths:
       responses:
         "204":
           description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
         "404":
           description: Not Found
           schema:
             additionalProperties:
               type: string
             type: object
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
         "500":
           description: Internal Server Error
           schema:
             additionalProperties:
               type: string
             type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "504":
+          description: Gateway Timeout
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
       summary: Delete a secret store
       tags:
       - secret-stores
@@ -2803,12 +3191,24 @@ paths:
             additionalProperties:
               type: string
             type: object
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
         "500":
           description: Internal Server Error
           schema:
             additionalProperties:
               type: string
             type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "504":
+          description: Gateway Timeout
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
       summary: Update a secret store
       tags:
       - secret-stores
@@ -2847,6 +3247,10 @@ paths:
             additionalProperties:
               type: string
             type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
       summary: Get secret store status
       tags:
       - secret-stores
@@ -2899,6 +3303,10 @@ paths:
             additionalProperties:
               type: string
             type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
       summary: Stream project updates
       tags:
       - projects
