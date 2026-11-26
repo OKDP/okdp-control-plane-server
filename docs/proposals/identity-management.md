@@ -112,6 +112,9 @@ hard-coding an issuer and client at build time. `identity.oidc` is omitted when 
 does not set both `authority` and `clientId`. The UI then falls back to its build-time
 configuration, which keeps existing deployments working.
 
+The route also describes the deployment engine in `engine`, see
+[deployment-engine.md](deployment-engine.md).
+
 ### 3.4 What the Identity API is (and is not)
 
 The Identity API stays **openly kubauth-specific**. No neutral users/groups abstraction

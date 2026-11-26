@@ -47,6 +47,7 @@ func (h *ConnectionHandler) GetContracts(c *gin.Context) {
 // @Param        name path string true "Project name (= Kubernetes namespace)"
 // @Success      200  {array}   models.ConnectionResponse
 // @Failure      500  {object}  map[string]string
+// @Failure      503  {object}  models.ErrorResponse
 // @Router       /api/projects/{name}/connections [get]
 func (h *ConnectionHandler) ListConnections(c *gin.Context) {
 	h.list(c, projectNamespace(c))
@@ -55,6 +56,9 @@ func (h *ConnectionHandler) ListConnections(c *gin.Context) {
 func (h *ConnectionHandler) list(c *gin.Context, namespace string) {
 	connections, err := h.service.List(c.Request.Context(), namespace)
 	if err != nil {
+		if respondStorageError(c, err) {
+			return
+		}
 		logrus.WithError(err).Error("Failed to list connections")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -69,6 +73,8 @@ func (h *ConnectionHandler) list(c *gin.Context, namespace string) {
 // @Param        name path string true "Project name"
 // @Param        contract query string false "Contract the connections must satisfy"
 // @Success      200 {array} models.SelectableConnection
+// @Failure      500 {object} map[string]string
+// @Failure      503 {object} models.ErrorResponse
 // @Router       /api/projects/{name}/connections/selectable [get]
 func (h *ConnectionHandler) ListSelectable(c *gin.Context) {
 	project := c.Param("name")
@@ -76,6 +82,9 @@ func (h *ConnectionHandler) ListSelectable(c *gin.Context) {
 
 	connections, err := h.service.ListSelectable(c.Request.Context(), project, contract)
 	if err != nil {
+		if respondStorageError(c, err) {
+			return
+		}
 		logrus.WithError(err).WithField("project", project).Error("Failed to list selectable connections")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list selectable connections"})
 		return
@@ -90,6 +99,7 @@ func (h *ConnectionHandler) ListSelectable(c *gin.Context) {
 // @Param        name path string true "Project name"
 // @Param        connName path string true "Connection name"
 // @Success      200 {array} models.ConnectionConsumer
+// @Failure      500 {object} map[string]string
 // @Router       /api/projects/{name}/connections/{connName}/consumers [get]
 func (h *ConnectionHandler) ListConsumers(c *gin.Context) {
 	project := c.Param("name")
@@ -112,10 +122,14 @@ func (h *ConnectionHandler) ListConsumers(c *gin.Context) {
 // @Param        name path string true "Project name (= Kubernetes namespace)"
 // @Success      200  {array}   models.InternalConnection
 // @Failure      500  {object}  map[string]string
+// @Failure      503  {object}  models.ErrorResponse
 // @Router       /api/projects/{name}/connections/internal [get]
 func (h *ConnectionHandler) ListInternalConnections(c *gin.Context) {
 	connections, err := h.service.ListInternal(c.Request.Context(), projectNamespace(c))
 	if err != nil {
+		if respondStorageError(c, err) {
+			return
+		}
 		logrus.WithError(err).Error("Failed to list internal connections")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -133,8 +147,11 @@ func (h *ConnectionHandler) ListInternalConnections(c *gin.Context) {
 // @Param        request body models.ConnectionRequest true "Connection"
 // @Success      201  {object}  models.ConnectionResponse
 // @Failure      400  {object}  map[string]string
-// @Failure      409  {object}  map[string]string
+// @Failure      409  {object}  models.ErrorResponse
+// @Failure      500  {object}  map[string]string
 // @Failure      501  {object}  map[string]string
+// @Failure      503  {object}  models.ErrorResponse
+// @Failure      504  {object}  models.ErrorResponse
 // @Router       /api/projects/{name}/connections [post]
 func (h *ConnectionHandler) CreateConnection(c *gin.Context) {
 	h.create(c, projectNamespace(c))
@@ -172,7 +189,11 @@ func (h *ConnectionHandler) create(c *gin.Context, namespace string) {
 // @Success      200  {object}  models.ConnectionResponse
 // @Failure      400  {object}  map[string]string
 // @Failure      404  {object}  map[string]string
+// @Failure      409  {object}  models.ErrorResponse
+// @Failure      500  {object}  map[string]string
 // @Failure      501  {object}  map[string]string
+// @Failure      503  {object}  models.ErrorResponse
+// @Failure      504  {object}  models.ErrorResponse
 // @Router       /api/projects/{name}/connections/{connName} [put]
 func (h *ConnectionHandler) UpdateConnection(c *gin.Context) {
 	h.update(c, projectNamespace(c))
@@ -202,7 +223,11 @@ func (h *ConnectionHandler) update(c *gin.Context, namespace string) {
 // @Param        connName path string true "Connection name"
 // @Success      204
 // @Failure      404  {object}  map[string]string
+// @Failure      409  {object}  models.ErrorResponse
+// @Failure      500  {object}  map[string]string
 // @Failure      501  {object}  map[string]string
+// @Failure      503  {object}  models.ErrorResponse
+// @Failure      504  {object}  models.ErrorResponse
 // @Router       /api/projects/{name}/connections/{connName} [delete]
 func (h *ConnectionHandler) DeleteConnection(c *gin.Context) {
 	h.delete(c, projectNamespace(c))
@@ -244,16 +269,21 @@ func (h *ConnectionHandler) test(c *gin.Context) {
 
 // writeError maps a service error to the status that describes it: a missing
 // CRD is a capability the platform does not have yet (501), rejected input is
-// the caller's problem (400), and anything else is ours (500).
+// the caller's problem (400), a connection changed since it was read or
+// already there is a conflict (409), a write whose outcome is unknown is a
+// timeout (504), and anything else is ours (500).
 func (h *ConnectionHandler) writeError(c *gin.Context, err error, logMessage string) {
 	switch {
 	case errors.Is(err, service.ErrConnectionsUnavailable):
 		c.JSON(http.StatusNotImplemented, gin.H{"error": err.Error()})
 	case apierrors.IsNotFound(err):
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
-	case service.IsValidationError(err):
+	case service.IsValidationError(err), apierrors.IsBadRequest(err):
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 	default:
+		if respondStorageError(c, err) {
+			return
+		}
 		logrus.WithError(err).Error(logMessage)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 	}

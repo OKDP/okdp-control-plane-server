@@ -39,6 +39,7 @@ type ConnectionRepository interface {
 	Delete(ctx context.Context, namespace, name string) error
 
 	CreateOrUpdateSecret(ctx context.Context, namespace, name string, data map[string][]byte) error
+	GetSecretData(ctx context.Context, namespace, name string) (map[string][]byte, error)
 	DeleteSecret(ctx context.Context, namespace, name string) error
 	// InspectSecret returns what an existing Secret exposes to the checks a
 	// connection runs before it is stored. Returns false when the Secret does
@@ -248,6 +249,24 @@ func (r *k8sConnectionRepository) CreateOrUpdateSecret(ctx context.Context, name
 	secret.ResourceVersion = existing.ResourceVersion
 	_, err = r.typedClient.CoreV1().Secrets(namespace).Update(ctx, secret, metav1.UpdateOptions{})
 	return err
+}
+
+func (r *k8sConnectionRepository) GetSecretData(ctx context.Context, namespace, name string) (map[string][]byte, error) {
+	if namespace == "" {
+		return nil, fmt.Errorf("a namespace is required to read credentials")
+	}
+	secret, err := r.typedClient.CoreV1().Secrets(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
+	if secret.Labels[crd.LabelManagedBy] != crd.ManagedByValue {
+		return nil, fmt.Errorf("%w: secret %q in namespace %q", ErrForeignSecret, name, namespace)
+	}
+	out := make(map[string][]byte, len(secret.Data))
+	for k, v := range secret.Data {
+		out[k] = append([]byte(nil), v...)
+	}
+	return out, nil
 }
 
 func (r *k8sConnectionRepository) DeleteSecret(ctx context.Context, namespace, name string) error {

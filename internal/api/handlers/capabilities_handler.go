@@ -18,10 +18,11 @@ func NewCapabilitiesHandler(service service.CapabilityService) *CapabilitiesHand
 
 // GetCapabilities godoc
 // @Summary      Get platform capabilities
-// @Description  Capabilities the platform is configured with (identity provider, user management, OIDC client provisioning), so the UI can adapt
+// @Description  Capabilities the platform is configured with (identity provider, user management, OIDC client provisioning, deployment engine), so the UI can adapt
 // @Tags         capabilities
 // @Produce      json
 // @Success      200  {object}  models.Capabilities
+// @Failure      500  {object}  map[string]string
 // @Router       /api/capabilities [get]
 func (h *CapabilitiesHandler) GetCapabilities(c *gin.Context) {
 	caps, err := h.service.GetCapabilities(c.Request.Context())

@@ -3,11 +3,14 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/okdp/okdp-control-plane-server/internal/models"
 	"github.com/okdp/okdp-control-plane-server/internal/service/mocks"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
 func TestListProjects(t *testing.T) {
@@ -89,4 +92,30 @@ func TestDeleteProject_RepoError(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Equal(t, "ns delete error", err.Error())
+}
+
+func TestProjectDescriptionLengthIsBounded(t *testing.T) {
+	mockRepo := new(mocks.ProjectRepository)
+	svc := NewDefaultProjectService(mockRepo)
+	ctx := context.Background()
+
+	atLimit := &models.Project{Name: "proj1", Description: strings.Repeat("a", maxProjectDescriptionBytes)}
+	mockRepo.On("Create", ctx, atLimit).Return(nil).Once()
+	require.NoError(t, svc.CreateProject(ctx, atLimit))
+
+	mockRepo.On("Update", ctx, atLimit).Return(atLimit, nil).Once()
+	updated, err := svc.UpdateProject(ctx, atLimit)
+	require.NoError(t, err)
+	assert.Equal(t, atLimit, updated)
+
+	tooLong := &models.Project{Name: "proj1", Description: strings.Repeat("a", maxProjectDescriptionBytes+1)}
+	err = svc.CreateProject(ctx, tooLong)
+	require.Error(t, err)
+	assert.True(t, apierrors.IsBadRequest(err), "must return 400 Bad Request: %v", err)
+
+	_, err = svc.UpdateProject(ctx, tooLong)
+	require.Error(t, err)
+	assert.True(t, apierrors.IsBadRequest(err), "must return 400 Bad Request: %v", err)
+
+	mockRepo.AssertExpectations(t)
 }

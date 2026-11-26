@@ -10,6 +10,7 @@ import (
 	"github.com/okdp/okdp-control-plane-server/internal/repository/provisioning"
 	"github.com/sirupsen/logrus"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -79,6 +80,14 @@ type ContextRepository interface {
 	GetSparkConfig(ctx context.Context) (*models.SparkConfig, error)
 }
 
+// ContextRef names a KuboCD Context.
+type ContextRef struct {
+	Name      string
+	Namespace string
+}
+
+func (r ContextRef) String() string { return r.Namespace + "/" + r.Name }
+
 // k8sContextRepository reads two Contexts, because they hold two different
 // kinds of configuration.
 //
@@ -87,27 +96,45 @@ type ContextRepository interface {
 // references it, so editing the catalog reconciles nothing.
 //
 // The platform Context holds what a package template reads: the ingress suffix,
-// the storage classes, the certificate issuers. Every Release merges it, so it
-// changes rarely and a change is expensive.
+// the OIDC and identity settings, the profile images, the Spark settings.
+// Every Release merges it, so it changes rarely and a change is expensive.
 //
 // The server reads from both. It consumes platform data, it does not own it.
+// The catalog is read from the Control Plane Context, and from the platform
+// one while the Control Plane Context does not exist or carries no
+// serviceCatalog, which is what a cluster with a single Context looks like.
 const contextCacheTTL = 5 * time.Second
 
 type k8sContextRepository struct {
-	client    dynamic.Interface
-	name      string
-	namespace string
+	client       dynamic.Interface
+	platform     ContextRef
+	controlPlane ContextRef
 
-	mu       sync.Mutex
-	cached   *unstructured.Unstructured
+	mu    sync.Mutex
+	cache map[ContextRef]cachedContext
+}
+
+// cachedContext is a Context as last read, nil when it did not exist.
+type cachedContext struct {
+	object   *unstructured.Unstructured
 	cachedAt time.Time
 }
 
+// NewContextRepository reads everything from one Context.
 func NewContextRepository(client dynamic.Interface, name, namespace string) ContextRepository {
+	ref := ContextRef{Name: name, Namespace: namespace}
+	return NewSplitContextRepository(client, ref, ref)
+}
+
+// NewSplitContextRepository reads the platform settings from platform and the
+// catalog from controlPlane, falling back to platform for the catalog. Two
+// equal refs are one Context holding everything.
+func NewSplitContextRepository(client dynamic.Interface, platform, controlPlane ContextRef) ContextRepository {
 	return &k8sContextRepository{
-		client:    client,
-		name:      name,
-		namespace: namespace,
+		client:       client,
+		platform:     platform,
+		controlPlane: controlPlane,
+		cache:        map[ContextRef]cachedContext{},
 	}
 }
 
@@ -160,17 +187,38 @@ func platformServiceFromMap(m map[string]interface{}, category string) models.Pl
 }
 
 func (r *k8sContextRepository) GetPlatformServices(ctx context.Context) ([]models.PlatformService, error) {
-	u, err := r.getContext(ctx)
+	u, err := r.catalogContext(ctx)
 	if err != nil {
 		return nil, err
 	}
+	return ContextPlatformServices(u)
+}
 
+func (r *k8sContextRepository) GetMenuCategories(ctx context.Context) ([]models.MenuCategory, error) {
+	u, err := r.catalogContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return ContextMenuCategories(u)
+}
+
+func (r *k8sContextRepository) GetPackageRepository(ctx context.Context) (string, error) {
+	u, err := r.catalogContext(ctx)
+	if err != nil {
+		return "", err
+	}
+	return ContextPackageRepository(u)
+}
+
+// ContextPlatformServices reads the services of a Context catalog, each with
+// the title of the section it is nested in as category.
+func ContextPlatformServices(u *unstructured.Unstructured) ([]models.PlatformService, error) {
 	cats, found, err := catalogCategories(u)
 	if err != nil {
 		return nil, err
 	}
 	if !found {
-		logrus.Warn("No serviceCatalog.categories found in Context CR")
+		logrus.WithField("context", u.GetNamespace()+"/"+u.GetName()).Warn("No serviceCatalog.categories found in Context")
 		return nil, nil
 	}
 
@@ -189,12 +237,8 @@ func (r *k8sContextRepository) GetPlatformServices(ctx context.Context) ([]model
 	return services, nil
 }
 
-func (r *k8sContextRepository) GetMenuCategories(ctx context.Context) ([]models.MenuCategory, error) {
-	u, err := r.getContext(ctx)
-	if err != nil {
-		return nil, err
-	}
-
+// ContextMenuCategories reads the sections of a Context catalog, in order.
+func ContextMenuCategories(u *unstructured.Unstructured) ([]models.MenuCategory, error) {
 	cats, found, err := catalogCategories(u)
 	if err != nil {
 		return nil, err
@@ -216,15 +260,11 @@ func (r *k8sContextRepository) GetMenuCategories(ctx context.Context) ([]models.
 	return categories, nil
 }
 
-func (r *k8sContextRepository) GetPackageRepository(ctx context.Context) (string, error) {
-	u, err := r.getContext(ctx)
-	if err != nil {
-		return "", err
-	}
-
+// ContextPackageRepository reads serviceCatalog.defaultRepository.
+func ContextPackageRepository(u *unstructured.Unstructured) (string, error) {
 	repo, _, _ := unstructured.NestedString(u.Object, "spec", "context", "serviceCatalog", "defaultRepository")
 	if repo == "" {
-		return "", fmt.Errorf("serviceCatalog.defaultRepository not found in Context %s/%s", r.namespace, r.name)
+		return "", fmt.Errorf("serviceCatalog.defaultRepository not found in Context %s/%s", u.GetNamespace(), u.GetName())
 	}
 	return repo, nil
 }
@@ -236,7 +276,7 @@ func (r *k8sContextRepository) GetIngressSuffix(ctx context.Context) (string, er
 	}
 	suffix, _, _ := unstructured.NestedString(u.Object, "spec", "context", "ingress", "suffix")
 	if suffix == "" {
-		return "", fmt.Errorf("ingress.suffix not found in Context %s/%s", r.namespace, r.name)
+		return "", fmt.Errorf("ingress.suffix not found in Context %s", r.platform)
 	}
 	return suffix, nil
 }
@@ -276,7 +316,7 @@ func (r *k8sContextRepository) GetKubauthNamespace(ctx context.Context) (string,
 	}
 	namespace := kubauthNamespaceOf(u)
 	if namespace == "" {
-		return "", fmt.Errorf("identity.kubauth.namespace not found in Context %s/%s", r.namespace, r.name)
+		return "", fmt.Errorf("identity.kubauth.namespace not found in Context %s", r.platform)
 	}
 	return namespace, nil
 }
@@ -392,13 +432,13 @@ func (r *k8sContextRepository) GetKeycloakProvisioningConfig(ctx context.Context
 
 	issuer, _, _ := unstructured.NestedString(u.Object, "spec", "context", "identity", "provisioning", "keycloak", "issuerUri")
 	if issuer == "" {
-		return nil, fmt.Errorf("identity.provisioning.keycloak.issuerUri not found in Context %s/%s", r.namespace, r.name)
+		return nil, fmt.Errorf("identity.provisioning.keycloak.issuerUri not found in Context %s", r.platform)
 	}
 
 	secretPath := []string{"spec", "context", "identity", "provisioning", "keycloak", "credentialsSecret"}
 	secretName, _, _ := unstructured.NestedString(u.Object, append(secretPath, "name")...)
 	if secretName == "" {
-		return nil, fmt.Errorf("identity.provisioning.keycloak.credentialsSecret.name not found in Context %s/%s", r.namespace, r.name)
+		return nil, fmt.Errorf("identity.provisioning.keycloak.credentialsSecret.name not found in Context %s", r.platform)
 	}
 	secretNamespace, _, _ := unstructured.NestedString(u.Object, append(secretPath, "namespace")...)
 	clientIDKey, _, _ := unstructured.NestedString(u.Object, append(secretPath, "clientIdKey")...)
@@ -467,7 +507,7 @@ func (r *k8sContextRepository) GetSparkConfig(ctx context.Context) (*models.Spar
 		return nil, fmt.Errorf("failed to read sparkOperator from Context: %w", err)
 	}
 	if !found {
-		return nil, fmt.Errorf("sparkOperator not found in Context %s/%s", r.namespace, r.name)
+		return nil, fmt.Errorf("sparkOperator not found in Context %s", r.platform)
 	}
 
 	cfg := &models.SparkConfig{}
@@ -518,27 +558,82 @@ func (r *k8sContextRepository) GetSparkConfig(ctx context.Context) (*models.Spar
 	return cfg, nil
 }
 
-// getContext reads the Control Plane's own Context.
+// getContext reads the platform Context.
 func (r *k8sContextRepository) getContext(ctx context.Context) (*unstructured.Unstructured, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	if r.cached != nil && time.Since(r.cachedAt) < contextCacheTTL {
-		return r.cached, nil
-	}
-
-	u, err := r.client.Resource(contextGVR).Namespace(r.namespace).Get(ctx, r.name, metav1.GetOptions{})
+	u, err := r.read(ctx, r.platform)
 	if err != nil {
 		return nil, err
 	}
-	r.cached = u
-	r.cachedAt = time.Now()
+	if u == nil {
+		return nil, apierrors.NewNotFound(contextGVR.GroupResource(), r.platform.Name)
+	}
 	return u, nil
+}
+
+// catalogContext reads the Context holding the catalog: the Control Plane
+// one, or the platform one when the Control Plane Context does not exist or
+// carries no serviceCatalog. Any other read error is returned, never
+// answered from the platform Context.
+func (r *k8sContextRepository) catalogContext(ctx context.Context) (*unstructured.Unstructured, error) {
+	if r.controlPlane != r.platform {
+		u, err := r.read(ctx, r.controlPlane)
+		if err != nil {
+			return nil, err
+		}
+		if u != nil && HasServiceCatalog(u) {
+			return u, nil
+		}
+	}
+	return r.getContext(ctx)
+}
+
+// read returns a Context, nil when it does not exist. Both answers are cached.
+func (r *k8sContextRepository) read(ctx context.Context, ref ContextRef) (*unstructured.Unstructured, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if c, ok := r.cache[ref]; ok && time.Since(c.cachedAt) < contextCacheTTL {
+		return c.object, nil
+	}
+	u, err := r.client.Resource(contextGVR).Namespace(ref.Namespace).Get(ctx, ref.Name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		u, err = nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	r.cache[ref] = cachedContext{object: u, cachedAt: time.Now()}
+	return u, nil
+}
+
+// ReadServiceCatalog returns spec.context.serviceCatalog of the Control Plane
+// Context, else of the platform one, false when neither carries one. A
+// missing Context is not an error.
+func ReadServiceCatalog(ctx context.Context, client dynamic.Interface, platform, controlPlane ContextRef) (map[string]interface{}, bool, error) {
+	for _, ref := range []ContextRef{controlPlane, platform} {
+		u, err := client.Resource(contextGVR).Namespace(ref.Namespace).Get(ctx, ref.Name, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			continue
+		}
+		if err != nil {
+			return nil, false, fmt.Errorf("failed to read Context %s: %w", ref, err)
+		}
+		if catalog, found, _ := unstructured.NestedMap(u.Object, "spec", "context", "serviceCatalog"); found {
+			return catalog, true, nil
+		}
+	}
+	return nil, false, nil
+}
+
+// HasServiceCatalog reports whether a Context carries spec.context.serviceCatalog.
+func HasServiceCatalog(u *unstructured.Unstructured) bool {
+	_, found, err := unstructured.NestedMap(u.Object, "spec", "context", "serviceCatalog")
+	return found && err == nil
 }
 
 func (r *k8sContextRepository) Invalidate() {
 	r.mu.Lock()
-	r.cached = nil
+	r.cache = map[ContextRef]cachedContext{}
 	r.mu.Unlock()
 }
 

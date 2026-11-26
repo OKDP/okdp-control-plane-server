@@ -207,9 +207,11 @@ func TestVerifyReturnsTheSubjectAndUsername(t *testing.T) {
 	c := idp.claims()
 	c["aud"] = "okdp-ui"
 	c["preferred_username"] = "alice"
+	c["email"] = "alice@example.com"
 
 	identity, err := verifier.Verify(context.Background(), idp.mint(t, c))
 	require.NoError(t, err)
 	assert.Equal(t, "e5a0-1234", identity.Subject)
 	assert.Equal(t, "alice", identity.Username)
+	assert.Equal(t, "alice@example.com", identity.Email)
 }

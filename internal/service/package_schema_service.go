@@ -24,17 +24,12 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-type ServiceVersionsResponse struct {
-	Versions []string `json:"versions"`
-	Default  string   `json:"default"`
-}
-
 type PackageSchemaService interface {
 	GetParameterSchema(ctx context.Context, serviceName, tag string) (map[string]any, error)
 	// GetPackageInputs returns the connections a package declares it needs, so
 	// the console can offer a choice for each one at deployment time.
 	GetPackageInputs(ctx context.Context, serviceName, tag string) ([]models.PackageInput, error)
-	GetServiceVersions(ctx context.Context, serviceName string) (*ServiceVersionsResponse, error)
+	GetServiceVersions(ctx context.Context, serviceName string) (*models.ServiceVersions, error)
 	ListVersionsForServices(ctx context.Context, services []models.PlatformService) map[string][]string
 	// ListPackageTags returns the tags published in the OCI registry for a service's
 	// package, even if the service is not (yet) in the catalog. repositoryOverride
@@ -85,7 +80,7 @@ func NewDefaultPackageSchemaService(contextRepo repository.ContextRepository) *D
 	}
 }
 
-func (s *DefaultPackageSchemaService) GetServiceVersions(ctx context.Context, serviceName string) (*ServiceVersionsResponse, error) {
+func (s *DefaultPackageSchemaService) GetServiceVersions(ctx context.Context, serviceName string) (*models.ServiceVersions, error) {
 	services, err := s.contextRepo.GetPlatformServices(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get platform services: %w", err)
@@ -121,7 +116,7 @@ func (s *DefaultPackageSchemaService) GetServiceVersions(ctx context.Context, se
 		}
 	}
 
-	return &ServiceVersionsResponse{
+	return &models.ServiceVersions{
 		Versions: versions,
 		Default:  defaultVersion,
 	}, nil
@@ -217,7 +212,7 @@ func (s *DefaultPackageSchemaService) ListPackageTags(ctx context.Context, servi
 func (s *DefaultPackageSchemaService) listOCITags(packageRepo, serviceName string) ([]string, error) {
 	// packageRepo is like "quay.io/kubotal/packages-dev"
 	scheme := "https"
-	if insecureOCIHost(packageRepo, s.insecureRegistries) {
+	if repository.InsecureOCIHost(packageRepo, s.insecureRegistries) {
 		scheme = "http"
 	}
 	host, path, found := strings.Cut(packageRepo, "/")
@@ -467,7 +462,7 @@ func (s *DefaultPackageSchemaService) fetchAndCache(serviceName, tag, packageRep
 	if cred != nil {
 		credEnv = kubocdCredentialEnv(host, cred)
 	}
-	doc, err := s.fetchGroomedDoc(ociRef, insecureOCIHost(packageRepo, s.insecureRegistries), credEnv)
+	doc, err := s.fetchGroomedDoc(ociRef, repository.InsecureOCIHost(packageRepo, s.insecureRegistries), credEnv)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch schema for %s: %w", ociRef, err)
 	}

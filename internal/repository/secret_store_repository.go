@@ -78,7 +78,7 @@ func (r *k8sSecretStoreRepository) Get(ctx context.Context, namespace, name stri
 		return nil, err
 	}
 
-	store, err := toSecretStore(u.Object)
+	store, err := DecodeSecretStore(u.Object)
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert from unstructured: %w", err)
 	}
@@ -93,7 +93,7 @@ func (r *k8sSecretStoreRepository) List(ctx context.Context, namespace string) (
 
 	var stores []crd.ESOSecretStore
 	for _, item := range list.Items {
-		store, err := toSecretStore(item.Object)
+		store, err := DecodeSecretStore(item.Object)
 		if err != nil {
 			logrus.WithError(err).Warn("Failed to convert SecretStore from unstructured")
 			continue
@@ -103,7 +103,9 @@ func (r *k8sSecretStoreRepository) List(ctx context.Context, namespace string) (
 	return stores, nil
 }
 
-func toSecretStore(obj map[string]interface{}) (*crd.ESOSecretStore, error) {
+// DecodeSecretStore reads a SecretStore object, with Spec.Provider.Name set
+// to the backend key found under spec.provider.
+func DecodeSecretStore(obj map[string]interface{}) (*crd.ESOSecretStore, error) {
 	var store crd.ESOSecretStore
 	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(obj, &store); err != nil {
 		return nil, err

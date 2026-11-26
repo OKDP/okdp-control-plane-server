@@ -3,6 +3,7 @@ package service
 import (
 	"errors"
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/okdp/okdp-control-plane-server/internal/models"
@@ -32,8 +33,16 @@ func TestNormalizeAndValidateCatalogService(t *testing.T) {
 		},
 		{"empty name is rejected", models.PlatformService{Name: "", Versions: []string{"0.1.0"}}, true, ""},
 		{"missing category is rejected", models.PlatformService{Name: "trino", Versions: []string{"0.1.0"}}, true, ""},
-		{"non-DNS name is rejected", models.PlatformService{Name: "Trino_X", Versions: []string{"0.1.0"}}, true, ""},
-		{"uppercase name is rejected", models.PlatformService{Name: "Trino", Versions: []string{"0.1.0"}}, true, ""},
+		{"non-DNS name is rejected", models.PlatformService{Name: "Trino_X", Versions: []string{"0.1.0"}, Category: "Query"}, true, ""},
+		{"uppercase name is rejected", models.PlatformService{Name: "Trino", Versions: []string{"0.1.0"}, Category: "Query"}, true, ""},
+		{"name exceeding 63 chars is rejected", models.PlatformService{Name: strings.Repeat("a", 64), Versions: []string{"0.1.0"}, Category: "Query"}, true, ""},
+		{"valid OCI repository is accepted", models.PlatformService{Name: "trino", Versions: []string{"0.1.0"}, Category: "Query", Repository: "quay.io/okdp/packages"}, false, "0.1.0"},
+		{"valid OCI repository with port is accepted", models.PlatformService{Name: "trino", Versions: []string{"0.1.0"}, Category: "Query", Repository: "localhost:5000/okdp/packages"}, false, "0.1.0"},
+		{"repository with scheme is rejected", models.PlatformService{Name: "trino", Versions: []string{"0.1.0"}, Category: "Query", Repository: "https://quay.io/okdp/packages"}, true, ""},
+		{"repository with @ is rejected", models.PlatformService{Name: "trino", Versions: []string{"0.1.0"}, Category: "Query", Repository: "user:pass@quay.io/okdp/packages"}, true, ""},
+		{"repository with query is rejected", models.PlatformService{Name: "trino", Versions: []string{"0.1.0"}, Category: "Query", Repository: "quay.io/okdp/packages?token=x"}, true, ""},
+		{"repository with fragment is rejected", models.PlatformService{Name: "trino", Versions: []string{"0.1.0"}, Category: "Query", Repository: "quay.io/okdp/packages#frag"}, true, ""},
+		{"repository with whitespace is rejected", models.PlatformService{Name: "trino", Versions: []string{"0.1.0"}, Category: "Query", Repository: "quay.io/okdp packages"}, true, ""},
 		{"no versions is rejected", models.PlatformService{Name: "trino", Versions: nil}, true, ""},
 		{"empty version string is rejected", models.PlatformService{Name: "trino", Versions: []string{" "}}, true, ""},
 		{"duplicate versions are rejected", models.PlatformService{Name: "trino", Versions: []string{"0.1.0", "0.1.0"}}, true, ""},

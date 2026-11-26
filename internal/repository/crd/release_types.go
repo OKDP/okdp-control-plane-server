@@ -37,6 +37,8 @@ type ReleaseSpec struct {
 	Contexts        []ContextRef   `json:"contexts,omitempty"`
 	TargetNamespace string         `json:"targetNamespace"`
 	CreateNamespace bool           `json:"createNamespace"`
+	// Protected, when set, overrides the protection the package declares.
+	Protected *bool `json:"protected,omitempty"`
 }
 
 type ReleasePackage struct {
@@ -64,6 +66,10 @@ type ReleaseStatus struct {
 	// only show what a service asked for, never what it is running against.
 	WatchedInputConnections   []InputConnectionReference `json:"watchedInputConnections,omitempty"`
 	EffectiveInputConnections []InputConnectionReference `json:"effectiveInputConnections,omitempty"`
+	// ObservedGeneration is the metadata.generation the status was written
+	// for, 0 when the controller does not report it.
+	ObservedGeneration int64  `json:"observedGeneration,omitempty"`
+	Message            string `json:"message,omitempty"`
 }
 
 // InputConnectionReference identifies one connection a release consumes. The

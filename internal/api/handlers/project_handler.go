@@ -32,10 +32,15 @@ func NewProjectHandler(service service.ProjectService) *ProjectHandler {
 // @Produce      json
 // @Success      200  {array}   models.Project
 // @Failure      500  {object}  map[string]string
+// @Failure      503  {object}  models.ErrorResponse
 // @Router       /api/projects [get]
 func (h *ProjectHandler) ListProjects(c *gin.Context) {
 	projects, err := h.service.ListProjects(c.Request.Context())
 	if err != nil {
+		if respondStorageError(c, err) {
+			return
+		}
+		logrus.WithError(err).Error("Failed to list projects")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -50,8 +55,10 @@ func (h *ProjectHandler) ListProjects(c *gin.Context) {
 // @Produce      json
 // @Param        name path string true "Project Name"
 // @Success      200  {object}  models.Project
+// @Failure      400  {object}  map[string]string
 // @Failure      404  {object}  map[string]string "Project not found"
 // @Failure      500  {object}  map[string]string "Internal server error"
+// @Failure      503  {object}  models.ErrorResponse
 // @Router       /api/projects/{name} [get]
 func (h *ProjectHandler) GetProject(c *gin.Context) {
 	name := c.Param("name")
@@ -59,6 +66,13 @@ func (h *ProjectHandler) GetProject(c *gin.Context) {
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Project not found"})
+			return
+		}
+		if apierrors.IsBadRequest(err) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		if respondStorageError(c, err) {
 			return
 		}
 		logrus.WithError(err).Error("Failed to get project")
@@ -78,7 +92,10 @@ func (h *ProjectHandler) GetProject(c *gin.Context) {
 // @Param        project body models.Project true "Project Object"
 // @Success      201  {object}  models.Project
 // @Failure      400  {object}  map[string]string
+// @Failure      409  {object}  models.ErrorResponse
 // @Failure      500  {object}  map[string]string
+// @Failure      503  {object}  models.ErrorResponse
+// @Failure      504  {object}  models.ErrorResponse
 // @Router       /api/projects [post]
 func (h *ProjectHandler) CreateProject(c *gin.Context) {
 	var project models.Project
@@ -88,6 +105,13 @@ func (h *ProjectHandler) CreateProject(c *gin.Context) {
 	}
 
 	if err := h.service.CreateProject(c.Request.Context(), &project); err != nil {
+		if apierrors.IsBadRequest(err) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		if respondStorageError(c, err) {
+			return
+		}
 		logrus.Errorf("Failed to create project: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -106,7 +130,10 @@ func (h *ProjectHandler) CreateProject(c *gin.Context) {
 // @Success      200  {object}  models.Project
 // @Failure      400  {object}  map[string]string
 // @Failure      404  {object}  map[string]string "Project not found"
+// @Failure      409  {object}  models.ErrorResponse
 // @Failure      500  {object}  map[string]string
+// @Failure      503  {object}  models.ErrorResponse
+// @Failure      504  {object}  models.ErrorResponse
 // @Router       /api/projects/{name} [put]
 func (h *ProjectHandler) UpdateProject(c *gin.Context) {
 	var project models.Project
@@ -121,6 +148,13 @@ func (h *ProjectHandler) UpdateProject(c *gin.Context) {
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Project not found"})
+			return
+		}
+		if apierrors.IsBadRequest(err) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		if respondStorageError(c, err) {
 			return
 		}
 		logrus.WithError(err).Error("Failed to update project")
@@ -139,14 +173,25 @@ func (h *ProjectHandler) UpdateProject(c *gin.Context) {
 // @Produce      json
 // @Param        name path string true "Project Name"
 // @Success      204  {object}  nil
+// @Failure      400  {object}  map[string]string
 // @Failure      404  {object}  map[string]string
+// @Failure      409  {object}  models.ErrorResponse
 // @Failure      500  {object}  map[string]string
+// @Failure      503  {object}  models.ErrorResponse
+// @Failure      504  {object}  models.ErrorResponse
 // @Router       /api/projects/{name} [delete]
 func (h *ProjectHandler) DeleteProject(c *gin.Context) {
 	name := c.Param("name")
 	if err := h.service.DeleteProject(c.Request.Context(), name); err != nil {
 		if apierrors.IsNotFound(err) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Project not found"})
+			return
+		}
+		if apierrors.IsBadRequest(err) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		if respondStorageError(c, err) {
 			return
 		}
 		logrus.WithError(err).Error("Failed to delete project")
@@ -163,6 +208,7 @@ func (h *ProjectHandler) DeleteProject(c *gin.Context) {
 // @Produce      text/event-stream
 // @Success      200  {string}  string  "stream"
 // @Failure      500  {object}  map[string]string
+// @Failure      503  {object}  models.ErrorResponse
 // @Router       /api/projects/stream [get]
 func (h *ProjectHandler) StreamProjects(c *gin.Context) {
 	w := c.Writer
@@ -173,6 +219,9 @@ func (h *ProjectHandler) StreamProjects(c *gin.Context) {
 
 	watcher, err := h.service.WatchProjects(c.Request.Context())
 	if err != nil {
+		if respondStorageError(c, err) {
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
