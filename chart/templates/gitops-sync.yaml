@@ -1,0 +1,89 @@
+{{- /*
+Git mode with sync flux: the Flux objects that apply the repository the server commits to,
+named after the release in its namespace. Flux impersonates a ServiceAccount
+of their own, limited to the kinds the server commits. The label lets a
+server back in kubernetes mode find and delete them. The keep policy leaves
+them in place on helm uninstall.
+*/}}
+{{- include "okdp-control-plane-server.validate" . }}
+{{- $engine := .Values.engine | default dict }}
+{{- $git := dig "kubocd" "persistence" "git" dict $engine }}
+{{- if and (eq (include "okdp-control-plane-server.persistenceMode" .) "git") (eq (include "okdp-control-plane-server.gitSync" .) "flux") (dig "createSyncResources" true $git) }}
+{{- $fullname := include "okdp-control-plane-server.fullname" . }}
+{{- $syncAccount := printf "%s-gitops" $fullname }}
+{{- $interval := dig "syncInterval" "1m" $git }}
+{{- $metadata := include "okdp-control-plane-server.syncMetadata" . }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $syncAccount }}
+  namespace: {{ .Release.Namespace }}
+  {{- $metadata | nindent 2 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $syncAccount }}
+  {{- $metadata | nindent 2 }}
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["kubocd.kubotal.io"]
+    resources: ["contexts", "connections", "releases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["external-secrets.io"]
+    resources: ["secretstores", "externalsecrets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $syncAccount }}
+  {{- $metadata | nindent 2 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $syncAccount }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: ClusterRole
+  name: {{ $syncAccount }}
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: {{ $fullname }}
+  namespace: {{ .Release.Namespace }}
+  {{- $metadata | nindent 2 }}
+spec:
+  url: {{ include "okdp-control-plane-server.gitUrl" . | quote }}
+  ref:
+    branch: {{ include "okdp-control-plane-server.gitBranch" . | quote }}
+  interval: {{ $interval | quote }}
+  {{- with dig "secretName" "" $git }}
+  secretRef:
+    name: {{ . | quote }}
+  {{- end }}
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: {{ $fullname }}
+  namespace: {{ .Release.Namespace }}
+  {{- $metadata | nindent 2 }}
+spec:
+  interval: {{ $interval | quote }}
+  sourceRef:
+    kind: GitRepository
+    name: {{ $fullname }}
+  path: {{ printf "./%s" (include "okdp-control-plane-server.gitPath" .) | quote }}
+  prune: true
+  # A Release failing in one project must never hold the applied revision
+  # of the others.
+  wait: false
+  # Deleting the Kustomization leaves the projects, services and volumes it
+  # applied in place.
+  deletionPolicy: Orphan
+  serviceAccountName: {{ $syncAccount }}
+{{- end }}

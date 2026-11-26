@@ -1,19 +1,66 @@
+{{- include "okdp-control-plane-server.validate" . }}
+{{- $fullname := include "okdp-control-plane-server.fullname" . }}
+{{- $cfg := .Values.configuration | default dict }}
+{{- $engine := .Values.engine | default dict }}
+{{- $git := dig "kubocd" "persistence" "git" dict $engine }}
+{{- $legacyContextName := dig "contextName" "" $cfg | toString | trim }}
+{{- $legacyContextNamespace := dig "contextNamespace" "" $cfg | toString | trim }}
+{{- $cpContextName := dig "controlPlaneContextName" "" $cfg | toString | trim | default "control-plane" }}
+{{- $cpContextNamespace := dig "controlPlaneContextNamespace" "" $cfg | toString | trim }}
+{{- if and (not $cpContextNamespace) $legacyContextNamespace }}
+{{- $cpContextNamespace = $legacyContextNamespace }}
+{{- end }}
+{{- $platformContextName := dig "platformContextName" "" $cfg | toString | trim }}
+{{- if and $legacyContextName (or (not $platformContextName) (eq $platformContextName "platform")) }}
+{{- $platformContextName = $legacyContextName }}
+{{- end }}
+{{- if not $platformContextName }}
+{{- $platformContextName = "platform" }}
+{{- end }}
+{{- $platformContextNamespace := dig "platformContextNamespace" "" $cfg | toString | trim }}
+{{- if and (not $platformContextNamespace) $legacyContextNamespace }}
+{{- $platformContextNamespace = $legacyContextNamespace }}
+{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ include "okdp-control-plane-server.fullname" . }}
+  name: {{ $fullname }}
   labels:
     {{- include "okdp-control-plane-server.labels" . | nindent 4 }}
 data:
   PORT: {{ .Values.service.port | quote }}
   PLATFORM_NAMESPACE: {{ .Values.configuration.platformNamespace | quote }}
   KUBOCD_NAMESPACE: {{ .Values.configuration.kubocdNamespace | quote }}
-  CONTEXT_NAME: {{ .Values.configuration.contextName | quote }}
-  CONTEXT_NAMESPACE: {{ .Values.configuration.contextNamespace | quote }}
+  CONTROL_PLANE_CONTEXT_NAME: {{ $cpContextName | quote }}
+  CONTROL_PLANE_CONTEXT_NAMESPACE: {{ $cpContextNamespace | quote }}
+  PLATFORM_CONTEXT_NAME: {{ $platformContextName | quote }}
+  PLATFORM_CONTEXT_NAMESPACE: {{ $platformContextNamespace | quote }}
   ALLOWED_ORIGINS: {{ .Values.configuration.allowedOrigins | quote }}
   LOG_LEVEL: {{ .Values.configuration.logLevel | quote }}
   RELEASE_INTERVAL: {{ .Values.configuration.releaseInterval | quote }}
   RELEASE_TIMEOUT: {{ .Values.configuration.releaseTimeout | quote }}
+  ENGINE_TYPE: {{ dig "type" "" $engine | toString | trim | default "kubocd" | quote }}
+  ENGINE_KUBOCD_BACKEND: {{ dig "kubocd" "backend" "" $engine | toString | trim | default "flux" | quote }}
+  ENGINE_KUBOCD_PERSISTENCE_MODE: {{ include "okdp-control-plane-server.persistenceMode" . | quote }}
+  ENGINE_KUBOCD_PERSISTENCE_GIT_URL: {{ include "okdp-control-plane-server.gitUrl" . | quote }}
+  ENGINE_KUBOCD_PERSISTENCE_GIT_BRANCH: {{ include "okdp-control-plane-server.gitBranch" . | quote }}
+  ENGINE_KUBOCD_PERSISTENCE_GIT_PATH: {{ include "okdp-control-plane-server.gitPath" . | quote }}
+  ENGINE_KUBOCD_PERSISTENCE_GIT_SYNC: {{ include "okdp-control-plane-server.gitSync" . | quote }}
+  ENGINE_KUBOCD_PERSISTENCE_GIT_INITIALIZE: {{ dig "initialize" true $git | toString | quote }}
+  ENGINE_KUBOCD_PERSISTENCE_GIT_CREDENTIALS_DIR: "/etc/okdp/git"
+  {{- with dig "committerName" "" $git }}
+  ENGINE_KUBOCD_PERSISTENCE_GIT_COMMITTER_NAME: {{ . | quote }}
+  {{- end }}
+  {{- with dig "committerEmail" "" $git }}
+  ENGINE_KUBOCD_PERSISTENCE_GIT_COMMITTER_EMAIL: {{ . | quote }}
+  {{- end }}
+  # The sync objects the chart renders in git mode (gitops-sync.yaml): read
+  # in git mode, deleted at startup in kubernetes mode when they carry the
+  # app.kubernetes.io/managed-by-control-plane label.
+  ENGINE_KUBOCD_PERSISTENCE_GIT_SYNC_NAMESPACE: {{ .Release.Namespace | quote }}
+  ENGINE_KUBOCD_PERSISTENCE_GIT_REPOSITORY_NAME: {{ $fullname | quote }}
+  ENGINE_KUBOCD_PERSISTENCE_GIT_KUSTOMIZATION_NAME: {{ $fullname | quote }}
+  ENGINE_KUBOCD_PERSISTENCE_GIT_SYNC_CLEANUP_NAME: {{ $fullname | quote }}
   {{- if .Values.configuration.insecureOciRegistries }}
   # Development sandboxes only: registry hosts reached over plain HTTP.
   INSECURE_OCI_REGISTRIES: {{ .Values.configuration.insecureOciRegistries | quote }}

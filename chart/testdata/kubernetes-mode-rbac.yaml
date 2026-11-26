@@ -1,0 +1,116 @@
+---
+# Source: okdp-control-plane-server/templates/rbac.yaml
+# The server reaches the cluster through its ServiceAccount (in-cluster
+# config). A ClusterRole is required because project namespaces are created
+# dynamically and are not known ahead of time.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: okdp-okdp-control-plane-server
+  labels:
+    helm.sh/chart: okdp-control-plane-server-0.10.0
+    app.kubernetes.io/name: okdp-control-plane-server
+    app.kubernetes.io/instance: okdp
+    app.kubernetes.io/version: "0.10.0"
+    app.kubernetes.io/managed-by: Helm
+rules:
+  # Projects are namespaces labelled okdp.io/project. update/patch are needed
+  # to edit a project's description (stored as the okdp.io/description annotation).
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Secrets (SecretStore credentials), pods + logs (service inspection)
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "create", "update", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get", "list"]
+  # Events explain Release failures, and Ingresses provide service URLs.
+  # PVC permissions support volume cleanup. CRD discovery detects optional APIs.
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list"]
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get", "list"]
+  # Services carry the in-cluster endpoint of the internal connections a
+  # project's deployed services expose.
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list"]
+  # Resource usage panels use metrics-server.
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  # Identity management (kubauth CRDs)
+  - apiGroups: ["kubauth.kubotal.io"]
+    resources: ["users", "groups", "groupbindings"]
+    verbs: ["get", "list", "watch", "create", "update", "delete"]
+  - apiGroups: ["kubauth.kubotal.io"]
+    resources: ["oidcclients"]
+    # delete: a service being removed takes its OIDC client with it
+    # (service_service.go, DeleteService)
+    verbs: ["get", "list", "delete"]
+  # Secret management (External Secrets Operator)
+  - apiGroups: ["external-secrets.io"]
+    resources: ["secretstores", "externalsecrets"]
+    verbs: ["get", "list", "watch", "create", "update", "delete"]
+  # Services (kubocd Releases) + catalog (kubocd Context)
+  - apiGroups: ["kubocd.kubotal.io"]
+    resources: ["releases"]
+    verbs: ["get", "list", "watch", "create", "update", "delete"]
+  - apiGroups: ["kubocd.kubotal.io"]
+    resources: ["contexts"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # The server probes for Connection CRDs before using them.
+  # ClusterConnections and Contracts are read-only.
+  - apiGroups: ["kubocd.kubotal.io"]
+    resources: ["connections"]
+    verbs: ["get", "list", "watch", "create", "update", "delete"]
+  - apiGroups: ["kubocd.kubotal.io"]
+    resources: ["clusterconnections"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["kubocd.kubotal.io"]
+    resources: ["contracts", "clustercontracts"]
+    verbs: ["get", "list", "watch"]
+  # Spark workloads
+  - apiGroups: ["sparkoperator.k8s.io"]
+    resources: ["sparkapplications"]
+    verbs: ["get", "list", "watch", "create", "update", "delete"]
+  - apiGroups: ["helm.toolkit.fluxcd.io"]
+    resources: ["helmreleases"]
+    verbs: ["get", "list"]
+
+
+---
+# Source: okdp-control-plane-server/templates/rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: okdp-okdp-control-plane-server
+  labels:
+    helm.sh/chart: okdp-control-plane-server-0.10.0
+    app.kubernetes.io/name: okdp-control-plane-server
+    app.kubernetes.io/instance: okdp
+    app.kubernetes.io/version: "0.10.0"
+    app.kubernetes.io/managed-by: Helm
+subjects:
+  - kind: ServiceAccount
+    name: okdp-okdp-control-plane-server
+    namespace: okdp-system
+roleRef:
+  kind: ClusterRole
+  name: okdp-okdp-control-plane-server
+  apiGroup: rbac.authorization.k8s.io
+
+
