@@ -1,0 +1,8 @@
+# Go tests of the rendering, not part of the chart.
+*.go
+testdata/
+.DS_Store
+.git/
+*.swp
+*.bak
+*.tmp

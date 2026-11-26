@@ -10,10 +10,16 @@ image:
 configuration:
   platformNamespace: okdp-system
   kubocdNamespace: kubocd-system
-  # The platform Context, read by the server and written for its service
-  # catalog. Empty namespace: the namespace the server runs in.
-  contextName: platform
-  contextNamespace: ""
+  # The Control Plane Context, holding the service catalog the console edits.
+  # Created from the platform catalog on the first edit when it does not exist
+  # (kubernetes mode), committed to git at startup (git mode).
+  # Empty namespace: the namespace the server runs in.
+  controlPlaneContextName: control-plane
+  controlPlaneContextNamespace: ""
+  # The platform Context, only read: ingress, OIDC and identity settings.
+  # Empty namespace: controlPlaneContextNamespace.
+  platformContextName: platform
+  platformContextNamespace: ""
   # Single origin, set verbatim in the Access-Control-Allow-Origin header.
   allowedOrigins: https://okdp-ui.example.com
   logLevel: info
@@ -26,12 +32,67 @@ configuration:
   # holding credentials for private package registries. Empty: anonymous only.
   registryCredentialsSecret: ""
 
+# Deployment engine, rendered as ENGINE_* environment variables. The server
+# reads engine.type, the selected engine validates its own section at startup
+# and the server refuses to start on an invalid one.
+engine:
+  type: kubocd
+  kubocd:
+    backend: flux
+    persistence:
+      # kubernetes: the server writes projects, Releases, Connections,
+      # SecretStores and ExternalSecrets to the cluster.
+      # git: it commits them to the repository below, and Flux applies it.
+      mode: kubernetes
+      git:
+        # Required in git mode.
+        url: ""
+        branch: main
+        # Directory of the repository the server owns. Empty: the root.
+        path: ""
+        # flux: the server wakes Flux up after each commit and reports what
+        # it applied. none: something else applies the branch.
+        sync: flux
+        # Secret in the release namespace, in the Flux GitRepository layout
+        # (username/password, bearerToken, or identity/known_hosts for SSH).
+        # Mounted in the server, read on every fetch and push, and used by
+        # the GitRepository. Empty: anonymous access.
+        secretName: ""
+        # Create the branch layout and the control plane Context at startup
+        # when they are missing.
+        initialize: true
+        # With sync flux, render the GitRepository and the Kustomization
+        # (named after the release, in its namespace) with their own
+        # ServiceAccount. false: bring objects with those names yourself, the
+        # Kustomization with a serviceAccountName.
+        createSyncResources: true
+        # Keep those objects on helm uninstall, so that Flux goes on applying
+        # the repository and git push keeps driving the platform. Back in
+        # kubernetes mode, the server deletes the Kustomization and the
+        # GitRepository at startup.
+        keepSyncOnUninstall: true
+        syncInterval: 1m
 
 service:
   type: ClusterIP
   port: 8093
 
 resources: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65534
+  runAsGroup: 65534
+  fsGroup: 65534
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
 
 # Forward proxy the pod must go through to reach anything outside the cluster.
 # Empty means no proxy, which is the case on any sandbox. Rendered as the three

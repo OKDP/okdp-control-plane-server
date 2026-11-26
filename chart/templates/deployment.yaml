@@ -1,3 +1,10 @@
+{{- include "okdp-control-plane-server.validate" . }}
+{{- $engine := .Values.engine | default dict }}
+{{- $registrySecret := .Values.configuration.registryCredentialsSecret }}
+{{- $gitSecret := "" }}
+{{- if eq (include "okdp-control-plane-server.persistenceMode" .) "git" }}
+{{- $gitSecret = dig "kubocd" "persistence" "git" "secretName" "" $engine }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -19,10 +26,18 @@ spec:
         {{- include "okdp-control-plane-server.labels" . | nindent 8 }}
     spec:
       serviceAccountName: {{ include "okdp-control-plane-server.fullname" . }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: {{ .Chart.Name }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           envFrom:
             - configMapRef:
                 name: {{ include "okdp-control-plane-server.fullname" . }}
@@ -59,13 +74,34 @@ spec:
               port: http
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
-          {{- with .Values.configuration.registryCredentialsSecret }}
           volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            {{- if $registrySecret }}
             - name: registry-credentials
               mountPath: /etc/okdp/registry
               readOnly: true
+            {{- end }}
+            {{- if $gitSecret }}
+            # The whole Secret, never a subPath: the kubelet updates a rotated
+            # Secret in place and the server reads it on every fetch and push.
+            - name: git-credentials
+              mountPath: /etc/okdp/git
+              readOnly: true
+            {{- end }}
       volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: {{ .Values.tmpSizeLimit | default "256Mi" }}
+        {{- if $registrySecret }}
         - name: registry-credentials
           secret:
-            secretName: {{ . }}
-          {{- end }}
+            secretName: {{ $registrySecret | quote }}
+            defaultMode: 0440
+        {{- end }}
+        {{- if $gitSecret }}
+        - name: git-credentials
+          secret:
+            secretName: {{ $gitSecret | quote }}
+            defaultMode: 0440
+        {{- end }}

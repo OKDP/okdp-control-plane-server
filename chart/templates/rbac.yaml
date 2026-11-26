@@ -1,6 +1,14 @@
 # The server reaches the cluster through its ServiceAccount (in-cluster
 # config). A ClusterRole is required because project namespaces are created
 # dynamically and are not known ahead of time.
+#
+# In git mode the server commits the projects, Releases, Contexts,
+# Connections, SecretStores and ExternalSecrets, and Flux applies them with
+# its own ServiceAccount (gitops-sync.yaml): the server only reads them.
+{{- include "okdp-control-plane-server.validate" . }}
+{{- $git := eq (include "okdp-control-plane-server.persistenceMode" .) "git" }}
+{{- $sync := include "okdp-control-plane-server.gitSync" . }}
+{{- $read := list "get" "list" "watch" }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -12,14 +20,22 @@ rules:
   # to edit a project's description (stored as the okdp.io/description annotation).
   - apiGroups: [""]
     resources: ["namespaces"]
+    {{- if $git }}
+    verbs: {{ $read | toJson }}
+    {{- else }}
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+    {{- end }}
   # Secrets (SecretStore credentials), pods + logs (service inspection)
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["get", "list", "create", "update", "delete"]
   - apiGroups: [""]
     resources: ["pods"]
+    {{- if $git }}
+    verbs: ["get", "list"]
+    {{- else }}
     verbs: ["get", "list", "delete"]
+    {{- end }}
   - apiGroups: [""]
     resources: ["pods/log"]
     verbs: ["get", "list"]
@@ -31,7 +47,11 @@ rules:
     verbs: ["get", "list"]
   - apiGroups: [""]
     resources: ["persistentvolumeclaims"]
+    {{- if $git }}
+    verbs: ["get", "list"]
+    {{- else }}
     verbs: ["get", "list", "delete"]
+    {{- end }}
   - apiGroups: ["networking.k8s.io"]
     resources: ["ingresses"]
     verbs: ["get", "list"]
@@ -53,27 +73,53 @@ rules:
     verbs: ["get", "list", "watch", "create", "update", "delete"]
   - apiGroups: ["kubauth.kubotal.io"]
     resources: ["oidcclients"]
+    {{- if $git }}
+    verbs: ["get", "list"]
+    {{- else }}
     # delete: a service being removed takes its OIDC client with it
     # (service_service.go, DeleteService)
     verbs: ["get", "list", "delete"]
+    {{- end }}
   # Secret management (External Secrets Operator)
   - apiGroups: ["external-secrets.io"]
     resources: ["secretstores", "externalsecrets"]
+    {{- if $git }}
+    verbs: {{ $read | toJson }}
+    {{- else }}
     verbs: ["get", "list", "watch", "create", "update", "delete"]
+    {{- end }}
   # Services (kubocd Releases) + catalog (kubocd Context)
   - apiGroups: ["kubocd.kubotal.io"]
     resources: ["releases"]
+    {{- if $git }}
+    verbs: {{ $read | toJson }}
+    {{- else }}
     verbs: ["get", "list", "watch", "create", "update", "delete"]
+    {{- end }}
   - apiGroups: ["kubocd.kubotal.io"]
     resources: ["contexts"]
+    {{- if $git }}
+    verbs: {{ $read | toJson }}
+    {{- else }}
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+    {{- end }}
   # Connections (kubocd). These CRDs ship with a KuboCD version the platform
   # does not run yet: the rules are inert until they are installed, and the
   # server probes for them before use. Contracts are read-only, they describe
   # the schema a connection must satisfy and are owned by the packages.
+  {{- if $git }}
   - apiGroups: ["kubocd.kubotal.io"]
-    resources: ["connections", "clusterconnections"]
+    resources: ["connections"]
+    verbs: {{ $read | toJson }}
+  {{- else }}
+  - apiGroups: ["kubocd.kubotal.io"]
+    resources: ["connections"]
     verbs: ["get", "list", "watch", "create", "update", "delete"]
+  {{- end }}
+  # ClusterConnections are platform-wide and read-only for the control plane.
+  - apiGroups: ["kubocd.kubotal.io"]
+    resources: ["clusterconnections"]
+    verbs: ["get", "list", "watch"]
   - apiGroups: ["kubocd.kubotal.io"]
     resources: ["contracts", "clustercontracts"]
     verbs: ["get", "list", "watch"]
@@ -99,3 +145,51 @@ roleRef:
   kind: ClusterRole
   name: {{ include "okdp-control-plane-server.fullname" . }}
   apiGroup: rbac.authorization.k8s.io
+{{- if not (and $git (eq $sync "none")) }}
+---
+# The Flux objects named after the release, in its namespace. Git mode reads
+# both and patches the GitRepository (reconcile request). Kubernetes mode
+# only reads and deletes them at startup, after a switch back from git.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "okdp-control-plane-server.fullname" . }}-gitops-sync
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "okdp-control-plane-server.labels" . | nindent 4 }}
+# list and watch are authorized by name because the server always selects
+# metadata.name.
+rules:
+  - apiGroups: ["source.toolkit.fluxcd.io"]
+    resources: ["gitrepositories"]
+    resourceNames: [{{ include "okdp-control-plane-server.fullname" . | quote }}]
+    {{- if $git }}
+    verbs: ["get", "list", "watch", "patch"]
+    {{- else }}
+    verbs: ["get", "delete"]
+    {{- end }}
+  - apiGroups: ["kustomize.toolkit.fluxcd.io"]
+    resources: ["kustomizations"]
+    resourceNames: [{{ include "okdp-control-plane-server.fullname" . | quote }}]
+    {{- if $git }}
+    verbs: ["get", "list", "watch"]
+    {{- else }}
+    verbs: ["get", "delete"]
+    {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "okdp-control-plane-server.fullname" . }}-gitops-sync
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "okdp-control-plane-server.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "okdp-control-plane-server.fullname" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: {{ include "okdp-control-plane-server.fullname" . }}-gitops-sync
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}
